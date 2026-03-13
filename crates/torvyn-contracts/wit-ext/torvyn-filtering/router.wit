@@ -1,0 +1,19 @@
+// Router interface for multi-port dispatch.
+//
+// Routers direct elements to named output ports. Port names
+// must match the pipeline topology configuration.
+
+package torvyn:filtering@0.1.0;
+
+interface router {
+    use torvyn:streaming/types.{stream-element, process-error};
+
+    /// Determine which output port(s) should receive this element.
+    ///
+    /// Returns a list of port names. Empty list means drop.
+    /// Multiple names means fan-out (runtime provides borrows of
+    /// the same buffer to each downstream).
+    ///
+    /// OWNERSHIP: Input is borrowed. No buffer allocation.
+    route: func(element: stream-element) -> result<list<string>, process-error>;
+}

@@ -1,0 +1,41 @@
+package torvyn:streaming@0.1.0;
+
+// Standard world definitions for Torvyn component archetypes.
+//
+// Worlds define the complete import/export shape of a component.
+// Developers select a world based on their component's role in
+// the pipeline.
+
+/// World for a stateless stream processor.
+world transform {
+    import types;
+    import buffer-allocator;
+
+    export processor;
+}
+
+/// World for a stream processor with lifecycle hooks.
+world managed-transform {
+    import types;
+    import buffer-allocator;
+
+    export processor;
+    export lifecycle;
+}
+
+/// World for a data source (producer).
+world data-source {
+    import types;
+    import buffer-allocator;
+
+    export source;
+    export lifecycle;
+}
+
+/// World for a data sink (consumer).
+world data-sink {
+    import types;
+
+    export sink;
+    export lifecycle;
+}

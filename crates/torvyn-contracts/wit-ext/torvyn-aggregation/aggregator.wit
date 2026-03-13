@@ -1,0 +1,22 @@
+// Aggregator interface for stateful accumulation.
+//
+// Package: torvyn:aggregation@0.1.0
+// Tier: Extended (optional)
+
+package torvyn:aggregation@0.1.0;
+
+interface aggregator {
+    use torvyn:streaming/types.{stream-element, output-element, process-error};
+
+    /// Ingest a stream element into internal state.
+    ///
+    /// - ok(none): Absorbed, no output yet.
+    /// - ok(some(element)): Absorbed AND aggregated result ready.
+    /// - err(error): Ingestion failed.
+    ///
+    /// OWNERSHIP: Input borrowed. Output (if any) contains owned buffer.
+    ingest: func(element: stream-element) -> result<option<output-element>, process-error>;
+
+    /// Signal no more elements. Emit remaining buffered results.
+    flush: func() -> result<list<output-element>, process-error>;
+}

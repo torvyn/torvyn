@@ -1,0 +1,5 @@
+# Torvyn.toml — minimal single-component project
+[torvyn]
+name = "my-transform"
+version = "0.1.0"
+contract_version = "0.1.0"

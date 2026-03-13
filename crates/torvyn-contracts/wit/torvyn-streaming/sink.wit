@@ -1,0 +1,25 @@
+package torvyn:streaming@0.1.0;
+
+// Sink interface for data consumption.
+//
+// A sink receives stream elements and writes them to an external
+// destination (file, network, database, etc.).
+
+interface sink {
+    use types.{stream-element, process-error, backpressure-signal};
+
+    /// Push an element into this sink.
+    ///
+    /// Returns:
+    /// - ok(ready): Accepted, ready for more.
+    /// - ok(pause): Accepted, but pause upstream delivery.
+    /// - err(error): Could not accept element.
+    ///
+    /// OWNERSHIP: All handles in stream-element are BORROWED.
+    /// If the sink needs to buffer data, it must copy via
+    /// buffer.read() during this call.
+    push: func(element: stream-element) -> result<backpressure-signal, process-error>;
+
+    /// Signal that upstream flow is complete. Flush buffered data.
+    complete: func() -> result<_, process-error>;
+}

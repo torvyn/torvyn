@@ -1,0 +1,19 @@
+[package]
+name = "torvyn-security"
+version.workspace = true
+edition.workspace = true
+description = "Capability model, sandboxing, and audit for Torvyn"
+
+[features]
+default = ["serde", "audit-file"]
+serde = ["dep:serde", "dep:serde_json"]
+audit-file = []
+
+[dependencies]
+torvyn-types = { workspace = true }
+torvyn-config = { workspace = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,21 @@
+[package]
+name = "torvyn-host"
+version.workspace = true
+edition.workspace = true
+description = "Runtime orchestration shell for Torvyn"
+
+[dependencies]
+torvyn-types.workspace = true
+torvyn-config.workspace = true
+torvyn-engine.workspace = true
+torvyn-resources.workspace = true
+torvyn-reactor.workspace = true
+torvyn-observability.workspace = true
+torvyn-security.workspace = true
+torvyn-linker.workspace = true
+torvyn-pipeline.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

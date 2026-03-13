@@ -1,0 +1,20 @@
+// Capability query interface (C01-2 / G-03).
+//
+// Allows components to query at runtime whether a specific
+// capability has been granted, enabling graceful degradation.
+//
+// Package: torvyn:capabilities@0.1.0
+// Tier: Capability
+
+package torvyn:capabilities@0.1.0;
+
+interface capability-query {
+    /// Check whether a named capability is available.
+    ///
+    /// Capability names follow the convention from Torvyn.toml:
+    /// e.g., "wasi-filesystem-read", "wasi-random", "wasi-network-egress".
+    ///
+    /// Returns true if the capability was granted in the pipeline
+    /// configuration for this component.
+    has-capability: func(name: string) -> bool;
+}

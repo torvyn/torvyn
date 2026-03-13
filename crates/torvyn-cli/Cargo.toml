@@ -1,0 +1,18 @@
+[package]
+name = "torvyn-cli"
+version.workspace = true
+edition.workspace = true
+description = "Developer CLI for the Torvyn streaming runtime"
+
+[dependencies]
+torvyn-types.workspace = true
+torvyn-config.workspace = true
+torvyn-contracts.workspace = true
+torvyn-engine.workspace = true
+torvyn-host.workspace = true
+torvyn-packaging.workspace = true
+torvyn-linker.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

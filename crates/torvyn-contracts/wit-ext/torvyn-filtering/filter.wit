@@ -1,0 +1,22 @@
+// Filter interface for accept/reject decisions.
+//
+// Filters are extremely cheap: no buffer allocation, no data
+// copying (unless the filter inspects payload bytes).
+//
+// Package: torvyn:filtering@0.1.0
+// Tier: Extended (optional)
+
+package torvyn:filtering@0.1.0;
+
+interface filter {
+    use torvyn:streaming/types.{stream-element, process-error};
+
+    /// Evaluate whether a stream element should pass through.
+    ///
+    /// - ok(true): Element passes. Runtime forwards it.
+    /// - ok(false): Element rejected. Runtime drops it.
+    /// - err(error): Filter encountered an error.
+    ///
+    /// OWNERSHIP: Input is borrowed. No output allocation.
+    evaluate: func(element: stream-element) -> result<bool, process-error>;
+}

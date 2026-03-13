@@ -1,0 +1,38 @@
+[package]
+name = "torvyn-engine"
+version.workspace = true
+edition.workspace = true
+description = "Wasm engine abstraction and ComponentInvoker for Torvyn"
+
+[features]
+default = ["wasmtime-backend"]
+wasmtime-backend = ["dep:wasmtime", "dep:wasmtime-wasi"]
+mock = []
+tracing-support = ["dep:tracing"]
+
+[dependencies]
+# Internal
+torvyn-types.workspace = true
+
+# Wasmtime (feature-gated)
+# LLI DEVIATION: pinned to v42 per spike findings (LLI assumed v29)
+wasmtime = { version = "42", optional = true, features = ["component-model", "async", "cranelift"] }
+wasmtime-wasi = { version = "42", optional = true }
+
+# Async runtime
+tokio.workspace = true
+async-trait = "0.1"
+
+# Utilities
+sha2 = "0.10"
+parking_lot = "0.12"
+thiserror.workspace = true
+
+# Optional
+tracing = { version = "0.1", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

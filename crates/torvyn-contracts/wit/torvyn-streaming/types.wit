@@ -1,0 +1,239 @@
+package torvyn:streaming@0.1.0;
+
+// Core type definitions for the Torvyn streaming runtime.
+//
+// This interface defines the fundamental types used across all Torvyn
+// streaming contracts: buffers, flow contexts, stream elements, and
+// the error/result models.
+//
+// Package: torvyn:streaming@0.1.0
+// Tier: Core (required by every Torvyn component)
+
+interface types {
+    /// A host-managed, immutable byte buffer.
+    ///
+    /// Buffers live in host memory, not in any component's linear memory.
+    /// Components interact with buffers through opaque resource handles.
+    /// The host runtime controls allocation, pooling, and deallocation.
+    ///
+    /// When a component needs to read buffer contents, the host copies
+    /// data from host memory into the component's linear memory via the
+    /// `read` or `read-all` methods. The resource manager records every
+    /// such copy for observability.
+    ///
+    /// Invariants:
+    /// - A buffer's contents are immutable once created.
+    /// - `size()` returns a stable value for the lifetime of the handle.
+    /// - `read(offset, len)` with offset + len > size() returns only
+    ///   the bytes within bounds (partial read, no error).
+    resource buffer {
+        /// Returns the byte length of the buffer contents.
+        size: func() -> u64;
+
+        /// Returns a content-type hint (e.g., "application/json",
+        /// "application/octet-stream"). Empty string if unset.
+        content-type: func() -> string;
+
+        /// Read up to `len` bytes starting at `offset` into a list.
+        /// Returns fewer bytes if the buffer is shorter than offset + len.
+        ///
+        /// IMPLEMENTATION NOTE (C01-3): The WIT interface uses u64 for
+        /// offsets and lengths for forward compatibility. The host boundary
+        /// layer validates that values fit in u32 range, since internal
+        /// buffer capacity is capped at 16 MiB.
+        ///
+        /// PERFORMANCE NOTE: This copies data from host memory into the
+        /// component's linear memory. The resource manager records this
+        /// as a measured copy. Components that only need metadata should
+        /// use `size()` and `content-type()` instead.
+        read: func(offset: u64, len: u64) -> list<u8>;
+
+        /// Read the entire buffer contents. Convenience method equivalent
+        /// to `read(0, self.size())`.
+        read-all: func() -> list<u8>;
+    }
+
+    /// A mutable buffer that a component can write into.
+    ///
+    /// Mutable buffers are obtained from the host via the buffer-allocator
+    /// interface and are owned by the component until returned as part of
+    /// a processing result (via `freeze()`).
+    ///
+    /// Lifecycle: allocate -> write/append -> freeze -> return as output.
+    ///
+    /// Invariants:
+    /// - A mutable buffer has exactly one owner at any time.
+    /// - `capacity()` is stable for the lifetime of the handle.
+    /// - `size()` monotonically increases with writes (no truncation).
+    /// - After `freeze()`, the mutable-buffer handle is consumed.
+    resource mutable-buffer {
+        /// Write bytes at the given offset. Extends the buffer if
+        /// necessary up to the buffer's capacity limit.
+        write: func(offset: u64, bytes: list<u8>) -> result<_, buffer-error>;
+
+        /// Append bytes to the end of the current content.
+        append: func(bytes: list<u8>) -> result<_, buffer-error>;
+
+        /// Returns the current byte length of written content.
+        size: func() -> u64;
+
+        /// Returns the maximum capacity of this buffer.
+        capacity: func() -> u64;
+
+        /// Set the content-type hint for this buffer.
+        set-content-type: func(content-type: string);
+
+        /// Finalize this mutable buffer into an immutable buffer.
+        /// After this call, the mutable-buffer handle is consumed
+        /// and a read-only buffer handle is returned.
+        /// Ownership transfers to the caller.
+        freeze: func() -> buffer;
+    }
+
+    /// Errors that can occur during buffer operations.
+    variant buffer-error {
+        /// Write would exceed the buffer's capacity limit.
+        capacity-exceeded,
+        /// The offset is beyond the buffer's current bounds.
+        out-of-bounds,
+        /// A host-side allocation failure occurred.
+        allocation-failed(string),
+    }
+
+    /// A flow context carrying trace correlation, deadline, and
+    /// pipeline-scoped metadata.
+    ///
+    /// Flow contexts are resources (not records) because they have
+    /// identity and host-managed lifecycle. Two elements in the same
+    /// flow share the same flow-context resource, which the host uses
+    /// to track resource accounting and trace propagation.
+    ///
+    /// Invariants:
+    /// - `trace-id` and `span-id` are stable once set by the host.
+    /// - `deadline-ns` may decrease as time passes (host may update).
+    /// - `flow-id` is unique within a runtime instance.
+    resource flow-context {
+        /// Returns the OpenTelemetry trace ID (hex-encoded, 32 chars).
+        /// Empty string if tracing is disabled.
+        trace-id: func() -> string;
+
+        /// Returns the OpenTelemetry span ID (hex-encoded, 16 chars)
+        /// for the current processing stage. Empty string if tracing
+        /// is disabled.
+        span-id: func() -> string;
+
+        /// Returns the remaining deadline in nanoseconds.
+        /// 0 means no deadline is set.
+        deadline-ns: func() -> u64;
+
+        /// Returns the unique flow identifier (opaque string).
+        flow-id: func() -> string;
+    }
+
+    /// Metadata accompanying each stream element.
+    ///
+    /// This is a record (plain data, copied) rather than a resource
+    /// because it is cheap to copy and has no host-managed lifecycle.
+    ///
+    /// NOTE (C01-4): The runtime (specifically the reactor's flow driver)
+    /// assigns `sequence` and `timestamp-ns` before delivery to downstream
+    /// components. Component-provided values for these fields in
+    /// `output-element` are advisory and may be overwritten.
+    record element-meta {
+        /// Monotonic sequence number within this flow. Starts at 0.
+        /// The runtime guarantees uniqueness and ordering within a
+        /// single flow.
+        sequence: u64,
+
+        /// Wall-clock timestamp in nanoseconds since Unix epoch.
+        /// Set by the runtime when the element enters the pipeline.
+        timestamp-ns: u64,
+
+        /// Content type of the payload (e.g., "application/json").
+        /// Mirrors the buffer's content-type for convenience.
+        content-type: string,
+    }
+
+    /// A single stream element: the fundamental unit of data flow.
+    ///
+    /// stream-element is a record containing borrowed handles, not a
+    /// resource itself. Elements are transient -- they exist for the
+    /// duration of one function call (process, push, evaluate, etc.).
+    record stream-element {
+        /// Element metadata (copied per call -- metadata is small).
+        meta: element-meta,
+
+        /// Borrowed reference to the payload buffer. The component may
+        /// read but must not store the handle beyond the current call.
+        payload: borrow<buffer>,
+
+        /// Borrowed reference to the flow context for trace propagation
+        /// and deadline checking.
+        context: borrow<flow-context>,
+    }
+
+    /// The result of processing a stream element.
+    variant process-result {
+        /// The component produced a new element. The buffer in the
+        /// output-element is OWNED by the caller (the host/runtime).
+        emit(output-element),
+
+        /// The component consumed the input but produced no output.
+        /// Not an error -- element was filtered, deduplicated, or
+        /// absorbed into internal state.
+        drop,
+    }
+
+    /// An output element produced by a component.
+    ///
+    /// Separated from stream-element because ownership differs:
+    /// the payload buffer is owned (transferred to runtime), not borrowed.
+    record output-element {
+        /// Metadata for the output element. Component may modify
+        /// content-type. Runtime will overwrite sequence and
+        /// timestamp-ns (C01-4).
+        meta: element-meta,
+
+        /// Owned buffer containing the output payload.
+        /// Ownership transfers from component to runtime.
+        payload: buffer,
+    }
+
+    /// Standard error model for stream processing.
+    ///
+    /// Each error category may trigger different runtime responses:
+    /// - invalid-input: skip or retry per ErrorPolicy
+    /// - unavailable: circuit-breaker logic
+    /// - internal: retry or skip per ErrorPolicy
+    /// - deadline-exceeded: timeout accounting
+    /// - fatal: component teardown (terminal)
+    variant process-error {
+        /// Input was malformed or violated expected contract.
+        invalid-input(string),
+
+        /// A required resource or service was unavailable.
+        unavailable(string),
+
+        /// Unexpected internal error within the component.
+        internal(string),
+
+        /// Processing deadline exceeded (via flow-context.deadline-ns).
+        deadline-exceeded,
+
+        /// Component permanently unable to process further elements.
+        /// Terminal -- runtime will not send more elements.
+        fatal(string),
+    }
+
+    /// Backpressure signal from a consumer to the runtime.
+    ///
+    /// Enum rather than bool to allow future extension (e.g.,
+    /// rate-limit-to(n), pause-for-duration(ns)) as minor version bumps.
+    enum backpressure-signal {
+        /// Consumer is ready to accept more data.
+        ready,
+
+        /// Consumer requests the producer to pause.
+        pause,
+    }
+}

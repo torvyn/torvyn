@@ -1,0 +1,19 @@
+// Worlds for filtering and routing components.
+
+package torvyn:filtering@0.1.0;
+
+/// World for a filter component (accept/reject).
+world content-filter {
+    import torvyn:streaming/types;
+
+    export filter;
+    export torvyn:streaming/lifecycle;
+}
+
+/// World for a router component (multi-port dispatch).
+world content-router {
+    import torvyn:streaming/types;
+
+    export router;
+    export torvyn:streaming/lifecycle;
+}

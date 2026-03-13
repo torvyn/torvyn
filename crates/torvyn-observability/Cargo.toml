@@ -1,0 +1,16 @@
+[package]
+name = "torvyn-observability"
+version.workspace = true
+edition.workspace = true
+description = "Tracing, metrics, and observability for Torvyn"
+
+[dependencies]
+torvyn-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

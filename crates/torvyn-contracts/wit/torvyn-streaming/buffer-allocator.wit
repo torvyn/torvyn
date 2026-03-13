@@ -1,0 +1,29 @@
+package torvyn:streaming@0.1.0;
+
+// Buffer allocation interface provided by the host runtime.
+//
+// Components that produce output (processors, sources) import this
+// interface to obtain mutable buffers for writing output data.
+//
+// This is a separate interface (not a constructor on buffer) because
+// allocation is a host-provided capability with policy enforcement.
+
+interface buffer-allocator {
+    use types.{mutable-buffer, buffer-error, buffer};
+
+    /// Request a new mutable buffer with the given capacity hint.
+    ///
+    /// The host may allocate a buffer larger than requested (e.g.,
+    /// from a size-tiered pool) but never smaller.
+    ///
+    /// Returns an error if the component has exceeded its memory
+    /// budget or the host's buffer pool is exhausted.
+    allocate: func(capacity-hint: u64) -> result<mutable-buffer, buffer-error>;
+
+    /// Request a mutable buffer initialized with a copy of an existing
+    /// buffer's contents.
+    ///
+    /// The source buffer is borrowed -- the caller retains access.
+    /// The returned mutable-buffer is a new, independent allocation.
+    clone-into-mutable: func(source: borrow<buffer>) -> result<mutable-buffer, buffer-error>;
+}

@@ -1,0 +1,27 @@
+package torvyn:streaming@0.1.0;
+
+// Processor interface for stream element transformation.
+//
+// A processor reads one input stream element and produces either
+// a new output element (emit) or signals that the input was
+// consumed without producing output (drop).
+
+interface processor {
+    use types.{stream-element, process-result, process-error};
+
+    /// Process a single stream element.
+    ///
+    /// OWNERSHIP SEMANTICS:
+    /// - Input: All handles in stream-element are BORROWED.
+    /// - Output (emit): The buffer in output-element is OWNED by
+    ///   the runtime after this call returns.
+    /// - Output (drop): No ownership transfer.
+    ///
+    /// LIFECYCLE: Called once per stream element. No reentrancy.
+    /// Ordered by sequence number within a flow.
+    ///
+    /// BACKPRESSURE: The runtime controls call frequency based on
+    /// downstream demand. This interface does not directly signal
+    /// backpressure.
+    process: func(input: stream-element) -> result<process-result, process-error>;
+}

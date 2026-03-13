@@ -1,0 +1,12 @@
+[package]
+name = "torvyn-resources"
+version.workspace = true
+edition.workspace = true
+description = "Buffer pools, ownership tracking, and copy accounting for Torvyn"
+
+[dependencies]
+torvyn-types.workspace = true
+parking_lot = "0.12"
+
+[lints]
+workspace = true

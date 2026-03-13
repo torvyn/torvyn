@@ -1,0 +1,27 @@
+package torvyn:streaming@0.1.0;
+
+// Source interface for data production.
+//
+// A source produces stream elements by pulling from an external
+// data source (file, network, generator, etc.).
+
+interface source {
+    use types.{output-element, process-error, backpressure-signal};
+
+    /// Pull the next element from this source.
+    ///
+    /// Returns:
+    /// - ok(some(element)): An element is available.
+    /// - ok(none): Source exhausted. No more elements.
+    /// - err(error): Error producing element.
+    ///
+    /// OWNERSHIP: The buffer in output-element is OWNED by the
+    /// runtime after this call returns.
+    ///
+    /// BLOCKING: In WASI 0.2, this is synchronous. If no data is
+    /// available, return immediately -- runtime will poll again later.
+    pull: func() -> result<option<output-element>, process-error>;
+
+    /// Receive a backpressure signal from the downstream pipeline.
+    notify-backpressure: func(signal: backpressure-signal);
+}

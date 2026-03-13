@@ -1,0 +1,17 @@
+[package]
+name = "torvyn-pipeline"
+version.workspace = true
+edition.workspace = true
+description = "Pipeline topology construction, validation, and instantiation for Torvyn"
+
+[dependencies]
+torvyn-types.workspace = true
+torvyn-linker.workspace = true
+torvyn-reactor.workspace = true
+torvyn-engine.workspace = true
+torvyn-resources.workspace = true
+torvyn-config.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

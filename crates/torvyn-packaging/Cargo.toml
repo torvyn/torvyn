@@ -1,0 +1,15 @@
+[package]
+name = "torvyn-packaging"
+version.workspace = true
+edition.workspace = true
+description = "OCI artifact assembly, signing, and distribution for Torvyn"
+
+[dependencies]
+torvyn-types.workspace = true
+torvyn-contracts.workspace = true
+torvyn-config.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,31 @@
+[package]
+name = "torvyn-contracts"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+description = "WIT contracts and validation for the Torvyn streaming runtime"
+license = "Apache-2.0"
+
+[features]
+default = ["wit-parser-backend", "serde"]
+wit-parser-backend = ["dep:wit-parser"]
+serde = ["dep:serde", "semver/serde"]
+
+[dependencies]
+# Internal
+torvyn-types = { path = "../torvyn-types" }
+
+# External
+semver = "1"
+serde = { version = "1", features = ["derive"], optional = true }
+toml = "0.8"
+thiserror = "2"
+
+# WIT parsing backend (feature-gated)
+wit-parser = { version = "0.227", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

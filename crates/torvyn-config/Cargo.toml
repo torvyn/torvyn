@@ -1,0 +1,22 @@
+[package]
+name = "torvyn-config"
+version.workspace = true
+edition.workspace = true
+description = "Configuration parsing, validation, and schema definitions for the Torvyn reactive streaming runtime"
+
+[features]
+default = ["json", "env"]
+json = ["serde_json"]
+env = []
+
+[dependencies]
+torvyn-types.workspace = true
+serde.workspace = true
+toml = "0.8"
+serde_json = { version = "1", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

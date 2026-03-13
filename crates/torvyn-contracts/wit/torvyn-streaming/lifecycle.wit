@@ -1,0 +1,25 @@
+package torvyn:streaming@0.1.0;
+
+// Component lifecycle interface.
+//
+// All Torvyn components may optionally implement this interface
+// for initialization and teardown hooks.
+
+interface lifecycle {
+    use types.{process-error};
+
+    /// Called once after instantiation, before any stream processing.
+    ///
+    /// The configuration string is component-specific and provided
+    /// by the pipeline topology configuration. JSON is recommended.
+    ///
+    /// Returns error if initialization fails -- component will not
+    /// participate in the pipeline.
+    init: func(config: string) -> result<_, process-error>;
+
+    /// Called once during teardown. Release external resources.
+    ///
+    /// Best-effort: the runtime may terminate without calling this
+    /// if a timeout expires or the host is shutting down forcefully.
+    teardown: func();
+}

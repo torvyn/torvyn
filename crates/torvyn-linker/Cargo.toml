@@ -1,0 +1,15 @@
+[package]
+name = "torvyn-linker"
+version.workspace = true
+edition.workspace = true
+description = "Component linking and contract compatibility for Torvyn"
+
+[dependencies]
+torvyn-types.workspace = true
+torvyn-engine.workspace = true
+torvyn-contracts.workspace = true
+torvyn-security.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,88 @@
+# Torvyn.toml — full three-component pipeline project
+[torvyn]
+name = "token-pipeline"
+version = "0.1.0"
+description = "A streaming pipeline that tokenizes, filters, and writes tokens"
+contract_version = "0.1.0"
+authors = ["Alice <alice@example.com>"]
+license = "Apache-2.0"
+
+# ── Component Declarations ─────────────────────────────
+
+[[component]]
+name = "tokenizer"
+path = "components/tokenizer"
+language = "rust"
+
+[[component]]
+name = "token-filter"
+path = "components/token-filter"
+language = "rust"
+
+[[component]]
+name = "token-writer"
+path = "components/token-writer"
+language = "rust"
+
+# ── Flow Definition ────────────────────────────────────
+
+[flow.main]
+description = "Tokenize input, filter by policy, write to output"
+
+[flow.main.nodes.tokenizer]
+component = "file://./components/tokenizer/target/wasm32-wasip2/release/tokenizer.wasm"
+interface = "torvyn:streaming/source"
+
+[flow.main.nodes.token-filter]
+component = "file://./components/token-filter/target/wasm32-wasip2/release/token_filter.wasm"
+interface = "torvyn:filtering/filter"
+
+[flow.main.nodes.token-writer]
+component = "file://./components/token-writer/target/wasm32-wasip2/release/token_writer.wasm"
+interface = "torvyn:streaming/sink"
+
+[[flow.main.edges]]
+from = { node = "tokenizer", port = "output" }
+to = { node = "token-filter", port = "input" }
+
+[[flow.main.edges]]
+from = { node = "token-filter", port = "output" }
+to = { node = "token-writer", port = "input" }
+
+# ── Runtime Configuration ──────────────────────────────
+
+[runtime]
+worker_threads = 2
+max_memory_per_component = "8MiB"
+
+[runtime.scheduling]
+policy = "weighted-fair"
+default_priority = 5
+
+[runtime.backpressure]
+default_queue_depth = 64
+backpressure_policy = "block-producer"
+
+# ── Security ───────────────────────────────────────────
+
+[security]
+default_capability_policy = "deny-all"
+
+[security.grants.tokenizer]
+capabilities = ["filesystem:read:/data/input/*"]
+
+[security.grants.token-writer]
+capabilities = ["filesystem:write:/data/output/*"]
+
+# ── Observability ──────────────────────────────────────
+
+[observability]
+tracing_enabled = true
+tracing_exporter = "stdout"
+metrics_enabled = true
+metrics_exporter = "none"
+
+# ── Registry ───────────────────────────────────────────
+
+[registry]
+default = "https://registry.example.com"

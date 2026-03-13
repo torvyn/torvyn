@@ -1,0 +1,45 @@
+# pipeline.toml — standalone pipeline definition
+[flow.ingest]
+description = "Ingest data from source to sink"
+
+[flow.ingest.nodes.reader]
+component = "oci://registry.example.com/file-reader:1.0"
+interface = "torvyn:streaming/source"
+fuel_budget = 2000000
+max_memory = "32MiB"
+
+[flow.ingest.nodes.transformer]
+component = "file://./transform.wasm"
+interface = "torvyn:streaming/processor"
+priority = 8
+config = '{"mode": "fast"}'
+
+[flow.ingest.nodes.writer]
+component = "oci://registry.example.com/db-writer:1.0"
+interface = "torvyn:streaming/sink"
+
+[[flow.ingest.edges]]
+from = { node = "reader", port = "output" }
+to = { node = "transformer", port = "input" }
+queue_depth = 128
+
+[[flow.ingest.edges]]
+from = { node = "transformer", port = "output" }
+to = { node = "writer", port = "input" }
+queue_depth = 32
+
+[runtime]
+worker_threads = 4
+
+[runtime.backpressure]
+default_queue_depth = 64
+backpressure_policy = "block-producer"
+
+[security]
+default_capability_policy = "deny-all"
+
+[security.grants.reader]
+capabilities = ["filesystem:read:/data/input/*"]
+
+[security.grants.writer]
+capabilities = ["network:egress:db.example.com:5432"]

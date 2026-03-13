@@ -1,0 +1,21 @@
+[package]
+name = "torvyn-reactor"
+version.workspace = true
+edition.workspace = true
+description = "Stream scheduling, backpressure, and flow lifecycle for Torvyn"
+
+[dependencies]
+torvyn-types.workspace = true
+torvyn-engine.workspace = true
+torvyn-resources.workspace = true
+torvyn-observability.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+torvyn-engine = { workspace = true, features = ["mock"] }
+async-trait = "0.1"
+
+[lints]
+workspace = true
