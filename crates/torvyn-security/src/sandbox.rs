@@ -383,14 +383,14 @@ impl SandboxConfigurator for DefaultSandboxConfigurator {
         audit_sink: AuditSinkHandle,
     ) -> Result<SandboxConfig, crate::error::SandboxError> {
         // Resolve capabilities
-        let result = crate::resolver::DefaultCapabilityResolver::resolve(
-            component_caps,
-            operator_grants,
-        )
-        .map_err(|errors| crate::error::SandboxError::CapabilityResolutionFailed {
-            component_id,
-            errors,
-        })?;
+        let result =
+            crate::resolver::DefaultCapabilityResolver::resolve(component_caps, operator_grants)
+                .map_err(
+                    |errors| crate::error::SandboxError::CapabilityResolutionFailed {
+                        component_id,
+                        errors,
+                    },
+                )?;
 
         // Log warnings
         for warning in &result.warnings {
@@ -458,10 +458,8 @@ mod tests {
 
     #[test]
     fn test_wasi_config_from_resolved_clocks() {
-        let resolved = ResolvedCapabilitySet::new(vec![
-            Capability::WallClock,
-            Capability::MonotonicClock,
-        ]);
+        let resolved =
+            ResolvedCapabilitySet::new(vec![Capability::WallClock, Capability::MonotonicClock]);
         let config = WasiConfiguration::from_resolved(&resolved);
         assert!(config.allow_wall_clock);
         assert!(config.allow_monotonic_clock);
@@ -521,10 +519,8 @@ mod tests {
 
     #[test]
     fn test_sandbox_configurator_success() {
-        let caps = ComponentCapabilities::new(
-            vec![Capability::WallClock],
-            vec![Capability::Stderr],
-        );
+        let caps =
+            ComponentCapabilities::new(vec![Capability::WallClock], vec![Capability::Stderr]);
         let grants = OperatorGrants::new(vec![Capability::WallClock, Capability::Stderr]);
 
         let configurator = DefaultSandboxConfigurator;

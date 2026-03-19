@@ -1,0 +1,8 @@
+package torvyn:streaming@0.1.0;
+
+interface sink {
+    use types.{stream-element, process-error, backpressure-signal};
+
+    push: func(element: stream-element) -> result<backpressure-signal, process-error>;
+    complete: func() -> result<_, process-error>;
+}

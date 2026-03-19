@@ -31,7 +31,7 @@ use crate::handle::{OwnerId, ResourceEntry};
 /// - State is Borrowed.
 /// - borrow_count is incremented.
 ///
-/// # HOT PATH — called per borrow<buffer> invocation.
+/// # HOT PATH — called per `borrow<buffer>` invocation.
 pub fn borrow_start(
     handle: BufferHandle,
     entry: &mut ResourceEntry,
@@ -298,11 +298,7 @@ mod tests {
     fn test_begin_transfer_wrong_owner_fails() {
         let handle = test_handle();
         let mut entry = test_entry(ResourceState::Owned, OwnerId::Host);
-        let result = begin_transfer(
-            handle,
-            &mut entry,
-            OwnerId::Component(ComponentId::new(99)),
-        );
+        let result = begin_transfer(handle, &mut entry, OwnerId::Component(ComponentId::new(99)));
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -338,11 +334,7 @@ mod tests {
     fn test_complete_transfer_not_in_transit_fails() {
         let handle = test_handle();
         let mut entry = test_entry(ResourceState::Owned, OwnerId::Host);
-        let result = complete_transfer(
-            handle,
-            &mut entry,
-            OwnerId::Component(ComponentId::new(2)),
-        );
+        let result = complete_transfer(handle, &mut entry, OwnerId::Component(ComponentId::new(2)));
         assert!(result.is_err());
     }
 
@@ -360,11 +352,7 @@ mod tests {
     fn test_release_to_pool_wrong_owner_fails() {
         let handle = test_handle();
         let mut entry = test_entry(ResourceState::Owned, OwnerId::Host);
-        let result = release_to_pool(
-            handle,
-            &mut entry,
-            OwnerId::Component(ComponentId::new(5)),
-        );
+        let result = release_to_pool(handle, &mut entry, OwnerId::Component(ComponentId::new(5)));
         assert!(result.is_err());
     }
 

@@ -189,8 +189,10 @@ mod tests {
 
     #[test]
     fn test_validation_catches_zero_fuel() {
-        let mut config = WasmtimeEngineConfig::default();
-        config.default_fuel = 0;
+        let config = WasmtimeEngineConfig {
+            default_fuel: 0,
+            ..WasmtimeEngineConfig::default()
+        };
         let problems = config.validate();
         assert_eq!(problems.len(), 1);
         assert!(problems[0].contains("default_fuel"));
@@ -198,8 +200,10 @@ mod tests {
 
     #[test]
     fn test_validation_catches_zero_memory() {
-        let mut config = WasmtimeEngineConfig::default();
-        config.max_memory_bytes = 0;
+        let config = WasmtimeEngineConfig {
+            max_memory_bytes: 0,
+            ..WasmtimeEngineConfig::default()
+        };
         let problems = config.validate();
         assert_eq!(problems.len(), 1);
         assert!(problems[0].contains("max_memory_bytes"));
@@ -207,8 +211,10 @@ mod tests {
 
     #[test]
     fn test_validation_catches_small_stack() {
-        let mut config = WasmtimeEngineConfig::default();
-        config.stack_size = 1024; // 1 KiB — too small
+        let config = WasmtimeEngineConfig {
+            stack_size: 1024, // 1 KiB — too small
+            ..WasmtimeEngineConfig::default()
+        };
         let problems = config.validate();
         assert_eq!(problems.len(), 1);
         assert!(problems[0].contains("stack_size"));
@@ -216,9 +222,11 @@ mod tests {
 
     #[test]
     fn test_validation_fuel_disabled_zero_ok() {
-        let mut config = WasmtimeEngineConfig::default();
-        config.fuel_enabled = false;
-        config.default_fuel = 0;
+        let config = WasmtimeEngineConfig {
+            fuel_enabled: false,
+            default_fuel: 0,
+            ..WasmtimeEngineConfig::default()
+        };
         let problems = config.validate();
         assert!(
             problems.is_empty(),
@@ -228,6 +236,9 @@ mod tests {
 
     #[test]
     fn test_compilation_strategy_default() {
-        assert_eq!(CompilationStrategy::default(), CompilationStrategy::Cranelift);
+        assert_eq!(
+            CompilationStrategy::default(),
+            CompilationStrategy::Cranelift
+        );
     }
 }

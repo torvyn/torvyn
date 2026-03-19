@@ -25,11 +25,7 @@ pub(crate) fn stale_handle(handle: BufferHandle) -> ResourceError {
 ///
 /// # COLD PATH
 #[inline]
-pub(crate) fn not_owner(
-    handle: BufferHandle,
-    expected: &str,
-    actual: &str,
-) -> ResourceError {
+pub(crate) fn not_owner(handle: BufferHandle, expected: &str, actual: &str) -> ResourceError {
     ResourceError::NotOwner {
         handle: handle.resource_id(),
         expected_owner: expected.to_string(),

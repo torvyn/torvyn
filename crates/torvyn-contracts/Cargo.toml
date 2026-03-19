@@ -5,6 +5,7 @@ edition = "2021"
 rust-version = "1.78"
 description = "WIT contracts and validation for the Torvyn streaming runtime"
 license = "Apache-2.0"
+repository = "https://github.com/torvyn/torvyn"
 
 [features]
 default = ["wit-parser-backend", "serde"]
@@ -13,7 +14,7 @@ serde = ["dep:serde", "semver/serde"]
 
 [dependencies]
 # Internal
-torvyn-types = { path = "../torvyn-types" }
+torvyn-types = { version = "0.1.0", path = "../torvyn-types" }
 
 # External
 semver = "1"

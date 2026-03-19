@@ -4,9 +4,9 @@
 //! They are designed for the hot path: [`StreamElement`] and [`OutputElement`]
 //! are passed through [`ComponentInvoker`](crate::ComponentInvoker) on every element.
 
-use torvyn_types::{BufferHandle, ComponentId, ElementMeta};
 #[cfg(feature = "mock")]
 use torvyn_types::BackpressureSignal;
+use torvyn_types::{BufferHandle, ComponentId, ElementMeta};
 
 // ---------------------------------------------------------------------------
 // CompiledComponent

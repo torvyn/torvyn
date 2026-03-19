@@ -1,0 +1,7 @@
+package torvyn:streaming@0.1.0;
+
+interface processor {
+    use types.{stream-element, process-result, process-error};
+
+    process: func(input: stream-element) -> result<process-result, process-error>;
+}

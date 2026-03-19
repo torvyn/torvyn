@@ -2,7 +2,10 @@
 name = "torvyn-linker"
 version.workspace = true
 edition.workspace = true
-description = "Component linking and contract compatibility for Torvyn"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Component linking and pipeline composition for the Torvyn runtime"
 
 [dependencies]
 torvyn-types.workspace = true
@@ -10,6 +13,14 @@ torvyn-engine.workspace = true
 torvyn-contracts.workspace = true
 torvyn-security.workspace = true
 thiserror.workspace = true
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+torvyn-types.workspace = true
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
 
 [lints]
 workspace = true

@@ -1,0 +1,10 @@
+$ torvyn run flow.main
+[torvyn] Running flow 'main'
+
+[output-sink] sentence 0: The quick brown fox jumped over the lazy dog.
+[output-sink] sentence 1: The was filtered.
+[output-sink] sentence 2: Torvyn handles streaming tokens.
+[output-sink] Stream complete.
+
+[torvyn] Flow 'main' completed.
+[torvyn] 20 tokens produced | 1 filtered | 3 sentences emitted

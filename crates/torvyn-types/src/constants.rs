@@ -81,29 +81,34 @@ mod tests {
         let parts: Vec<&str> = TORVYN_VERSION.split('.').collect();
         assert_eq!(parts.len(), 3, "version must be semver (major.minor.patch)");
         for part in parts {
-            part.parse::<u32>().expect("each version component must be a number");
+            part.parse::<u32>()
+                .expect("each version component must be a number");
         }
     }
 
     #[test]
     fn test_default_queue_depth_is_power_of_two_minus_one_or_reasonable() {
-        assert!(DEFAULT_QUEUE_DEPTH > 0);
-        assert!(DEFAULT_QUEUE_DEPTH <= 1024);
+        let depth = DEFAULT_QUEUE_DEPTH;
+        assert!(depth > 0);
+        assert!(depth <= 1024);
     }
 
     #[test]
     fn test_max_buffer_size_is_16_mib() {
-        assert_eq!(MAX_BUFFER_SIZE_BYTES, 16 * 1024 * 1024);
+        let size = MAX_BUFFER_SIZE_BYTES;
+        assert_eq!(size, 16 * 1024 * 1024);
     }
 
     #[test]
     fn test_hot_path_budget_is_5_microseconds() {
-        assert_eq!(MAX_HOT_PATH_NS, 5_000);
+        let budget = MAX_HOT_PATH_NS;
+        assert_eq!(budget, 5_000);
     }
 
     #[test]
     fn test_low_watermark_ratio_is_valid() {
-        assert!(DEFAULT_LOW_WATERMARK_RATIO > 0.0);
-        assert!(DEFAULT_LOW_WATERMARK_RATIO < 1.0);
+        let ratio = DEFAULT_LOW_WATERMARK_RATIO;
+        assert!(ratio > 0.0);
+        assert!(ratio < 1.0);
     }
 }

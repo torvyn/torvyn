@@ -296,10 +296,7 @@ mod tests {
             vec![Capability::WallClock, Capability::MonotonicClock],
             vec![],
         );
-        let grants = OperatorGrants::new(vec![
-            Capability::WallClock,
-            Capability::MonotonicClock,
-        ]);
+        let grants = OperatorGrants::new(vec![Capability::WallClock, Capability::MonotonicClock]);
         let result = DefaultCapabilityResolver::resolve(&caps, &grants).unwrap();
         assert_eq!(result.resolved.len(), 2);
         assert!(result.warnings.is_empty());
@@ -307,10 +304,8 @@ mod tests {
 
     #[test]
     fn test_resolve_missing_required_errors() {
-        let caps = ComponentCapabilities::new(
-            vec![Capability::WallClock, Capability::Stderr],
-            vec![],
-        );
+        let caps =
+            ComponentCapabilities::new(vec![Capability::WallClock, Capability::Stderr], vec![]);
         let grants = OperatorGrants::new(vec![Capability::WallClock]);
         let result = DefaultCapabilityResolver::resolve(&caps, &grants);
         assert!(result.is_err());
@@ -324,10 +319,8 @@ mod tests {
 
     #[test]
     fn test_resolve_optional_not_granted_warning() {
-        let caps = ComponentCapabilities::new(
-            vec![Capability::WallClock],
-            vec![Capability::Stderr],
-        );
+        let caps =
+            ComponentCapabilities::new(vec![Capability::WallClock], vec![Capability::Stderr]);
         let grants = OperatorGrants::new(vec![Capability::WallClock]);
         let result = DefaultCapabilityResolver::resolve(&caps, &grants).unwrap();
         assert_eq!(result.resolved.len(), 1);
@@ -347,10 +340,10 @@ mod tests {
         ]);
         let result = DefaultCapabilityResolver::resolve(&caps, &grants).unwrap();
         assert_eq!(result.resolved.len(), 1);
-        assert!(result.warnings.iter().any(|w| matches!(
-            w,
-            ResolutionWarning::UnusedGrant { .. }
-        )));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| matches!(w, ResolutionWarning::UnusedGrant { .. })));
     }
 
     #[test]
@@ -385,19 +378,14 @@ mod tests {
         let result = DefaultCapabilityResolver::resolve(&caps, &grants).unwrap();
         assert_eq!(result.resolved.len(), 1);
         // Effective capability is the narrower (request) scope
-        assert!(result
-            .resolved
-            .permits(&Capability::FilesystemRead {
-                path: PathScope::new("/data/input")
-            }));
+        assert!(result.resolved.permits(&Capability::FilesystemRead {
+            path: PathScope::new("/data/input")
+        }));
     }
 
     #[test]
     fn test_resolve_deny_all_denies_everything() {
-        let caps = ComponentCapabilities::new(
-            vec![Capability::WallClock],
-            vec![],
-        );
+        let caps = ComponentCapabilities::new(vec![Capability::WallClock], vec![]);
         let grants = OperatorGrants::deny_all();
         let result = DefaultCapabilityResolver::resolve(&caps, &grants);
         assert!(result.is_err());
@@ -413,10 +401,7 @@ mod tests {
 
     #[test]
     fn test_resolved_has_capability_by_name() {
-        let resolved = ResolvedCapabilitySet::new(vec![
-            Capability::WallClock,
-            Capability::Stderr,
-        ]);
+        let resolved = ResolvedCapabilitySet::new(vec![Capability::WallClock, Capability::Stderr]);
         assert!(resolved.has_capability_by_name("clock:wall"));
         assert!(resolved.has_capability_by_name("stdio:stderr"));
         assert!(!resolved.has_capability_by_name("stdio:stdout"));

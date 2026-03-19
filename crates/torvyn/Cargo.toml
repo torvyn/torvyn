@@ -1,0 +1,42 @@
+[package]
+name = "torvyn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Ownership-aware reactive streaming runtime for WebAssembly components"
+keywords = ["wasm", "streaming", "reactive", "webassembly", "pipeline"]
+categories = ["wasm", "asynchronous"]
+
+[[bin]]
+name = "torvyn"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["dep:torvyn-cli", "dep:clap", "dep:tokio"]
+
+[dependencies]
+# Subsystem crates (always available as library)
+torvyn-types.workspace = true
+torvyn-config.workspace = true
+torvyn-contracts.workspace = true
+torvyn-engine.workspace = true
+torvyn-resources.workspace = true
+torvyn-security.workspace = true
+torvyn-observability.workspace = true
+torvyn-reactor.workspace = true
+torvyn-linker.workspace = true
+torvyn-pipeline.workspace = true
+torvyn-packaging.workspace = true
+torvyn-host.workspace = true
+
+# CLI binary (feature-gated so library users don't pull in clap/console/etc.)
+torvyn-cli = { workspace = true, optional = true }
+clap = { version = "4.5", features = ["derive"], optional = true }
+tokio = { workspace = true, optional = true }
+
+[lints]
+workspace = true

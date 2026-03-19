@@ -1,0 +1,14 @@
+$ torvyn run flow.main
+[torvyn] Loading flow 'main' from Torvyn.toml
+[torvyn] Validating contracts...  ok
+[torvyn] Linking components...    ok (3 components, 2 edges)
+[torvyn] Instantiating...         ok
+[torvyn] Running flow 'main'
+
+[json-sink] seq=0: {"username":"alice","action":"login","processed_at":"2025-01-15T10:30:00Z"}
+[json-sink] seq=1: {"username":"bob","action":"purchase","processed_at":"2025-01-15T10:30:00Z"}
+[json-sink] seq=2: {"username":"carol","action":"logout","processed_at":"2025-01-15T10:30:00Z"}
+[json-sink] Stream complete.
+
+[torvyn] Flow 'main' completed. 3 elements processed.
+[torvyn] Duration: 8ms | Copies: 6 (3 reads + 3 writes) | Peak queue depth: 1

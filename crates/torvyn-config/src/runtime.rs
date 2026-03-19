@@ -451,7 +451,7 @@ mod tests {
         let cfg = ObservabilityConfig::default();
         assert!(cfg.tracing_enabled);
         assert_eq!(cfg.tracing_exporter, "stdout");
-        assert_eq!(cfg.tracing_sample_rate, 1.0);
+        assert!((cfg.tracing_sample_rate - 1.0).abs() < f64::EPSILON);
         assert!(cfg.metrics_enabled);
         assert_eq!(cfg.metrics_exporter, "none");
     }

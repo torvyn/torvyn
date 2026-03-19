@@ -216,15 +216,13 @@ mod tests {
     #[test]
     fn test_cancellation_reason_display() {
         assert!(format!("{}", CancellationReason::OperatorRequest).contains("operator"));
-        assert!(
-            format!(
-                "{}",
-                CancellationReason::Timeout {
-                    elapsed: Duration::from_secs(5)
-                }
-            )
-            .contains("timeout")
-        );
+        assert!(format!(
+            "{}",
+            CancellationReason::Timeout {
+                elapsed: Duration::from_secs(5)
+            }
+        )
+        .contains("timeout"));
         assert!(format!("{}", CancellationReason::SourceComplete).contains("source"));
     }
 

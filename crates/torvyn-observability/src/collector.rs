@@ -12,12 +12,12 @@ use torvyn_types::{
 };
 
 use crate::config::ObservabilityConfig;
-use crate::events::{DiagnosticEvent, EventBuffer, EventSender, event_channel};
+use crate::events::{event_channel, DiagnosticEvent, EventBuffer, EventSender};
 use crate::metrics::flow_metrics::FlowMetrics;
 use crate::metrics::registry::MetricsRegistry;
-use crate::metrics::snapshot::{FlowMetricsSnapshot, snapshot_flow};
+use crate::metrics::snapshot::{snapshot_flow, FlowMetricsSnapshot};
 use crate::tracer::{
-    FlowTraceContext, Sampler, SpanRingBuffer, generate_span_id, generate_trace_id,
+    generate_span_id, generate_trace_id, FlowTraceContext, Sampler, SpanRingBuffer,
 };
 
 /// The central observability collector.
@@ -267,9 +267,7 @@ impl EventSink for ObservabilityCollector {
             if let Some(stream) = flow_metrics.stream(stream_id) {
                 stream.elements.increment(1);
                 stream.queue_depth.set(queue_depth_after as u64);
-                stream
-                    .queue_depth_peak
-                    .update_max(queue_depth_after as u64);
+                stream.queue_depth_peak.update_max(queue_depth_after as u64);
             }
         }
     }
@@ -453,18 +451,11 @@ mod tests {
     fn test_collector_register_duplicate_flow_fails() {
         let collector = ObservabilityCollector::new_for_testing(test_config());
         collector
-            .register_flow(
-                FlowId::new(1),
-                &[ComponentId::new(1)],
-                &[StreamId::new(1)],
-            )
+            .register_flow(FlowId::new(1), &[ComponentId::new(1)], &[StreamId::new(1)])
             .unwrap();
 
-        let result = collector.register_flow(
-            FlowId::new(1),
-            &[ComponentId::new(1)],
-            &[StreamId::new(1)],
-        );
+        let result =
+            collector.register_flow(FlowId::new(1), &[ComponentId::new(1)], &[StreamId::new(1)]);
         assert!(result.is_err());
     }
 
@@ -474,11 +465,7 @@ mod tests {
 
         // Register a flow first.
         let _obs = collector
-            .register_flow(
-                FlowId::new(1),
-                &[ComponentId::new(1)],
-                &[StreamId::new(1)],
-            )
+            .register_flow(FlowId::new(1), &[ComponentId::new(1)], &[StreamId::new(1)])
             .unwrap();
 
         // Exercise EventSink methods.
@@ -515,11 +502,7 @@ mod tests {
         let collector = ObservabilityCollector::new_for_testing(config);
 
         let _obs = collector
-            .register_flow(
-                FlowId::new(1),
-                &[ComponentId::new(1)],
-                &[StreamId::new(1)],
-            )
+            .register_flow(FlowId::new(1), &[ComponentId::new(1)], &[StreamId::new(1)])
             .unwrap();
 
         collector.record_invocation(
@@ -538,11 +521,7 @@ mod tests {
     fn test_collector_deregister_flow() {
         let collector = ObservabilityCollector::new_for_testing(test_config());
         collector
-            .register_flow(
-                FlowId::new(1),
-                &[ComponentId::new(1)],
-                &[StreamId::new(1)],
-            )
+            .register_flow(FlowId::new(1), &[ComponentId::new(1)], &[StreamId::new(1)])
             .unwrap();
 
         let snap = collector.deregister_flow(FlowId::new(1)).unwrap();
@@ -560,11 +539,7 @@ mod tests {
     fn test_flow_observer_record_span() {
         let collector = ObservabilityCollector::new_for_testing(test_config());
         let mut observer = collector
-            .register_flow(
-                FlowId::new(1),
-                &[ComponentId::new(1)],
-                &[StreamId::new(1)],
-            )
+            .register_flow(FlowId::new(1), &[ComponentId::new(1)], &[StreamId::new(1)])
             .unwrap();
 
         observer.record_span(ComponentId::new(1), 0, 100, 0, 0);
@@ -575,11 +550,7 @@ mod tests {
     fn test_flow_observer_promote() {
         let collector = ObservabilityCollector::new_for_testing(test_config());
         let mut observer = collector
-            .register_flow(
-                FlowId::new(1),
-                &[ComponentId::new(1)],
-                &[StreamId::new(1)],
-            )
+            .register_flow(FlowId::new(1), &[ComponentId::new(1)], &[StreamId::new(1)])
             .unwrap();
 
         // With 1% sample rate, most flows won't be sampled initially.
@@ -592,11 +563,7 @@ mod tests {
         let collector = ObservabilityCollector::new_for_testing(test_config());
 
         let _obs = collector
-            .register_flow(
-                FlowId::new(1),
-                &[ComponentId::new(1)],
-                &[StreamId::new(1)],
-            )
+            .register_flow(FlowId::new(1), &[ComponentId::new(1)], &[StreamId::new(1)])
             .unwrap();
 
         // Off → no recording.

@@ -200,7 +200,9 @@ fn parse_bundled_streaming_wit_files() {
         "should have 'buffer' resource"
     );
     assert!(
-        types_iface.resources.contains(&"mutable-buffer".to_string()),
+        types_iface
+            .resources
+            .contains(&"mutable-buffer".to_string()),
         "should have 'mutable-buffer' resource"
     );
     assert!(

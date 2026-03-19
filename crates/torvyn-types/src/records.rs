@@ -109,8 +109,7 @@ impl std::fmt::Display for TransferRecord {
         write!(
             f,
             "transfer[{} \u{2192} {}, {}B, reason={}, ts={}ns]",
-            self.source, self.destination, self.byte_count,
-            self.copy_reason, self.timestamp_ns
+            self.source, self.destination, self.byte_count, self.copy_reason, self.timestamp_ns
         )
     }
 }

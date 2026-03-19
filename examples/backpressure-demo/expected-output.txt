@@ -1,0 +1,18 @@
+$ torvyn run flow.main
+[torvyn] Running flow 'main'
+
+[slow-sink] seq=0: element-0 (every 100th logged)
+[slow-sink] seq=100: element-100 (every 100th logged)
+[slow-sink] seq=200: element-200 (every 100th logged)
+[slow-sink] seq=300: element-300 (every 100th logged)
+[slow-sink] seq=400: element-400 (every 100th logged)
+[slow-sink] seq=500: element-500 (every 100th logged)
+[slow-sink] seq=600: element-600 (every 100th logged)
+[slow-sink] seq=700: element-700 (every 100th logged)
+[slow-sink] seq=800: element-800 (every 100th logged)
+[slow-sink] seq=900: element-900 (every 100th logged)
+[slow-sink] Stream complete.
+[slow-sink] Processed 1000 elements total.
+
+[torvyn] Flow 'main' completed. 1000 elements processed.
+[torvyn] Duration: ~10s | Backpressure activations: ~62 | Peak queue depth: 16

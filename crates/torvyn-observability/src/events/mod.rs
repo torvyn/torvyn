@@ -3,5 +3,5 @@
 pub mod recorder;
 pub mod types;
 
-pub use recorder::{EventBuffer, EventReceiver, EventSender, event_channel};
-pub use types::{DiagnosticEvent, EventCategory, EventPayload, current_time_ns};
+pub use recorder::{event_channel, EventBuffer, EventReceiver, EventSender};
+pub use types::{current_time_ns, DiagnosticEvent, EventCategory, EventPayload};

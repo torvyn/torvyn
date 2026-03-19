@@ -91,7 +91,10 @@ impl MetricsRegistry {
             start_time_ns,
         ));
 
-        let mut flows = self.flows.write().map_err(|_| RegistryError::LockPoisoned)?;
+        let mut flows = self
+            .flows
+            .write()
+            .map_err(|_| RegistryError::LockPoisoned)?;
         if flows.contains_key(&flow_id) {
             return Err(RegistryError::FlowAlreadyRegistered(flow_id));
         }
@@ -110,7 +113,10 @@ impl MetricsRegistry {
     ///
     /// # COLD PATH
     pub fn deregister_flow(&self, flow_id: FlowId) -> Result<Arc<FlowMetrics>, RegistryError> {
-        let mut flows = self.flows.write().map_err(|_| RegistryError::LockPoisoned)?;
+        let mut flows = self
+            .flows
+            .write()
+            .map_err(|_| RegistryError::LockPoisoned)?;
         let metrics = flows
             .remove(&flow_id)
             .ok_or(RegistryError::FlowNotFound(flow_id))?;
@@ -221,7 +227,10 @@ mod tests {
             .unwrap();
 
         let result = reg.register_flow(flow_id, &[ComponentId::new(1)], &[StreamId::new(1)], 0);
-        assert!(matches!(result, Err(RegistryError::FlowAlreadyRegistered(_))));
+        assert!(matches!(
+            result,
+            Err(RegistryError::FlowAlreadyRegistered(_))
+        ));
     }
 
     #[test]
@@ -266,10 +275,20 @@ mod tests {
     #[test]
     fn test_active_flow_ids() {
         let reg = MetricsRegistry::new();
-        reg.register_flow(FlowId::new(1), &[ComponentId::new(1)], &[StreamId::new(1)], 0)
-            .unwrap();
-        reg.register_flow(FlowId::new(2), &[ComponentId::new(2)], &[StreamId::new(2)], 0)
-            .unwrap();
+        reg.register_flow(
+            FlowId::new(1),
+            &[ComponentId::new(1)],
+            &[StreamId::new(1)],
+            0,
+        )
+        .unwrap();
+        reg.register_flow(
+            FlowId::new(2),
+            &[ComponentId::new(2)],
+            &[StreamId::new(2)],
+            0,
+        )
+        .unwrap();
 
         let ids = reg.active_flow_ids();
         assert_eq!(ids.len(), 2);

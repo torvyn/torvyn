@@ -71,8 +71,7 @@ impl ComponentBudget {
     /// # WARM PATH — called per release and transfer-out.
     #[inline]
     pub fn release(&self, bytes: u64) {
-        self.current_owned_bytes
-            .fetch_sub(bytes, Ordering::Relaxed);
+        self.current_owned_bytes.fetch_sub(bytes, Ordering::Relaxed);
     }
 
     /// Returns the current owned bytes.

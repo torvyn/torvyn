@@ -6,9 +6,7 @@
 
 use std::time::Instant;
 
-use torvyn_types::{
-    BackpressurePolicy, BufferHandle, ComponentId, ElementMeta, FlowId, StreamId,
-};
+use torvyn_types::{BackpressurePolicy, BufferHandle, ComponentId, ElementMeta, FlowId, StreamId};
 
 use crate::backpressure::BackpressureState;
 use crate::metrics::StreamMetrics;

@@ -1,0 +1,16 @@
+package torvyn:streaming@0.1.0;
+
+world data-source {
+    import types;
+    import buffer-allocator;
+
+    export source;
+    export lifecycle;
+}
+
+world data-sink {
+    import types;
+
+    export sink;
+    export lifecycle;
+}

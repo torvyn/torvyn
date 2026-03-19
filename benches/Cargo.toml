@@ -1,0 +1,42 @@
+[package]
+name = "torvyn-benchmarks"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Performance benchmarks for Torvyn streaming runtime"
+
+[dependencies]
+# Internal crates
+torvyn-types = { path = "../crates/torvyn-types" }
+torvyn-engine = { path = "../crates/torvyn-engine", default-features = false, features = ["mock"] }
+torvyn-reactor = { path = "../crates/torvyn-reactor" }
+torvyn-resources = { path = "../crates/torvyn-resources" }
+torvyn-integration-tests = { path = "../tests/integration" }
+
+# External
+tokio = { version = "1.41.0", features = ["full"] }
+async-trait = "0.1"
+criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
+
+[lints.rust]
+# Criterion macros generate undocumented functions; benchmarks don't need doc warnings.
+missing_docs = "allow"
+
+[lints.clippy]
+all = "deny"
+
+[[bench]]
+name = "latency"
+harness = false
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[[bench]]
+name = "copy_accounting"
+harness = false
+
+[[bench]]
+name = "memory"
+harness = false

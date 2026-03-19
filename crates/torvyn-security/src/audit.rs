@@ -141,9 +141,14 @@ pub enum AuditEventKind {
 impl fmt::Display for AuditEventKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AuditEventKind::ComponentInstantiated { resolved_capabilities } => {
-                write!(f, "component_instantiated: caps=[{}]",
-                       resolved_capabilities.join(", "))
+            AuditEventKind::ComponentInstantiated {
+                resolved_capabilities,
+            } => {
+                write!(
+                    f,
+                    "component_instantiated: caps=[{}]",
+                    resolved_capabilities.join(", ")
+                )
             }
             AuditEventKind::ComponentTerminated { reason } => {
                 write!(f, "component_terminated: {reason}")
@@ -151,11 +156,24 @@ impl fmt::Display for AuditEventKind {
             AuditEventKind::FlowStarted { component_ids } => {
                 write!(f, "flow_started: components={component_ids:?}")
             }
-            AuditEventKind::FlowTerminated { reason, elements_processed } => {
-                write!(f, "flow_terminated: {reason} ({elements_processed} elements)")
+            AuditEventKind::FlowTerminated {
+                reason,
+                elements_processed,
+            } => {
+                write!(
+                    f,
+                    "flow_terminated: {reason} ({elements_processed} elements)"
+                )
             }
-            AuditEventKind::CapabilityGrantResolved { requested, granted, effective } => {
-                write!(f, "cap_resolved: req={requested}, grant={granted}, eff={effective}")
+            AuditEventKind::CapabilityGrantResolved {
+                requested,
+                granted,
+                effective,
+            } => {
+                write!(
+                    f,
+                    "cap_resolved: req={requested}, grant={granted}, eff={effective}"
+                )
             }
             AuditEventKind::CapabilityDeniedAtLink { capability, reason } => {
                 write!(f, "cap_denied_link: {capability}: {reason}")
@@ -167,8 +185,15 @@ impl fmt::Display for AuditEventKind {
                 }
                 Ok(())
             }
-            AuditEventKind::CapabilityExercisedAggregate { capability, count, interval_ms } => {
-                write!(f, "cap_exercised_agg: {capability} x{count} in {interval_ms}ms")
+            AuditEventKind::CapabilityExercisedAggregate {
+                capability,
+                count,
+                interval_ms,
+            } => {
+                write!(
+                    f,
+                    "cap_exercised_agg: {capability} x{count} in {interval_ms}ms"
+                )
             }
             AuditEventKind::CapabilityDeniedAtRuntime { capability, detail } => {
                 write!(f, "cap_denied_runtime: {capability}: {detail}")
@@ -176,7 +201,10 @@ impl fmt::Display for AuditEventKind {
             AuditEventKind::CapabilityResolutionWarning { detail } => {
                 write!(f, "cap_resolution_warn: {detail}")
             }
-            AuditEventKind::SandboxViolation { violation_type, detail } => {
+            AuditEventKind::SandboxViolation {
+                violation_type,
+                detail,
+            } => {
                 write!(f, "sandbox_violation: {violation_type}: {detail}")
             }
         }
@@ -521,9 +549,7 @@ impl AuditSink for FileAuditSink {
         let line_bytes = line.len() as u64;
 
         // Check if rotation is needed
-        if state.current_bytes + line_bytes > self.max_bytes
-            && self.rotate(&mut state).is_err()
-        {
+        if state.current_bytes + line_bytes > self.max_bytes && self.rotate(&mut state).is_err() {
             return; // Best effort
         }
 

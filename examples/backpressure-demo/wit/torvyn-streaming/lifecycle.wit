@@ -1,0 +1,8 @@
+package torvyn:streaming@0.1.0;
+
+interface lifecycle {
+    use types.{process-error};
+
+    init: func(config: string) -> result<_, process-error>;
+    teardown: func();
+}

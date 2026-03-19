@@ -1,0 +1,53 @@
+[torvyn]
+name = "token-streaming"
+version = "0.1.0"
+contract_version = "0.1.0"
+description = "AI token streaming pipeline with content filtering"
+
+[[component]]
+name = "token-source"
+path = "components/token-source"
+
+[[component]]
+name = "content-filter"
+path = "components/content-filter"
+
+[[component]]
+name = "sentence-aggregator"
+path = "components/sentence-aggregator"
+
+[[component]]
+name = "output-sink"
+path = "components/output-sink"
+
+[flow.main]
+description = "Tokens -> Filter -> Aggregate -> Output"
+
+[flow.main.nodes.source]
+component = "token-source"
+interface = "torvyn:streaming/source"
+
+[flow.main.nodes.filter]
+component = "content-filter"
+interface = "torvyn:filtering/filter"
+config = "blocked_word"
+
+[flow.main.nodes.aggregator]
+component = "sentence-aggregator"
+interface = "torvyn:aggregation/aggregator"
+
+[flow.main.nodes.sink]
+component = "output-sink"
+interface = "torvyn:streaming/sink"
+
+[[flow.main.edges]]
+from = { node = "source", port = "output" }
+to = { node = "filter", port = "input" }
+
+[[flow.main.edges]]
+from = { node = "filter", port = "output" }
+to = { node = "aggregator", port = "input" }
+
+[[flow.main.edges]]
+from = { node = "aggregator", port = "output" }
+to = { node = "sink", port = "input" }

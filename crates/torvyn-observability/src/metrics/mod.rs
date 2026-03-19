@@ -14,5 +14,5 @@ pub use histogram::{Histogram, HistogramSnapshot, LATENCY_BUCKETS_NS, SIZE_BUCKE
 pub use pool_metrics::{PoolId, ResourcePoolMetrics};
 pub use registry::MetricsRegistry;
 pub use snapshot::{
-    ComponentMetricsSnapshot, FlowMetricsSnapshot, StreamMetricsSnapshot, delta, snapshot_flow,
+    delta, snapshot_flow, ComponentMetricsSnapshot, FlowMetricsSnapshot, StreamMetricsSnapshot,
 };

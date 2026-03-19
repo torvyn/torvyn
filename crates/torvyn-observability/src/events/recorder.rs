@@ -118,9 +118,7 @@ mod tests {
         DiagnosticEvent::new(
             Severity::Info,
             EventCategory::Lifecycle,
-            EventPayload::FlowStarted {
-                component_count: 1,
-            },
+            EventPayload::FlowStarted { component_count: 1 },
         )
         .with_flow(torvyn_types::FlowId::new(flow_id))
     }

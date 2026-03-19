@@ -2,7 +2,7 @@
 //!
 //! The [`ResourceTable`] is the central registry of all live resources.
 //! It stores [`ResourceEntry`] values in a dense array indexed by the
-//! `index` field of [`ResourceId`]. Generation counters on each slot
+//! `index` field of `ResourceId`. Generation counters on each slot
 //! detect use-after-free (stale handles).
 //!
 //! # Performance
@@ -14,9 +14,9 @@
 //! `ResourceTable` is NOT internally synchronized. All access must be
 //! externally serialized (the `DefaultResourceManager` uses a `Mutex`).
 
-use torvyn_types::{BufferHandle, ResourceId};
-use crate::handle::{ResourceEntry, Slot};
 use crate::error;
+use crate::handle::{ResourceEntry, Slot};
+use torvyn_types::{BufferHandle, ResourceId};
 
 /// Sentinel value for "no next free slot."
 const FREE_LIST_END: u32 = u32::MAX;
@@ -123,7 +123,10 @@ impl ResourceTable {
 
         // Extract the generation from the vacant slot and compute the new generation.
         let new_generation = match slot {
-            Slot::Vacant { next_free, generation } => {
+            Slot::Vacant {
+                next_free,
+                generation,
+            } => {
                 self.free_head = *next_free;
                 generation.wrapping_add(1)
             }
@@ -279,9 +282,9 @@ impl ResourceTable {
     /// # COLD PATH — called when the free list is empty.
     fn grow(&mut self) -> error::Result<()> {
         let old_cap = self.capacity;
-        let new_cap = old_cap
-            .checked_mul(2)
-            .ok_or_else(|| error::allocation_failed(0, "resource table capacity overflow (> u32::MAX)"))?;
+        let new_cap = old_cap.checked_mul(2).ok_or_else(|| {
+            error::allocation_failed(0, "resource table capacity overflow (> u32::MAX)")
+        })?;
 
         let new_cap_usize = new_cap as usize;
         self.entries.reserve(new_cap_usize - self.entries.len());
@@ -410,7 +413,10 @@ mod tests {
         let handle = BufferHandle::new(ResourceId::new(0, 1));
         let result = table.get(handle);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ResourceError::NotAllocated { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ResourceError::NotAllocated { .. }
+        ));
     }
 
     #[test]
@@ -419,7 +425,10 @@ mod tests {
         let handle = BufferHandle::new(ResourceId::new(100, 0));
         let result = table.get(handle);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ResourceError::StaleHandle { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ResourceError::StaleHandle { .. }
+        ));
     }
 
     #[test]

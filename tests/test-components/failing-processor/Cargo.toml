@@ -1,0 +1,16 @@
+[package]
+name = "test-failing-processor"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Test processor component: fails after N elements"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.41"
+
+[package.metadata.component]
+package = "torvyn:streaming"
+world = "managed-transform"

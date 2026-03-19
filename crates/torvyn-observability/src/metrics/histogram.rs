@@ -43,16 +43,7 @@ pub const LATENCY_BUCKETS_NS: &[u64] = &[
 ///
 /// Covers 64B to 16 MiB.
 pub const SIZE_BUCKETS_BYTES: &[u64] = &[
-    64,
-    256,
-    1_024,
-    4_096,
-    16_384,
-    65_536,
-    262_144,
-    1_048_576,
-    4_194_304,
-    16_777_216,
+    64, 256, 1_024, 4_096, 16_384, 65_536, 262_144, 1_048_576, 4_194_304, 16_777_216,
 ];
 
 /// A fixed-bucket histogram with atomic bucket counts.

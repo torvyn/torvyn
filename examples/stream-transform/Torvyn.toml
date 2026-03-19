@@ -1,0 +1,40 @@
+[torvyn]
+name = "stream-transform"
+version = "0.1.0"
+contract_version = "0.1.0"
+description = "JSON event transformation pipeline"
+
+[[component]]
+name = "json-source"
+path = "components/json-source"
+
+[[component]]
+name = "json-transform"
+path = "components/json-transform"
+
+[[component]]
+name = "json-sink"
+path = "components/json-sink"
+
+[flow.main]
+description = "Source -> Transform -> Sink"
+
+[flow.main.nodes.source]
+component = "json-source"
+interface = "torvyn:streaming/source"
+
+[flow.main.nodes.transform]
+component = "json-transform"
+interface = "torvyn:streaming/processor"
+
+[flow.main.nodes.sink]
+component = "json-sink"
+interface = "torvyn:streaming/sink"
+
+[[flow.main.edges]]
+from = { node = "source", port = "output" }
+to = { node = "transform", port = "input" }
+
+[[flow.main.edges]]
+from = { node = "transform", port = "output" }
+to = { node = "sink", port = "input" }

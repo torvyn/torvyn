@@ -63,9 +63,7 @@ mod tests {
         let event = DiagnosticEvent::new(
             torvyn_types::Severity::Info,
             EventCategory::Lifecycle,
-            EventPayload::FlowStarted {
-                component_count: 1,
-            },
+            EventPayload::FlowStarted { component_count: 1 },
         );
         tx.send(event).await.unwrap();
         drop(tx);

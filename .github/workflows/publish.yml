@@ -1,0 +1,133 @@
+name: Publish to crates.io
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  validate:
+    name: Validate before publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      - name: Build docs
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+  publish:
+    name: Publish crates
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish torvyn-types
+        run: cargo publish -p torvyn-types --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io indexing
+        run: sleep 30
+
+      - name: Publish torvyn-contracts
+        run: cargo publish -p torvyn-contracts --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish torvyn-config
+        run: cargo publish -p torvyn-config --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish torvyn-observability
+        run: cargo publish -p torvyn-observability --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io indexing
+        run: sleep 30
+
+      - name: Publish torvyn-engine
+        run: cargo publish -p torvyn-engine --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io indexing
+        run: sleep 30
+
+      - name: Publish torvyn-resources
+        run: cargo publish -p torvyn-resources --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish torvyn-security
+        run: cargo publish -p torvyn-security --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io indexing
+        run: sleep 30
+
+      - name: Publish torvyn-reactor
+        run: cargo publish -p torvyn-reactor --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io indexing
+        run: sleep 30
+
+      - name: Publish torvyn-linker
+        run: cargo publish -p torvyn-linker --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish torvyn-pipeline
+        run: cargo publish -p torvyn-pipeline --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish torvyn-packaging
+        run: cargo publish -p torvyn-packaging --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io indexing
+        run: sleep 30
+
+      - name: Publish torvyn-host
+        run: cargo publish -p torvyn-host --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io indexing
+        run: sleep 30
+
+      - name: Publish torvyn-cli
+        run: cargo publish -p torvyn-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io indexing
+        run: sleep 30
+
+      - name: Publish torvyn (umbrella crate)
+        run: cargo publish -p torvyn --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  release:
+    name: Create GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}

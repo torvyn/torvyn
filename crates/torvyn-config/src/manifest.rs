@@ -375,13 +375,9 @@ impl ComponentManifest {
     /// let manifest = ComponentManifest::from_toml_str(toml_str, "Torvyn.toml").unwrap();
     /// assert_eq!(manifest.torvyn.name, "example");
     /// ```
-    pub fn from_toml_str(
-        toml_str: &str,
-        file_path: &str,
-    ) -> Result<Self, Vec<ConfigParseError>> {
-        let manifest: Self = toml::from_str(toml_str).map_err(|e| {
-            vec![ConfigParseError::toml_syntax(file_path, &e)]
-        })?;
+    pub fn from_toml_str(toml_str: &str, file_path: &str) -> Result<Self, Vec<ConfigParseError>> {
+        let manifest: Self = toml::from_str(toml_str)
+            .map_err(|e| vec![ConfigParseError::toml_syntax(file_path, &e)])?;
 
         let mut errors = ConfigErrors::new();
         manifest.validate_required_fields(file_path, &mut errors);
@@ -556,8 +552,7 @@ contract_version = "0.1.0"
 
     #[test]
     fn test_manifest_parse_minimal() {
-        let manifest =
-            ComponentManifest::from_toml_str(MINIMAL_MANIFEST, "Torvyn.toml").unwrap();
+        let manifest = ComponentManifest::from_toml_str(MINIMAL_MANIFEST, "Torvyn.toml").unwrap();
         assert_eq!(manifest.torvyn.name, "my-component");
         assert_eq!(manifest.torvyn.version, "0.1.0");
         assert_eq!(manifest.torvyn.contract_version, "0.1.0");
@@ -577,7 +572,7 @@ contract_version = "0.1.0"
 description = "A streaming token pipeline"
 authors = ["Alice <alice@example.com>", "Bob <bob@example.com>"]
 license = "Apache-2.0"
-repository = "https://github.com/example/token-pipeline"
+repository = "https://github.com/torvyn/torvyn"
 "#;
         let manifest = ComponentManifest::from_toml_str(toml_str, "Torvyn.toml").unwrap();
         assert_eq!(manifest.torvyn.description, "A streaming token pipeline");
@@ -683,8 +678,7 @@ path = "b"
 
     #[test]
     fn test_manifest_defaults_applied() {
-        let manifest =
-            ComponentManifest::from_toml_str(MINIMAL_MANIFEST, "Torvyn.toml").unwrap();
+        let manifest = ComponentManifest::from_toml_str(MINIMAL_MANIFEST, "Torvyn.toml").unwrap();
         assert!(manifest.build.release);
         assert_eq!(manifest.build.target, "wasm32-wasip2");
         assert_eq!(manifest.test.timeout_seconds, 60);
@@ -692,11 +686,9 @@ path = "b"
 
     #[test]
     fn test_manifest_round_trip() {
-        let original =
-            ComponentManifest::from_toml_str(MINIMAL_MANIFEST, "Torvyn.toml").unwrap();
+        let original = ComponentManifest::from_toml_str(MINIMAL_MANIFEST, "Torvyn.toml").unwrap();
         let serialized = original.to_toml_string().unwrap();
-        let reparsed =
-            ComponentManifest::from_toml_str(&serialized, "Torvyn.toml").unwrap();
+        let reparsed = ComponentManifest::from_toml_str(&serialized, "Torvyn.toml").unwrap();
         assert_eq!(original.torvyn.name, reparsed.torvyn.name);
         assert_eq!(original.torvyn.version, reparsed.torvyn.version);
         assert_eq!(

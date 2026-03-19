@@ -150,9 +150,7 @@ impl OperatorGrants {
 
     /// Create empty grants (deny everything).
     pub fn deny_all() -> Self {
-        Self {
-            grants: Vec::new(),
-        }
+        Self { grants: Vec::new() }
     }
 
     /// Returns the granted capabilities.
@@ -248,10 +246,7 @@ mod tests {
 
     #[test]
     fn test_operator_grants_from_strings() {
-        let strings = vec![
-            "clock:wall".to_owned(),
-            "filesystem:read:/data".to_owned(),
-        ];
+        let strings = vec!["clock:wall".to_owned(), "filesystem:read:/data".to_owned()];
         let grants = OperatorGrants::from_strings(&strings).unwrap();
         assert_eq!(grants.grants().len(), 2);
     }
@@ -267,10 +262,8 @@ mod tests {
 
     #[test]
     fn test_component_capabilities_all() {
-        let caps = ComponentCapabilities::new(
-            vec![Capability::WallClock],
-            vec![Capability::Stderr],
-        );
+        let caps =
+            ComponentCapabilities::new(vec![Capability::WallClock], vec![Capability::Stderr]);
         let all = caps.all();
         assert_eq!(all.len(), 2);
     }

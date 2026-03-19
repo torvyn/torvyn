@@ -66,17 +66,15 @@ pub mod sandbox;
 pub mod tenant;
 
 // Re-exports for ergonomic use
-pub use audit::{AuditEvent, AuditEventKind, AuditSeverity, AuditSink, AuditSinkHandle};
-pub use audit::{NoopAuditSink, StdoutAuditSink};
 #[cfg(feature = "audit-file")]
 pub use audit::FileAuditSink;
-pub use capability::{
-    Capability, CapabilityParseError, NetScope, PathScope, PoolScope, PortRange,
-};
+pub use audit::{AuditEvent, AuditEventKind, AuditSeverity, AuditSink, AuditSinkHandle};
+pub use audit::{NoopAuditSink, StdoutAuditSink};
+pub use capability::{Capability, CapabilityParseError, NetScope, PathScope, PoolScope, PortRange};
 pub use error::{AuditError, CapabilityResolutionError, ResolutionWarning, SandboxError};
 pub use guard::{CapabilityDenied, CapabilityGuard, HotPathCapabilities};
 pub use manifest::{ComponentCapabilities, OperatorGrants};
-pub use resolver::{DefaultCapabilityResolver, ResolvedCapabilitySet, ResolutionResult};
+pub use resolver::{DefaultCapabilityResolver, ResolutionResult, ResolvedCapabilitySet};
 pub use sandbox::{
     CpuBudget, DefaultSandboxConfigurator, PreopenedDir, ResourceBudget, SandboxConfig,
     SandboxConfigurator, WasiConfiguration,

@@ -110,14 +110,13 @@ impl TierPool {
 
         for i in 0..pool_size {
             if config.preallocate {
-                let (ptr, alloc_size) = buffer::alloc_buffer(capacity)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "Failed to pre-allocate buffer {i}/{pool_size} for tier {}. \
+                let (ptr, alloc_size) = buffer::alloc_buffer(capacity).unwrap_or_else(|| {
+                    panic!(
+                        "Failed to pre-allocate buffer {i}/{pool_size} for tier {}. \
                              System is out of memory.",
-                            config.tier
-                        )
-                    });
+                        config.tier
+                    )
+                });
                 let next = if i + 1 < pool_size {
                     i + 1
                 } else {
@@ -410,10 +409,26 @@ mod tests {
 
     fn small_config() -> [TierConfig; 4] {
         [
-            TierConfig { tier: PoolTier::Small, pool_size: 8, preallocate: true },
-            TierConfig { tier: PoolTier::Medium, pool_size: 4, preallocate: true },
-            TierConfig { tier: PoolTier::Large, pool_size: 2, preallocate: true },
-            TierConfig { tier: PoolTier::Huge, pool_size: 1, preallocate: false },
+            TierConfig {
+                tier: PoolTier::Small,
+                pool_size: 8,
+                preallocate: true,
+            },
+            TierConfig {
+                tier: PoolTier::Medium,
+                pool_size: 4,
+                preallocate: true,
+            },
+            TierConfig {
+                tier: PoolTier::Large,
+                pool_size: 2,
+                preallocate: true,
+            },
+            TierConfig {
+                tier: PoolTier::Huge,
+                pool_size: 1,
+                preallocate: false,
+            },
         ]
     }
 

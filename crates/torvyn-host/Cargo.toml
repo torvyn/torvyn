@@ -2,7 +2,14 @@
 name = "torvyn-host"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 description = "Runtime orchestration shell for Torvyn"
+
+[features]
+default = ["signal"]
+signal = []
 
 [dependencies]
 torvyn-types.workspace = true
@@ -16,6 +23,10 @@ torvyn-linker.workspace = true
 torvyn-pipeline.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
 
 [lints]
 workspace = true

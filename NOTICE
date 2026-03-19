@@ -1,0 +1,30 @@
+Torvyn
+Copyright 2025 Torvyn Contributors
+
+This product includes software developed by the Torvyn project
+(https://github.com/torvyn/torvyn).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+This product depends on the following third-party components:
+
+- Wasmtime (https://github.com/bytecodealliance/wasmtime) — Apache-2.0 WITH LLVM-exception
+- Tokio (https://github.com/tokio-rs/tokio) — MIT
+- OpenTelemetry Rust (https://github.com/open-telemetry/opentelemetry-rust) — Apache-2.0
+- serde (https://github.com/serde-rs/serde) — MIT OR Apache-2.0
+- tracing (https://github.com/tokio-rs/tracing) — MIT
+- thiserror (https://github.com/dtolnay/thiserror) — MIT OR Apache-2.0
+- clap (https://github.com/clap-rs/clap) — MIT OR Apache-2.0
+- criterion (https://github.com/bheisler/criterion.rs) — MIT OR Apache-2.0
+
+See Cargo.lock for the complete dependency tree and exact versions.

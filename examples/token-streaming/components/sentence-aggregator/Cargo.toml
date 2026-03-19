@@ -1,0 +1,20 @@
+[package]
+name = "sentence-aggregator"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen-rt = { version = "0.41.0", features = ["bitflags"] }
+
+[package.metadata.component]
+package = "torvyn:aggregation"
+
+[package.metadata.component.target]
+world = "stream-aggregator"
+path = "../../wit/torvyn-aggregation"
+
+[package.metadata.component.target.dependencies]
+"torvyn:streaming" = { path = "../../wit/torvyn-aggregation/deps/torvyn-streaming" }

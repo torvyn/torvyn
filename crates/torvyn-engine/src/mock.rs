@@ -22,8 +22,8 @@ use crate::error::EngineError;
 use crate::traits::{ComponentInvoker, WasmEngine};
 use crate::types::{
     CompiledComponent, CompiledComponentInner, ComponentInstance, ComponentInstanceInner,
-    ImportBindings, ImportBindingsInner, MockCompiledComponent, MockInstanceState,
-    OutputElement, ProcessResult, StreamElement,
+    ImportBindings, ImportBindingsInner, MockCompiledComponent, MockInstanceState, OutputElement,
+    ProcessResult, StreamElement,
 };
 
 /// Mock Wasm engine for testing.
@@ -66,10 +66,7 @@ impl WasmEngine for MockEngine {
         })
     }
 
-    fn serialize_component(
-        &self,
-        _compiled: &CompiledComponent,
-    ) -> Result<Vec<u8>, EngineError> {
+    fn serialize_component(&self, _compiled: &CompiledComponent) -> Result<Vec<u8>, EngineError> {
         Ok(vec![0xCA, 0xFE])
     }
 
@@ -109,11 +106,7 @@ impl WasmEngine for MockEngine {
         })
     }
 
-    fn set_fuel(
-        &self,
-        instance: &mut ComponentInstance,
-        fuel: u64,
-    ) -> Result<(), EngineError> {
+    fn set_fuel(&self, instance: &mut ComponentInstance, fuel: u64) -> Result<(), EngineError> {
         if let ComponentInstanceInner::Mock(state) = &mut instance.inner {
             state.fuel = fuel;
             Ok(())
@@ -283,11 +276,7 @@ impl ComponentInvoker for MockInvoker {
         }
     }
 
-    async fn invoke_teardown(
-        &self,
-        instance: &mut ComponentInstance,
-        _component_id: ComponentId,
-    ) {
+    async fn invoke_teardown(&self, instance: &mut ComponentInstance, _component_id: ComponentId) {
         self.invocation_count.fetch_add(1, Ordering::Relaxed);
 
         if let ComponentInstanceInner::Mock(state) = &mut instance.inner {
@@ -565,13 +554,11 @@ mod tests {
         assert_eq!(bytes, vec![0xCA, 0xFE]);
 
         // SAFETY: test bytes from our own serialize.
-        let deserialized = unsafe { engine.deserialize_component(&bytes) }
-            .unwrap();
+        let deserialized = unsafe { engine.deserialize_component(&bytes) }.unwrap();
         assert!(deserialized.is_some());
 
         // Invalid bytes return None.
-        let invalid = unsafe { engine.deserialize_component(b"invalid") }
-            .unwrap();
+        let invalid = unsafe { engine.deserialize_component(b"invalid") }.unwrap();
         assert!(invalid.is_none());
     }
 

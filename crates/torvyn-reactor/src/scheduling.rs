@@ -339,9 +339,9 @@ mod tests {
         for i in 0..64 {
             let elem = crate::stream::StreamElementRef {
                 sequence: i,
-                buffer_handle: torvyn_types::BufferHandle::new(
-                    torvyn_types::ResourceId::new(i as u32, 0),
-                ),
+                buffer_handle: torvyn_types::BufferHandle::new(torvyn_types::ResourceId::new(
+                    i as u32, 0,
+                )),
                 meta: torvyn_types::ElementMeta::new(i, 0, String::new()),
                 enqueued_at: std::time::Instant::now(),
             };

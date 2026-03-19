@@ -198,27 +198,51 @@ pub enum ContractError {
 impl fmt::Display for ContractError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ContractError::ParseError { file, line, message } => {
-                write!(f, "[E0100] Contract parse error in '{file}' at line {line}: {message}. \
-                       Fix the WIT syntax and re-run `torvyn check`.")
+            ContractError::ParseError {
+                file,
+                line,
+                message,
+            } => {
+                write!(
+                    f,
+                    "[E0100] Contract parse error in '{file}' at line {line}: {message}. \
+                       Fix the WIT syntax and re-run `torvyn check`."
+                )
             }
-            ContractError::MissingInterface { component, interface_name } => {
+            ContractError::MissingInterface {
+                component,
+                interface_name,
+            } => {
                 write!(f, "[E0101] Component '{component}' does not export required interface '{interface_name}'. \
                        Ensure the component's world definition includes `export {interface_name}`.")
             }
-            ContractError::TypeMismatch { interface_name, type_name, expected, actual } => {
-                write!(f, "[E0102] Type mismatch in interface '{interface_name}': type '{type_name}' \
+            ContractError::TypeMismatch {
+                interface_name,
+                type_name,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "[E0102] Type mismatch in interface '{interface_name}': type '{type_name}' \
                        expected '{expected}' but found '{actual}'. \
-                       Recompile the component against the correct WIT package version.")
+                       Recompile the component against the correct WIT package version."
+                )
             }
             ContractError::VersionIncompatible { required, provided } => {
-                write!(f, "[E0103] Contract version incompatible: required '{required}', \
+                write!(
+                    f,
+                    "[E0103] Contract version incompatible: required '{required}', \
                        provided '{provided}'. \
-                       Update the component to target the required contract version.")
+                       Update the component to target the required contract version."
+                )
             }
             ContractError::PackageNotFound { package_name } => {
-                write!(f, "[E0104] WIT package '{package_name}' not found. \
-                       Run `torvyn init` to fetch dependencies or check the `wit/deps/` directory.")
+                write!(
+                    f,
+                    "[E0104] WIT package '{package_name}' not found. \
+                       Run `torvyn init` to fetch dependencies or check the `wit/deps/` directory."
+                )
             }
         }
     }
@@ -273,30 +297,56 @@ pub enum LinkError {
 impl fmt::Display for LinkError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LinkError::UnresolvedImport { component, import_name } => {
-                write!(f, "[E0200] Unresolved import: component '{component}' requires '{import_name}' \
+            LinkError::UnresolvedImport {
+                component,
+                import_name,
+            } => {
+                write!(
+                    f,
+                    "[E0200] Unresolved import: component '{component}' requires '{import_name}' \
                        but no connected component exports it. \
-                       Check the pipeline topology and ensure all imports are satisfied.")
+                       Check the pipeline topology and ensure all imports are satisfied."
+                )
             }
-            LinkError::InterfaceMismatch { from_component, to_component, interface_name, detail } => {
-                write!(f, "[E0201] Interface mismatch between '{from_component}' and '{to_component}' \
+            LinkError::InterfaceMismatch {
+                from_component,
+                to_component,
+                interface_name,
+                detail,
+            } => {
+                write!(
+                    f,
+                    "[E0201] Interface mismatch between '{from_component}' and '{to_component}' \
                        on interface '{interface_name}': {detail}. \
-                       Ensure both components target the same contract version.")
+                       Ensure both components target the same contract version."
+                )
             }
-            LinkError::CapabilityDenied { component, capability } => {
-                write!(f, "[E0202] Capability denied: component '{component}' requires '{capability}' \
+            LinkError::CapabilityDenied {
+                component,
+                capability,
+            } => {
+                write!(
+                    f,
+                    "[E0202] Capability denied: component '{component}' requires '{capability}' \
                        but it was not granted in the pipeline configuration. \
-                       Add the capability to the component's grant list in Torvyn.toml.")
+                       Add the capability to the component's grant list in Torvyn.toml."
+                )
             }
             LinkError::CyclicDependency { cycle } => {
-                write!(f, "[E0203] Cyclic dependency detected in pipeline topology: {}. \
+                write!(
+                    f,
+                    "[E0203] Cyclic dependency detected in pipeline topology: {}. \
                        Torvyn pipelines must be directed acyclic graphs (DAGs). \
                        Remove the cycle by restructuring the pipeline.",
-                       cycle.join(" \u{2192} "))
+                    cycle.join(" \u{2192} ")
+                )
             }
             LinkError::CompilationFailed { component, reason } => {
-                write!(f, "[E0204] Component '{component}' failed to compile: {reason}. \
-                       Verify the .wasm file is a valid WebAssembly Component.")
+                write!(
+                    f,
+                    "[E0204] Component '{component}' failed to compile: {reason}. \
+                       Verify the .wasm file is a valid WebAssembly Component."
+                )
             }
         }
     }
@@ -387,47 +437,91 @@ impl fmt::Display for ResourceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ResourceError::StaleHandle { handle } => {
-                write!(f, "[E0300] Stale resource handle: {handle}. The slot has been freed and reused. \
-                       This usually indicates a bug in the component or a lifecycle mismatch.")
+                write!(
+                    f,
+                    "[E0300] Stale resource handle: {handle}. The slot has been freed and reused. \
+                       This usually indicates a bug in the component or a lifecycle mismatch."
+                )
             }
-            ResourceError::NotOwner { handle, expected_owner, actual_caller } => {
+            ResourceError::NotOwner {
+                handle,
+                expected_owner,
+                actual_caller,
+            } => {
                 write!(f, "[E0301] Not owner of resource {handle}: expected owner '{expected_owner}', \
                        caller is '{actual_caller}'. Only the owner can transfer, free, or mutate a resource.")
             }
             ResourceError::NotAllocated { handle } => {
-                write!(f, "[E0302] Resource {handle} is not allocated (currently pooled). \
-                       Allocate the resource before attempting to use it.")
+                write!(
+                    f,
+                    "[E0302] Resource {handle} is not allocated (currently pooled). \
+                       Allocate the resource before attempting to use it."
+                )
             }
-            ResourceError::BorrowsOutstanding { handle, borrow_count } => {
+            ResourceError::BorrowsOutstanding {
+                handle,
+                borrow_count,
+            } => {
                 write!(f, "[E0303] Cannot modify resource {handle}: {borrow_count} borrow(s) outstanding. \
                        Wait for all borrows to be released before transferring or freeing.")
             }
             ResourceError::MutableLeaseActive { handle } => {
-                write!(f, "[E0304] Cannot access resource {handle}: a mutable lease is active. \
-                       Wait for the lease to expire or be released.")
+                write!(
+                    f,
+                    "[E0304] Cannot access resource {handle}: a mutable lease is active. \
+                       Wait for the lease to expire or be released."
+                )
             }
             ResourceError::ReadOnlyLeasesActive { handle } => {
-                write!(f, "[E0305] Cannot mutate resource {handle}: read-only lease(s) active. \
-                       Wait for all leases to expire or be released.")
+                write!(
+                    f,
+                    "[E0305] Cannot mutate resource {handle}: read-only lease(s) active. \
+                       Wait for all leases to expire or be released."
+                )
             }
-            ResourceError::BudgetExceeded { component, current_bytes, requested_bytes, budget_bytes } => {
+            ResourceError::BudgetExceeded {
+                component,
+                current_bytes,
+                requested_bytes,
+                budget_bytes,
+            } => {
                 write!(f, "[E0306] Memory budget exceeded for {component}: \
                        current={current_bytes}B, requested={requested_bytes}B, budget={budget_bytes}B. \
                        Release unused buffers or increase the component's memory budget in Torvyn.toml.")
             }
-            ResourceError::AllocationFailed { requested_capacity, reason } => {
-                write!(f, "[E0307] Buffer allocation failed for {requested_capacity}B: {reason}. \
-                       Consider increasing pool sizes or reducing concurrent buffer usage.")
+            ResourceError::AllocationFailed {
+                requested_capacity,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "[E0307] Buffer allocation failed for {requested_capacity}B: {reason}. \
+                       Consider increasing pool sizes or reducing concurrent buffer usage."
+                )
             }
-            ResourceError::CapacityExceeded { handle, capacity, attempted_size } => {
-                write!(f, "[E0308] Write would exceed buffer capacity for {handle}: \
+            ResourceError::CapacityExceeded {
+                handle,
+                capacity,
+                attempted_size,
+            } => {
+                write!(
+                    f,
+                    "[E0308] Write would exceed buffer capacity for {handle}: \
                        capacity={capacity}B, attempted_size={attempted_size}B. \
-                       Allocate a larger buffer or reduce write size.")
+                       Allocate a larger buffer or reduce write size."
+                )
             }
-            ResourceError::OutOfBounds { handle, offset, buffer_size } => {
-                write!(f, "[E0309] Out of bounds access on {handle}: \
+            ResourceError::OutOfBounds {
+                handle,
+                offset,
+                buffer_size,
+            } => {
+                write!(
+                    f,
+                    "[E0309] Out of bounds access on {handle}: \
                        offset={offset}, buffer_size={buffer_size}B. \
-                       Verify offset is within the buffer's valid range.")
+                       Verify offset is within the buffer's valid range."
+                )
             }
         }
     }
@@ -483,25 +577,45 @@ impl fmt::Display for ReactorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ReactorError::FlowNotFound { flow_id } => {
-                write!(f, "[E0400] Flow '{flow_id}' not found. \
-                       Verify the flow ID is correct and the flow has not been terminated.")
+                write!(
+                    f,
+                    "[E0400] Flow '{flow_id}' not found. \
+                       Verify the flow ID is correct and the flow has not been terminated."
+                )
             }
-            ReactorError::InvalidFlowState { flow_id, current_state, attempted_operation } => {
-                write!(f, "[E0401] Cannot {attempted_operation} on flow '{flow_id}': \
+            ReactorError::InvalidFlowState {
+                flow_id,
+                current_state,
+                attempted_operation,
+            } => {
+                write!(
+                    f,
+                    "[E0401] Cannot {attempted_operation} on flow '{flow_id}': \
                        current state is '{current_state}'. \
-                       Check the flow lifecycle documentation for valid state transitions.")
+                       Check the flow lifecycle documentation for valid state transitions."
+                )
             }
             ReactorError::InvalidTopology { reason } => {
-                write!(f, "[E0402] Invalid flow topology: {reason}. \
-                       Ensure the pipeline is a directed acyclic graph with valid connections.")
+                write!(
+                    f,
+                    "[E0402] Invalid flow topology: {reason}. \
+                       Ensure the pipeline is a directed acyclic graph with valid connections."
+                )
             }
-            ReactorError::Timeout { flow_id, operation, duration_ms } => {
+            ReactorError::Timeout {
+                flow_id,
+                operation,
+                duration_ms,
+            } => {
                 write!(f, "[E0403] Timeout on flow '{flow_id}' during '{operation}' \
                        after {duration_ms}ms. Consider increasing timeouts in the flow configuration.")
             }
             ReactorError::ShuttingDown => {
-                write!(f, "[E0404] Reactor is shutting down and cannot accept new flows. \
-                       Wait for shutdown to complete before restarting.")
+                write!(
+                    f,
+                    "[E0404] Reactor is shutting down and cannot accept new flows. \
+                       Wait for shutdown to complete before restarting."
+                )
             }
             ReactorError::QueueError { stream_id, reason } => {
                 write!(f, "[E0405] Stream queue error on '{stream_id}': {reason}.")
@@ -551,19 +665,35 @@ impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ConfigError::FileNotFound { path } => {
-                write!(f, "[E0700] Configuration file not found: '{path}'. \
-                       Create a Torvyn.toml file or specify a different path with --config.")
+                write!(
+                    f,
+                    "[E0700] Configuration file not found: '{path}'. \
+                       Create a Torvyn.toml file or specify a different path with --config."
+                )
             }
             ConfigError::ParseError { path, message } => {
-                write!(f, "[E0701] Failed to parse configuration '{path}': {message}. \
-                       Validate the TOML syntax.")
+                write!(
+                    f,
+                    "[E0701] Failed to parse configuration '{path}': {message}. \
+                       Validate the TOML syntax."
+                )
             }
             ConfigError::MissingField { field, context } => {
-                write!(f, "[E0702] Missing required field '{field}' in {context}. \
-                       Add the field to your configuration file.")
+                write!(
+                    f,
+                    "[E0702] Missing required field '{field}' in {context}. \
+                       Add the field to your configuration file."
+                )
             }
-            ConfigError::InvalidValue { field, value, reason } => {
-                write!(f, "[E0703] Invalid value for '{field}': '{value}' \u{2014} {reason}.")
+            ConfigError::InvalidValue {
+                field,
+                value,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "[E0703] Invalid value for '{field}': '{value}' \u{2014} {reason}."
+                )
             }
         }
     }
@@ -602,16 +732,28 @@ pub enum SecurityError {
 impl fmt::Display for SecurityError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SecurityError::CapabilityDenied { component, capability } => {
-                write!(f, "[E0500] Capability '{capability}' denied for {component}. \
-                       Grant the capability in the pipeline configuration or component manifest.")
+            SecurityError::CapabilityDenied {
+                component,
+                capability,
+            } => {
+                write!(
+                    f,
+                    "[E0500] Capability '{capability}' denied for {component}. \
+                       Grant the capability in the pipeline configuration or component manifest."
+                )
             }
             SecurityError::InvalidSandboxConfig { component, reason } => {
-                write!(f, "[E0501] Invalid sandbox configuration for {component}: {reason}.")
+                write!(
+                    f,
+                    "[E0501] Invalid sandbox configuration for {component}: {reason}."
+                )
             }
             SecurityError::PolicyViolation { component, detail } => {
-                write!(f, "[E0502] Security policy violation by {component}: {detail}. \
-                       This event has been logged for auditing.")
+                write!(
+                    f,
+                    "[E0502] Security policy violation by {component}: {detail}. \
+                       This event has been logged for auditing."
+                )
             }
         }
     }
@@ -658,20 +800,32 @@ impl fmt::Display for PackagingError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PackagingError::InvalidArtifact { path, reason } => {
-                write!(f, "[E0600] Invalid artifact '{path}': {reason}. \
-                       Re-pack with `torvyn pack` to create a valid artifact.")
+                write!(
+                    f,
+                    "[E0600] Invalid artifact '{path}': {reason}. \
+                       Re-pack with `torvyn pack` to create a valid artifact."
+                )
             }
             PackagingError::RegistryError { registry, reason } => {
-                write!(f, "[E0601] Registry error for '{registry}': {reason}. \
-                       Check network connectivity and registry credentials.")
+                write!(
+                    f,
+                    "[E0601] Registry error for '{registry}': {reason}. \
+                       Check network connectivity and registry credentials."
+                )
             }
             PackagingError::SignatureInvalid { artifact, reason } => {
-                write!(f, "[E0602] Signature verification failed for '{artifact}': {reason}. \
-                       Re-sign with `torvyn pack --sign` or verify the signing key.")
+                write!(
+                    f,
+                    "[E0602] Signature verification failed for '{artifact}': {reason}. \
+                       Re-sign with `torvyn pack --sign` or verify the signing key."
+                )
             }
             PackagingError::MissingMetadata { artifact, field } => {
-                write!(f, "[E0603] Artifact '{artifact}' is missing required metadata field '{field}'. \
-                       Re-pack with a complete Torvyn.toml manifest.")
+                write!(
+                    f,
+                    "[E0603] Artifact '{artifact}' is missing required metadata field '{field}'. \
+                       Re-pack with a complete Torvyn.toml manifest."
+                )
             }
         }
     }
@@ -708,12 +862,18 @@ impl fmt::Display for EngineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             EngineError::CompilationFailed { module, reason } => {
-                write!(f, "[E0800] Wasm compilation failed for '{module}': {reason}. \
-                       Verify the .wasm file is a valid WebAssembly Component.")
+                write!(
+                    f,
+                    "[E0800] Wasm compilation failed for '{module}': {reason}. \
+                       Verify the .wasm file is a valid WebAssembly Component."
+                )
             }
             EngineError::InstantiationFailed { module, reason } => {
-                write!(f, "[E0801] Wasm instantiation failed for '{module}': {reason}. \
-                       Check that all imports are satisfied and the module is compatible.")
+                write!(
+                    f,
+                    "[E0801] Wasm instantiation failed for '{module}': {reason}. \
+                       Check that all imports are satisfied and the module is compatible."
+                )
             }
         }
     }
@@ -869,9 +1029,15 @@ mod tests {
     fn test_process_error_invalid_input_display_is_actionable() {
         let err = ProcessError::InvalidInput("expected JSON".into());
         let msg = format!("{err}");
-        assert!(msg.contains("invalid input"), "should contain error category");
+        assert!(
+            msg.contains("invalid input"),
+            "should contain error category"
+        );
         assert!(msg.contains("expected JSON"), "should contain the detail");
-        assert!(msg.contains("Check that upstream"), "should contain remediation");
+        assert!(
+            msg.contains("Check that upstream"),
+            "should contain remediation"
+        );
     }
 
     #[test]
@@ -920,7 +1086,10 @@ mod tests {
 
     #[test]
     fn test_process_error_kind() {
-        assert_eq!(ProcessError::InvalidInput("".into()).kind(), "invalid_input");
+        assert_eq!(
+            ProcessError::InvalidInput("".into()).kind(),
+            "invalid_input"
+        );
         assert_eq!(ProcessError::Unavailable("".into()).kind(), "unavailable");
         assert_eq!(ProcessError::Internal("".into()).kind(), "internal");
         assert_eq!(ProcessError::DeadlineExceeded.kind(), "deadline_exceeded");
@@ -1085,7 +1254,8 @@ mod tests {
     fn test_torvyn_error_from_contract_error() {
         let err: TorvynError = ContractError::PackageNotFound {
             package_name: "x".into(),
-        }.into();
+        }
+        .into();
         assert!(matches!(err, TorvynError::Contract(_)));
     }
 
@@ -1093,7 +1263,8 @@ mod tests {
     fn test_torvyn_error_from_resource_error() {
         let err: TorvynError = ResourceError::StaleHandle {
             handle: ResourceId::new(0, 0),
-        }.into();
+        }
+        .into();
         assert!(matches!(err, TorvynError::Resource(_)));
     }
 

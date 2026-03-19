@@ -1,0 +1,31 @@
+[torvyn]
+name = "hello-world"
+version = "0.1.0"
+contract_version = "0.1.0"
+description = "The simplest possible Torvyn pipeline"
+
+# Declare the two components in this workspace.
+[[component]]
+name = "hello-source"
+path = "components/hello-source"
+
+[[component]]
+name = "hello-sink"
+path = "components/hello-sink"
+
+# Define the pipeline flow.
+[flow.main]
+description = "Source produces greetings, sink prints them"
+
+[flow.main.nodes.source]
+component = "hello-source"
+interface = "torvyn:streaming/source"
+config = '{"count": 5}'
+
+[flow.main.nodes.sink]
+component = "hello-sink"
+interface = "torvyn:streaming/sink"
+
+[[flow.main.edges]]
+from = { node = "source", port = "output" }
+to = { node = "sink", port = "input" }

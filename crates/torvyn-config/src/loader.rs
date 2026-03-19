@@ -93,9 +93,7 @@ pub fn load_config(manifest_path: &str) -> Result<ResolvedConfig, Vec<ConfigPars
     }
 
     // 5. Check for pipeline.toml alongside the manifest
-    let manifest_dir = Path::new(manifest_path)
-        .parent()
-        .unwrap_or(Path::new("."));
+    let manifest_dir = Path::new(manifest_path).parent().unwrap_or(Path::new("."));
     let pipeline_path = manifest_dir.join("pipeline.toml");
 
     if pipeline_path.exists() {

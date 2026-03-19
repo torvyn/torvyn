@@ -99,9 +99,30 @@ pub fn parse_manifest(path: &Path) -> Result<ComponentManifest, ValidationResult
 
     let mut errors = ValidationResult::new();
 
-    // Extract [component] section
+    // Extract [component] section — supports both single-component format
+    // ([component] table) and workspace format ([torvyn] + [[component]] array).
     let component = match table.get("component") {
-        Some(toml::Value::Table(t)) => t,
+        Some(toml::Value::Table(t)) => std::borrow::Cow::Borrowed(t),
+        Some(toml::Value::Array(arr)) => {
+            // Workspace format: [[component]] array — use [torvyn] for name/version,
+            // fall back to first array entry.
+            if let Some(toml::Value::Table(torvyn)) = table.get("torvyn") {
+                std::borrow::Cow::Owned(torvyn.clone())
+            } else if let Some(toml::Value::Table(first)) = arr.first() {
+                std::borrow::Cow::Borrowed(first)
+            } else {
+                errors.push(
+                    DiagnosticBuilder::error(
+                        ErrorCode::ManifestMissingField,
+                        "[[component]] array is empty",
+                    )
+                    .location(path, 1, 0, "expected at least one [[component]] entry")
+                    .help("add a [[component]] entry with name, path, and language fields")
+                    .build(),
+                );
+                return Err(errors);
+            }
+        }
         Some(_) => {
             errors.push(
                 DiagnosticBuilder::error(
@@ -115,16 +136,26 @@ pub fn parse_manifest(path: &Path) -> Result<ComponentManifest, ValidationResult
             return Err(errors);
         }
         None => {
-            errors.push(
-                DiagnosticBuilder::error(
-                    ErrorCode::ManifestMissingField,
-                    "missing [component] section",
-                )
-                .location(path, 1, 0, "Torvyn.toml must have a [component] section")
-                .help("add:\n[component]\nname = \"my-component\"\nversion = \"0.1.0\"")
-                .build(),
-            );
-            return Err(errors);
+            // Also accept workspace format with only [torvyn] section
+            if let Some(toml::Value::Table(torvyn)) = table.get("torvyn") {
+                std::borrow::Cow::Owned(torvyn.clone())
+            } else {
+                errors.push(
+                    DiagnosticBuilder::error(
+                        ErrorCode::ManifestMissingField,
+                        "missing [component] section",
+                    )
+                    .location(
+                        path,
+                        1,
+                        0,
+                        "Torvyn.toml must have a [component] or [torvyn] section",
+                    )
+                    .help("add:\n[component]\nname = \"my-component\"\nversion = \"0.1.0\"")
+                    .build(),
+                );
+                return Err(errors);
+            }
         }
     };
 
@@ -250,11 +281,7 @@ fn parse_byte_size(s: &str) -> Option<u64> {
             .ok()
             .map(|n| n * 1024 * 1024 * 1024)
     } else if let Some(num_str) = s.strip_suffix("MiB") {
-        num_str
-            .trim()
-            .parse::<u64>()
-            .ok()
-            .map(|n| n * 1024 * 1024)
+        num_str.trim().parse::<u64>().ok().map(|n| n * 1024 * 1024)
     } else if let Some(num_str) = s.strip_suffix("KiB") {
         num_str.trim().parse::<u64>().ok().map(|n| n * 1024)
     } else if let Some(num_str) = s.strip_suffix('B') {
@@ -265,8 +292,14 @@ fn parse_byte_size(s: &str) -> Option<u64> {
 }
 
 /// The set of Torvyn processing interfaces that a component may export.
-const TORVYN_PROCESSING_INTERFACES: &[&str] =
-    &["processor", "source", "sink", "filter", "router", "aggregator"];
+const TORVYN_PROCESSING_INTERFACES: &[&str] = &[
+    "processor",
+    "source",
+    "sink",
+    "filter",
+    "router",
+    "aggregator",
+];
 
 /// Known WASI interface imports and their corresponding capability names.
 const WASI_CAPABILITY_MAP: &[(&str, &str)] = &[
@@ -309,23 +342,38 @@ pub fn validate_component(project_dir: &Path, parser: &dyn WitParser) -> Validat
         }
     };
 
-    // 2. Parse WIT files
+    // 2. Parse WIT files — try wit/ first, then scan subdirectories
+    //    (wit-parser expects to be pointed at a package directory with
+    //     a `package` declaration; projects often use wit/<pkg-name>/ layout).
     let wit_dir = project_dir.join("wit");
     let packages = match parser.parse_directory(&wit_dir) {
-        Ok(pkgs) => pkgs,
-        Err(errs) => {
-            result.merge(errs);
-            return result;
+        Ok(pkgs) if !pkgs.is_empty() => pkgs,
+        Ok(_) | Err(_) => {
+            // Fallback: scan subdirectories of wit/ for package directories
+            let mut all_pkgs = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(&wit_dir) {
+                for entry in entries.flatten() {
+                    if entry.path().is_dir() {
+                        if let Ok(pkgs) = parser.parse_directory(&entry.path()) {
+                            all_pkgs.extend(pkgs);
+                        }
+                    }
+                }
+            }
+            all_pkgs
         }
     };
 
     if packages.is_empty() {
         result.push(
             DiagnosticBuilder::error(ErrorCode::WitPackageDeclaration, "no WIT packages found")
-                .location(&wit_dir, 1, 0, "wit/ directory contains no parseable packages")
-                .help(
-                    "ensure your wit/ directory contains .wit files with a package declaration",
+                .location(
+                    &wit_dir,
+                    1,
+                    0,
+                    "wit/ directory contains no parseable packages",
                 )
+                .help("ensure your wit/ directory contains .wit files with a package declaration")
                 .build(),
         );
         return result;
@@ -393,9 +441,7 @@ pub fn validate_component(project_dir: &Path, parser: &dyn WitParser) -> Validat
                             ),
                         )
                         .location(&manifest_path, 1, 0, "manifest version here")
-                        .note(
-                            "WIT package version and manifest version should typically agree",
-                        )
+                        .note("WIT package version and manifest version should typically agree")
                         .build(),
                     );
                 }
@@ -436,12 +482,7 @@ fn validate_capability_consistency(
                             world_name, import_key, capability_name
                         ),
                     )
-                    .location(
-                        wit_dir,
-                        1,
-                        0,
-                        format!("import of '{}' here", import_key),
-                    )
+                    .location(wit_dir, 1, 0, format!("import of '{}' here", import_key))
                     .location(
                         manifest_path,
                         1,

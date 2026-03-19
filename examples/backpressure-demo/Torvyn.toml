@@ -1,0 +1,33 @@
+[torvyn]
+name = "backpressure-demo"
+version = "0.1.0"
+contract_version = "0.1.0"
+description = "Demonstrates backpressure between a fast source and slow sink"
+
+[[component]]
+name = "fast-source"
+path = "components/fast-source"
+
+[[component]]
+name = "slow-sink"
+path = "components/slow-sink"
+
+[flow.main]
+description = "Fast source -> Slow sink (backpressure active)"
+
+# Override queue depth to a small value so backpressure activates quickly.
+default_queue_depth = 16
+
+[flow.main.nodes.source]
+component = "fast-source"
+interface = "torvyn:streaming/source"
+config = "1000"
+
+[flow.main.nodes.sink]
+component = "slow-sink"
+interface = "torvyn:streaming/sink"
+config = "100000"
+
+[[flow.main.edges]]
+from = { node = "source", port = "output" }
+to = { node = "sink", port = "input" }

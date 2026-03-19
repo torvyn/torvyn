@@ -47,9 +47,7 @@ impl WasmtimeInvoker {
     ///
     /// # COLD PATH — called once at host startup.
     pub fn new() -> Self {
-        Self {
-            _preallocated: (),
-        }
+        Self { _preallocated: () }
     }
 
     /// Extract the Wasmtime instance state from a ComponentInstance.
@@ -325,11 +323,7 @@ impl ComponentInvoker for WasmtimeInvoker {
     /// # COLD PATH
     ///
     /// Per C02-10: failures are logged but do not prevent termination.
-    async fn invoke_teardown(
-        &self,
-        instance: &mut ComponentInstance,
-        component_id: ComponentId,
-    ) {
+    async fn invoke_teardown(&self, instance: &mut ComponentInstance, component_id: ComponentId) {
         let state = match Self::wasmtime_state(instance) {
             Ok(s) => s,
             Err(_) => return,
@@ -342,10 +336,7 @@ impl ComponentInvoker for WasmtimeInvoker {
 
         let mut results = vec![Val::Bool(false); 1];
 
-        if let Err(e) = func
-            .call_async(&mut state.store, &[], &mut results)
-            .await
-        {
+        if let Err(e) = func.call_async(&mut state.store, &[], &mut results).await {
             // Best-effort: log errors but don't propagate.
             #[cfg(feature = "tracing-support")]
             tracing::warn!(
@@ -381,16 +372,14 @@ mod tests {
     #[test]
     fn test_convert_wasm_error_fuel_exhaustion() {
         let err = wasmtime::Error::from(Trap::OutOfFuel);
-        let process_err =
-            WasmtimeInvoker::convert_wasm_error(err, ComponentId::new(1), "process");
+        let process_err = WasmtimeInvoker::convert_wasm_error(err, ComponentId::new(1), "process");
         assert!(matches!(process_err, ProcessError::DeadlineExceeded));
     }
 
     #[test]
     fn test_convert_wasm_error_trap() {
         let err = wasmtime::Error::from(Trap::UnreachableCodeReached);
-        let process_err =
-            WasmtimeInvoker::convert_wasm_error(err, ComponentId::new(1), "process");
+        let process_err = WasmtimeInvoker::convert_wasm_error(err, ComponentId::new(1), "process");
         assert!(matches!(process_err, ProcessError::Fatal(_)));
     }
 

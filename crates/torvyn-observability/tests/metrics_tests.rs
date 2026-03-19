@@ -76,10 +76,7 @@ fn test_flow_metrics_lifecycle() {
             .read(),
         100
     );
-    assert_eq!(
-        fm.stream(StreamId::new(2)).unwrap().elements.read(),
-        100
-    );
+    assert_eq!(fm.stream(StreamId::new(2)).unwrap().elements.read(), 100);
 }
 
 #[test]

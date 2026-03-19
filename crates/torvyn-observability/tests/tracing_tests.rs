@@ -49,8 +49,10 @@ fn test_span_ring_buffer_fill_and_drain() {
 fn test_sampling_decision_deterministic() {
     use torvyn_observability::config::TracingConfig;
 
-    let mut config = TracingConfig::default();
-    config.sample_rate = 0.5;
+    let config = TracingConfig {
+        sample_rate: 0.5,
+        ..TracingConfig::default()
+    };
     let sampler = Sampler::new(&config);
 
     let trace_id = [0xAB; 16];
@@ -64,11 +66,7 @@ fn test_sampling_decision_deterministic() {
 
 #[test]
 fn test_trace_context_sampling_flags() {
-    let mut ctx = FlowTraceContext::new(
-        TraceId::new([1; 16]),
-        SpanId::new([2; 8]),
-        FlowId::new(1),
-    );
+    let mut ctx = FlowTraceContext::new(TraceId::new([1; 16]), SpanId::new([2; 8]), FlowId::new(1));
 
     assert!(!ctx.flags.is_sampled());
     ctx.set_sampled();

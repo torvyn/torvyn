@@ -2,6 +2,9 @@
 name = "torvyn-pipeline"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 description = "Pipeline topology construction, validation, and instantiation for Torvyn"
 
 [dependencies]
@@ -12,6 +15,15 @@ torvyn-engine.workspace = true
 torvyn-resources.workspace = true
 torvyn-config.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
+
+[features]
+default = []
+mock = []
 
 [lints]
 workspace = true

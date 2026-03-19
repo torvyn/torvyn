@@ -100,10 +100,9 @@ impl WasmtimeEngine {
             }
         }
 
-        let engine =
-            Engine::new(&wasmtime_config).map_err(|e| EngineError::Internal {
-                reason: format!("Failed to create Wasmtime engine: {e}"),
-            })?;
+        let engine = Engine::new(&wasmtime_config).map_err(|e| EngineError::Internal {
+            reason: format!("Failed to create Wasmtime engine: {e}"),
+        })?;
 
         Ok(Self { engine, config })
     }
@@ -186,22 +185,18 @@ impl WasmtimeEngine {
 #[async_trait]
 impl WasmEngine for WasmtimeEngine {
     fn compile_component(&self, bytes: &[u8]) -> Result<CompiledComponent, EngineError> {
-        let component = Component::new(&self.engine, bytes).map_err(|e| {
-            EngineError::CompilationFailed {
+        let component =
+            Component::new(&self.engine, bytes).map_err(|e| EngineError::CompilationFailed {
                 reason: e.to_string(),
                 source_hint: None,
-            }
-        })?;
+            })?;
 
         Ok(CompiledComponent {
             inner: CompiledComponentInner::Wasmtime(component),
         })
     }
 
-    fn serialize_component(
-        &self,
-        compiled: &CompiledComponent,
-    ) -> Result<Vec<u8>, EngineError> {
+    fn serialize_component(&self, compiled: &CompiledComponent) -> Result<Vec<u8>, EngineError> {
         match &compiled.inner {
             CompiledComponentInner::Wasmtime(component) => {
                 component.serialize().map_err(|e| EngineError::Internal {
@@ -304,11 +299,7 @@ impl WasmEngine for WasmtimeEngine {
     }
 
     /// # WARM PATH — called before each invocation.
-    fn set_fuel(
-        &self,
-        instance: &mut ComponentInstance,
-        fuel: u64,
-    ) -> Result<(), EngineError> {
+    fn set_fuel(&self, instance: &mut ComponentInstance, fuel: u64) -> Result<(), EngineError> {
         match &mut instance.inner {
             ComponentInstanceInner::Wasmtime(state) => {
                 state
@@ -364,9 +355,11 @@ mod tests {
 
     #[test]
     fn test_wasmtime_engine_invalid_config() {
-        let mut config = WasmtimeEngineConfig::default();
-        config.fuel_enabled = true;
-        config.default_fuel = 0; // Invalid
+        let config = WasmtimeEngineConfig {
+            fuel_enabled: true,
+            default_fuel: 0, // Invalid
+            ..WasmtimeEngineConfig::default()
+        };
         let engine = WasmtimeEngine::new(config);
         assert!(engine.is_err());
     }
@@ -419,8 +412,7 @@ mod tests {
         let engine = WasmtimeEngine::new(config).unwrap();
 
         // Compile a minimal component.
-        let component =
-            Component::new(engine.inner(), "(component)").expect("compile WAT");
+        let component = Component::new(engine.inner(), "(component)").expect("compile WAT");
         let compiled = CompiledComponent {
             inner: CompiledComponentInner::Wasmtime(component),
         };
@@ -433,8 +425,8 @@ mod tests {
 
         // Deserialize.
         // SAFETY: bytes were just produced by serialize_component with same engine.
-        let deserialized = unsafe { engine.deserialize_component(&bytes) }
-            .expect("deserialize should work");
+        let deserialized =
+            unsafe { engine.deserialize_component(&bytes) }.expect("deserialize should work");
         assert!(deserialized.is_some());
     }
 
@@ -443,8 +435,7 @@ mod tests {
         let config = WasmtimeEngineConfig::default();
         let engine = WasmtimeEngine::new(config).unwrap();
 
-        let component =
-            Component::new(engine.inner(), "(component)").expect("compile WAT");
+        let component = Component::new(engine.inner(), "(component)").expect("compile WAT");
         let compiled = CompiledComponent {
             inner: CompiledComponentInner::Wasmtime(component),
         };
@@ -453,9 +444,7 @@ mod tests {
         let imports = WasmtimeEngine::import_bindings_from_linker(linker);
         let component_id = ComponentId::new(1);
 
-        let instance = engine
-            .instantiate(&compiled, imports, component_id)
-            .await;
+        let instance = engine.instantiate(&compiled, imports, component_id).await;
         assert!(instance.is_ok());
 
         let inst = instance.unwrap();
@@ -472,8 +461,7 @@ mod tests {
         let config = WasmtimeEngineConfig::default();
         let engine = WasmtimeEngine::new(config).unwrap();
 
-        let component =
-            Component::new(engine.inner(), "(component)").expect("compile WAT");
+        let component = Component::new(engine.inner(), "(component)").expect("compile WAT");
         let compiled = CompiledComponent {
             inner: CompiledComponentInner::Wasmtime(component),
         };

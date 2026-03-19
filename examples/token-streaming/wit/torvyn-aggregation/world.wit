@@ -1,0 +1,9 @@
+package torvyn:aggregation@0.1.0;
+
+world stream-aggregator {
+    import torvyn:streaming/types;
+    import torvyn:streaming/buffer-allocator;
+
+    export aggregator;
+    export torvyn:streaming/lifecycle;
+}

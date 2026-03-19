@@ -1,0 +1,8 @@
+package torvyn:streaming@0.1.0;
+
+interface source {
+    use types.{output-element, process-error, backpressure-signal};
+
+    pull: func() -> result<option<output-element>, process-error>;
+    notify-backpressure: func(signal: backpressure-signal);
+}

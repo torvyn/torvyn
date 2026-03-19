@@ -2,12 +2,10 @@
 //!
 //! [`OwnerId`] identifies who owns or is interacting with a resource.
 //! [`ResourceEntry`] is the per-slot data in the resource table.
-//! [`Slot`] is the enum that distinguishes occupied from vacant slots.
+//! `Slot` is the enum that distinguishes occupied from vacant slots.
 
 use std::fmt;
-use torvyn_types::{
-    ComponentId, FlowId, ResourceId, ResourceState,
-};
+use torvyn_types::{ComponentId, FlowId, ResourceId, ResourceState};
 
 // ---------------------------------------------------------------------------
 // OwnerId

@@ -1,0 +1,8 @@
+package torvyn:filtering@0.1.0;
+
+world content-filter {
+    import torvyn:streaming/types;
+
+    export filter;
+    export torvyn:streaming/lifecycle;
+}

@@ -209,11 +209,7 @@ fn validate_topology(
 
     for comp in &pipeline.components {
         if comp.role == ComponentRole::Source
-            && incoming
-                .get(comp.name.as_str())
-                .copied()
-                .unwrap_or(0)
-                > 0
+            && incoming.get(comp.name.as_str()).copied().unwrap_or(0) > 0
         {
             result.push(
                 DiagnosticBuilder::error(
@@ -225,11 +221,7 @@ fn validate_topology(
             );
         }
         if comp.role == ComponentRole::Sink
-            && outgoing
-                .get(comp.name.as_str())
-                .copied()
-                .unwrap_or(0)
-                > 0
+            && outgoing.get(comp.name.as_str()).copied().unwrap_or(0) > 0
         {
             result.push(
                 DiagnosticBuilder::error(
@@ -438,18 +430,13 @@ fn validate_version_ranges(pipeline: &PipelineDefinition, result: &mut Validatio
                 result.push(
                     DiagnosticBuilder::error(
                         ErrorCode::VersionRangeUnsatisfiable,
-                        format!(
-                            "incompatible major versions for package '{}'",
-                            pkg_name
-                        ),
+                        format!("incompatible major versions for package '{}'", pkg_name),
                     )
                     .note(format!(
                         "'{}' uses version {}, '{}' uses version {}",
                         versions[0].0, versions[0].1, comp_name, ver
                     ))
-                    .help(
-                        "all components must use the same major version of each shared package",
-                    )
+                    .help("all components must use the same major version of each shared package")
                     .build(),
                 );
             }
@@ -463,11 +450,7 @@ mod tests {
     use crate::parser::*;
     use std::collections::HashSet;
 
-    fn make_simple_component(
-        name: &str,
-        role: ComponentRole,
-        version: &str,
-    ) -> PipelineComponent {
+    fn make_simple_component(name: &str, role: ComponentRole, version: &str) -> PipelineComponent {
         let mut exports = HashMap::new();
         let iface_name = match role {
             ComponentRole::Source => "source",

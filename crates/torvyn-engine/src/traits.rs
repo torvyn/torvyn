@@ -57,10 +57,7 @@ pub trait WasmEngine: Send + Sync + 'static {
     ///
     /// # Errors
     /// Returns [`EngineError::Internal`] on serialization failure.
-    fn serialize_component(
-        &self,
-        compiled: &CompiledComponent,
-    ) -> Result<Vec<u8>, EngineError>;
+    fn serialize_component(&self, compiled: &CompiledComponent) -> Result<Vec<u8>, EngineError>;
 
     /// Deserialize a previously compiled component from cached bytes.
     ///
@@ -103,11 +100,7 @@ pub trait WasmEngine: Send + Sync + 'static {
     ///
     /// # Errors
     /// Returns [`EngineError::Internal`] if fuel is not enabled.
-    fn set_fuel(
-        &self,
-        instance: &mut ComponentInstance,
-        fuel: u64,
-    ) -> Result<(), EngineError>;
+    fn set_fuel(&self, instance: &mut ComponentInstance, fuel: u64) -> Result<(), EngineError>;
 
     /// Get the remaining fuel for a component instance.
     ///
@@ -209,11 +202,7 @@ pub trait ComponentInvoker: Send + Sync + 'static {
     /// Per C02-10: failures are logged but do not prevent termination.
     ///
     /// # COLD PATH — called once at component shutdown.
-    async fn invoke_teardown(
-        &self,
-        instance: &mut ComponentInstance,
-        component_id: ComponentId,
-    );
+    async fn invoke_teardown(&self, instance: &mut ComponentInstance, component_id: ComponentId);
 }
 
 // ---------------------------------------------------------------------------

@@ -49,9 +49,7 @@ mod tests {
         let event = DiagnosticEvent::new(
             torvyn_types::Severity::Info,
             crate::events::EventCategory::Lifecycle,
-            crate::events::EventPayload::FlowStarted {
-                component_count: 1,
-            },
+            crate::events::EventPayload::FlowStarted { component_count: 1 },
         );
 
         sender.events.send(event).await.unwrap();

@@ -96,10 +96,7 @@ impl DefaultResourceManager {
     ///
     /// Useful for testing.
     pub fn new_for_testing() -> Self {
-        Self::new(
-            ResourceManagerConfig::default(),
-            Arc::new(NoopEventSink),
-        )
+        Self::new(ResourceManagerConfig::default(), Arc::new(NoopEventSink))
     }
 
     // -----------------------------------------------------------------------
@@ -200,11 +197,7 @@ impl DefaultResourceManager {
     /// Release a buffer back to the pool or deallocate it.
     ///
     /// # WARM PATH
-    pub fn release(
-        &self,
-        handle: BufferHandle,
-        caller: OwnerId,
-    ) -> error::Result<()> {
+    pub fn release(&self, handle: BufferHandle, caller: OwnerId) -> error::Result<()> {
         let mut inner = self.inner.lock();
         let entry = inner.table.get_mut(handle)?;
 
@@ -302,11 +295,7 @@ impl DefaultResourceManager {
     /// Record the start of a borrow.
     ///
     /// # HOT PATH
-    pub fn borrow_start(
-        &self,
-        handle: BufferHandle,
-        borrower: ComponentId,
-    ) -> error::Result<()> {
+    pub fn borrow_start(&self, handle: BufferHandle, borrower: ComponentId) -> error::Result<()> {
         let mut inner = self.inner.lock();
         let entry = inner.table.get_mut(handle)?;
         ownership::borrow_start(handle, entry, borrower)
@@ -315,11 +304,7 @@ impl DefaultResourceManager {
     /// Record the end of a borrow.
     ///
     /// # HOT PATH
-    pub fn borrow_end(
-        &self,
-        handle: BufferHandle,
-        borrower: ComponentId,
-    ) -> error::Result<()> {
+    pub fn borrow_end(&self, handle: BufferHandle, borrower: ComponentId) -> error::Result<()> {
         let mut inner = self.inner.lock();
         let entry = inner.table.get_mut(handle)?;
         ownership::borrow_end(handle, entry, borrower)
@@ -331,7 +316,7 @@ impl DefaultResourceManager {
 
     /// Read payload bytes from a buffer. Records a copy event.
     ///
-    /// Returns a Vec<u8> containing the requested bytes. The copy from host
+    /// Returns a `Vec<u8>` containing the requested bytes. The copy from host
     /// memory into the Vec is recorded in the copy ledger.
     ///
     /// # HOT PATH — but involves a copy (unavoidable per Wasm memory model).
@@ -412,7 +397,11 @@ impl DefaultResourceManager {
         // Validate bounds
         let end = offset as u64 + data.len() as u64;
         if end > entry.payload_capacity as u64 {
-            return Err(error::capacity_exceeded(handle, entry.payload_capacity, end));
+            return Err(error::capacity_exceeded(
+                handle,
+                entry.payload_capacity,
+                end,
+            ));
         }
 
         // SAFETY: We've verified ownership, state, and bounds.
@@ -800,8 +789,7 @@ mod tests {
 
         let owner = OwnerId::Host;
         let handle = mgr.allocate(owner, 256, flow).unwrap();
-        mgr.write_payload(handle, owner, 0, b"short", flow)
-            .unwrap();
+        mgr.write_payload(handle, owner, 0, b"short", flow).unwrap();
 
         let result = mgr.read_payload(handle, owner, 0, 100, flow);
         assert!(result.is_err());

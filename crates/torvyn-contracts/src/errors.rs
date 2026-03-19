@@ -222,7 +222,10 @@ impl ValidationResult {
 
     /// Returns true if there are no error-severity diagnostics.
     pub fn is_ok(&self) -> bool {
-        !self.diagnostics.iter().any(|d| d.severity == Severity::Error)
+        !self
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Error)
     }
 
     /// Returns only the error-severity diagnostics.
@@ -461,8 +464,7 @@ mod tests {
     fn test_validation_result_with_warning_is_ok() {
         let mut result = ValidationResult::new();
         result.push(
-            DiagnosticBuilder::warning(ErrorCode::CapabilityMismatch, "unused capability")
-                .build(),
+            DiagnosticBuilder::warning(ErrorCode::CapabilityMismatch, "unused capability").build(),
         );
         assert!(result.is_ok());
     }
@@ -562,9 +564,7 @@ mod tests {
     #[test]
     fn test_errors_iterator() {
         let mut result = ValidationResult::new();
-        result.push(
-            DiagnosticBuilder::warning(ErrorCode::CapabilityMismatch, "warn").build(),
-        );
+        result.push(DiagnosticBuilder::warning(ErrorCode::CapabilityMismatch, "warn").build());
         result.push(DiagnosticBuilder::error(ErrorCode::WitSyntaxError, "err").build());
 
         assert_eq!(result.errors().count(), 1);

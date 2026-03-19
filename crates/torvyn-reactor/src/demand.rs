@@ -47,10 +47,7 @@ pub fn consume_demand(stream: &mut StreamState) {
 ///
 /// Per Doc 04 §4.4: batched propagation collapses N individual
 /// demand signals into a single pass.
-pub fn propagate_demand_batch(
-    streams: &mut [StreamState],
-    _topo_order: &[usize],
-) {
+pub fn propagate_demand_batch(streams: &mut [StreamState], _topo_order: &[usize]) {
     // In the task-per-flow model with demand-driven scheduling,
     // demand propagation is implicit: each stage's execution
     // naturally grants demand upstream by consuming input.

@@ -22,19 +22,27 @@ fn test_process_error_converts_to_torvyn_error() {
 #[test]
 fn test_all_error_types_convert_to_torvyn_error() {
     let _: TorvynError = ProcessError::DeadlineExceeded.into();
-    let _: TorvynError = ContractError::PackageNotFound { package_name: "x".into() }.into();
+    let _: TorvynError = ContractError::PackageNotFound {
+        package_name: "x".into(),
+    }
+    .into();
     let _: TorvynError = LinkError::CyclicDependency { cycle: vec![] }.into();
-    let _: TorvynError = ResourceError::StaleHandle { handle: ResourceId::new(0, 0) }.into();
+    let _: TorvynError = ResourceError::StaleHandle {
+        handle: ResourceId::new(0, 0),
+    }
+    .into();
     let _: TorvynError = ReactorError::ShuttingDown.into();
     let _: TorvynError = ConfigError::FileNotFound { path: "x".into() }.into();
     let _: TorvynError = SecurityError::CapabilityDenied {
         component: ComponentId::new(0),
         capability: "x".into(),
-    }.into();
+    }
+    .into();
     let _: TorvynError = PackagingError::InvalidArtifact {
         path: "x".into(),
         reason: "y".into(),
-    }.into();
+    }
+    .into();
 }
 
 #[test]
@@ -82,10 +90,7 @@ fn test_element_meta_with_current_timestamp() {
 
 #[test]
 fn test_trace_context_roundtrip() {
-    let ctx = TraceContext::new(
-        TraceId::new([0xab; 16]),
-        SpanId::new([0xcd; 8]),
-    );
+    let ctx = TraceContext::new(TraceId::new([0xab; 16]), SpanId::new([0xcd; 8]));
     assert!(ctx.is_valid());
     let display = format!("{ctx}");
     assert!(display.contains("abababab"));

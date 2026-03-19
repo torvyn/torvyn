@@ -1,265 +1,170 @@
-<p align="center">
-  <strong>Torvyn</strong>
-</p>
+<div align="center">
 
-<p align="center">
-  <em>Ownership-aware reactive streaming runtime for the WebAssembly Component Model</em>
-</p>
+# Torvyn
 
-<p align="center">
-  <a href="#quickstart">Quickstart</a> &middot;
-  <a href="#architecture">Architecture</a> &middot;
-  <a href="#documentation">Docs</a> &middot;
-  <a href="#contributing">Contributing</a>
-</p>
+**The contract-first runtime for safe, observable, low-copy reactive streaming.**
+
+[![CI](https://github.com/torvyn/torvyn/actions/workflows/ci.yml/badge.svg)](https://github.com/torvyn/torvyn/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/torvyn.svg)](https://crates.io/crates/torvyn)
+[![docs.rs](https://docs.rs/torvyn/badge.svg)](https://docs.rs/torvyn)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](#license)
+[![MSRV: 1.78](https://img.shields.io/badge/MSRV-1.78-brightgreen.svg)](#minimum-supported-rust-version)
+
+[Getting Started](documents/getting-started.md) · [Architecture](documents/ARCHITECTURE.md) · [FAQ](documents/FAQ.md) · [Contributing](CONTRIBUTING.md)
+
+</div>
 
 ---
 
-Torvyn is a high-performance reactive streaming runtime written in Rust that enables safe composition of polyglot, sandboxed streaming components on the [WebAssembly Component Model](https://component-model.bytecodealliance.org/). It is designed for workloads where low latency, strong isolation, cross-language portability, and production observability must coexist without compromise.
+## What is Torvyn?
 
-**The core proposition:** compose typed, sandboxed streaming components on the same node with lower overhead than microservices, stronger isolation than in-process plugins, and full observability built in.
+Torvyn is an ownership-aware reactive component runtime for building safe, low-latency, polyglot streaming pipelines. It composes sandboxed WebAssembly components into pipelines on a single node, using typed WIT contracts with explicit ownership semantics. The runtime manages all buffer memory, enforces backpressure, tracks every data copy, and exports fine-grained observability. Components can be written in any language that compiles to WebAssembly Components.
 
-## Why Torvyn
+## Why Torvyn?
 
-Modern streaming architectures force teams into painful tradeoffs. Microservices provide isolation but impose serialization, network overhead, and operational complexity — even when services are co-located. In-process plugins provide speed but sacrifice safety, sandboxing, and language neutrality. Containers provide packaging standards but are too heavy for fine-grained, low-latency pipelines with dozens of stages.
+Modern infrastructure teams face a persistent trade-off. Traditional microservices provide isolation and deployment flexibility, but every service boundary introduces serialization overhead, network stack costs, buffer allocations, and observability stitching — even when services run on the same node. In-process plugin systems eliminate that boundary overhead, but sacrifice safety: memory issues at FFI boundaries, weak isolation, language lock-in, and poor resource governance become the new costs. Teams are forced to choose between performance and safety.
 
-Torvyn eliminates these tradeoffs through five integrated pillars:
+This gap is growing. AI-native pipelines, edge stream processing, event-driven data planes, and real-time inference chains all demand fine-grained, low-latency composition. Containers are too heavy per stage. Message brokers add unnecessary hops. Ad hoc pipeline libraries lack contracts, observability, and security. The tooling landscape is fragmented across message brokers, actor systems, async runtimes, RPC layers, and service meshes — none designed as a unified ownership-aware runtime.
 
-| Pillar | What it means |
-|---|---|
-| **Contract-first composition** | Every component boundary is defined through [WIT](https://component-model.bytecodealliance.org/design/wit.html) interfaces — explicit, versioned, and machine-checkable. No hidden assumptions. |
-| **Ownership-aware transport** | Host-managed buffers with explicit ownership states (Owned, Borrowed, Leased, Pooled). Every copy is bounded, measurable, and observable. |
-| **Reactive backpressure** | Credit-based demand propagation, bounded queues with watermark hysteresis, and cancellation as a first-class primitive. |
-| **Polyglot sandboxing** | WebAssembly Component Model isolation. Components in Rust, Go, Python, C, Zig, or any language that compiles to Wasm — safely composed in a single runtime. |
-| **Production observability** | Per-flow, per-component, per-stream metrics and tracing. OpenTelemetry-native. Three configurable levels: Off, Production (&lt;500ns/element), Diagnostic (&lt;2&mu;s/element). |
-
-## Use Cases
-
-- **Same-node streaming pipelines** — ultra-low-latency data transformation, filtering, enrichment
-- **AI inference composition** — token streams, RAG stages, policy filters, content guards with traceable stages
-- **Edge-local processing** — event transformation and stream processing at the edge
-- **Plugin ecosystems with real sandboxing** — extend applications with untrusted components safely
-- **High-frequency service chaining** — replace localhost microservice calls with in-runtime component composition
-
-## Quickstart
-
-### Prerequisites
-
-- [Rust](https://rustup.rs/) (edition 2021)
-- [Wasmtime](https://wasmtime.dev/) dependencies (pulled automatically via Cargo)
-
-### Build
-
-```bash
-git clone https://github.com/torvyn/torvyn.git
-cd torvyn
-cargo build
-```
-
-### Test
-
-```bash
-cargo test
-```
-
-### Lint
-
-```bash
-cargo clippy -- -D warnings
-```
+Torvyn fills this gap. It replaces heavy service boundaries with contract-defined component boundaries backed by WebAssembly sandboxing. Every component interaction is explicitly typed through WIT interfaces. Data ownership is tracked by the host runtime — copies are bounded, measurable, and operationally visible. Backpressure is built into stream semantics. Capability-based isolation means every component runs with only the permissions it has been granted. And every stream, resource handoff, queueing point, and failure is traceable through production-grade OpenTelemetry integration. The result: the safety of capability-based sandboxing, the composability of typed interfaces, and performance competitive with in-process systems.
 
 ## Architecture
 
-Torvyn is structured as a layered workspace of focused crates. Each layer depends only on layers below it, enforcing a clean dependency graph.
+```mermaid
+graph TD
+    A[WIT Contracts] --> B[Compile to Wasm Components]
+    B --> C[Torvyn Host Runtime]
+    C --> D[Reactor / Scheduler]
+    C --> E[Resource Manager]
+    C --> F[Observability Layer]
+    C --> G[Security / Capabilities]
+    D --> H[Component A<br/>Source]
+    D --> I[Component B<br/>Processor]
+    D --> J[Component C<br/>Sink]
+    E -.->|buffer ownership| H
+    E -.->|borrow + transfer| I
+    E -.->|borrow + release| J
+    F --> K[Traces / Metrics / Diagnostics]
+    C --> L[CLI Tooling]
+    C --> M[OCI Packaging]
 
-```
-                          ┌─────────────┐
-                          │  torvyn-cli  │   Developer CLI
-                          └──────┬──────┘
-                                 │
-                          ┌──────┴──────┐
-                          │ torvyn-host │   Runtime orchestration
-                          └──────┬──────┘
-                                 │
-              ┌──────────────────┼──────────────────┐
-              │                  │                  │
-     ┌────────┴────────┐ ┌──────┴──────┐ ┌─────────┴─────────┐
-     │ torvyn-pipeline  │ │torvyn-linker│ │ torvyn-packaging   │
-     │ Topology & inst. │ │ Linking &   │ │ OCI artifacts &    │
-     │                  │ │ resolution  │ │ distribution       │
-     └────────┬────────┘ └──────┬──────┘ └───────────────────┘
-              │                 │
-   ┌──────────┴─────────────────┴──────────────────────┐
-   │                                                    │
-   │  ┌──────────────┐  ┌───────────────┐  ┌─────────┐ │
-   │  │torvyn-reactor│  │torvyn-security│  │torvyn-  │ │
-   │  │Scheduling &  │  │Capabilities & │  │observa- │ │
-   │  │backpressure  │  │audit          │  │bility   │ │
-   │  └──────┬───────┘  └───────────────┘  └─────────┘ │
-   │         │                                          │
-   │  ┌──────┴───────┐  ┌───────────────┐              │
-   │  │torvyn-engine │  │torvyn-        │              │
-   │  │Wasm execution│  │resources      │              │
-   │  │& compilation │  │Buffers &      │              │
-   │  └──────────────┘  │ownership      │              │
-   │                    └───────────────┘              │
-   │                                                    │
-   │  ┌──────────────┐  ┌───────────────┐              │
-   │  │torvyn-config │  │torvyn-        │              │
-   │  │Manifests &   │  │contracts      │              │
-   │  │pipeline defs │  │WIT validation │              │
-   │  └──────────────┘  └───────────────┘              │
-   │                                                    │
-   │                 ┌──────────────┐                   │
-   │                 │ torvyn-types │                   │
-   │                 │ Foundation   │                   │
-   │                 └──────────────┘                   │
-   └───────────────────────────────────────────────────┘
+    style C fill:#2d5016,color:#fff
+    style D fill:#1a3a5c,color:#fff
+    style E fill:#1a3a5c,color:#fff
+    style F fill:#1a3a5c,color:#fff
+    style G fill:#1a3a5c,color:#fff
 ```
 
-### Crate Overview
+The runtime is structured as a workspace of focused crates with no circular dependencies. `torvyn-types` is the universal leaf; `torvyn-host` and `torvyn-cli` are the top-level binaries. See [ARCHITECTURE.md](documents/ARCHITECTURE.md) for the full crate graph, data flow diagrams, and design rationale.
 
-| Crate | Purpose |
-|---|---|
-| `torvyn-types` | Universal foundation — identifiers, error types, state machines, domain enums, traits |
-| `torvyn-contracts` | WIT interface definitions (`torvyn:streaming@0.1.0`), contract validation, version compatibility |
-| `torvyn-config` | Component manifests (`Torvyn.toml`), pipeline definitions, environment interpolation, config merging |
-| `torvyn-resources` | Host-managed buffer pools (4-tier Treiber stacks), ownership tracking, copy accounting, per-component memory budgets |
-| `torvyn-engine` | Wasm execution abstraction over Wasmtime — compilation, instantiation, fuel management, component caching |
-| `torvyn-reactor` | Async stream scheduler — flow lifecycle, demand-driven scheduling, bounded queues, backpressure with hysteresis |
-| `torvyn-security` | Capability-based isolation (deny-all default), typed permissions, operator grants, audit logging |
-| `torvyn-observability` | Metrics (counters, histograms, gauges), distributed tracing, structured diagnostic events, benchmark reporting |
-| `torvyn-linker` | Static pipeline linking — interface resolution, capability matching, multi-error reporting |
-| `torvyn-pipeline` | Pipeline topology construction, validation, and instantiation |
-| `torvyn-packaging` | OCI artifact assembly, signing (Sigstore-compatible), registry push/pull |
-| `torvyn-host` | Runtime orchestration — ties all subsystems into a unified lifecycle |
-| `torvyn-cli` | Developer CLI — `init`, `check`, `link`, `run`, `trace`, `bench`, `pack`, `publish`, `doctor`, `inspect` |
+## Quick Start
 
-### WIT Contracts
+```bash
+# Install the Torvyn CLI
+cargo install torvyn-cli
 
-Torvyn components interact through typed WIT interfaces in the `torvyn:streaming@0.1.0` package:
+# Create a new project with a starter pipeline
+torvyn init my-pipeline --template full-pipeline
+cd my-pipeline
 
-```wit
-// Core processing contract
-interface processor {
-    use types.{stream-element, process-result, process-error};
-    process: func(element: stream-element) -> result<process-result, process-error>;
-}
+# Validate contracts and check compatibility
+torvyn check
 
-// Source — produces elements with backpressure awareness
-interface source {
-    use types.{output-element, process-error, backpressure-signal};
-    pull: func() -> result<option<output-element>, process-error>;
-    notify-backpressure: func(signal: backpressure-signal);
-}
+# Run the pipeline locally with tracing enabled
+torvyn run
 
-// Sink — consumes elements and signals capacity
-interface sink {
-    use types.{stream-element, backpressure-signal, process-error};
-    push: func(element: stream-element) -> result<backpressure-signal, process-error>;
-    complete: func() -> result<_, process-error>;
-}
+# View latency, throughput, and copy accounting
+torvyn bench
 ```
 
-Resources use explicit ownership semantics: `buffer` (host-managed, immutable, borrowed across boundaries) and `mutable-buffer` (component-owned, writable, frozen before transfer). Flow metadata — trace context, deadlines, flow identity — is part of the contract, not sideband.
+The starter template creates a two-component pipeline (Source to Sink) with WIT contracts, a pre-built Rust implementation, and a working configuration. `torvyn run` launches the pipeline with live diagnostics. `torvyn bench` reports latency percentiles, throughput, queue pressure, and per-element copy counts.
 
-Extension interfaces cover filtering, routing, aggregation, windowing, and capability declarations.
+> **Prerequisites:** Rust 1.78+, `wasm32-wasip2` target (`rustup target add wasm32-wasip2`), Wasmtime 21+.
 
-## Key Design Decisions
+## Key Features
 
-**Ownership model over zero-copy promises.** The WebAssembly Component Model imposes real memory boundaries. Rather than making unrealistic zero-copy claims, Torvyn makes ownership explicit, copies bounded, and every transfer measurable. The copy ledger tracks which components copied how many bytes and why.
+- **Contract-first composition** — WIT interface definitions specify data exchange, ownership rules, and error models. Compatibility is validated before runtime.
+- **Ownership-aware resources** — Host-managed byte buffers with explicit create / borrow / transfer / release lifecycle. Every copy is instrumented.
+- **Reactive backpressure** — Bounded queues with high/low watermark flow control and credit-based demand propagation. Slow consumers cannot cause unbounded queue growth.
+- **Capability-based security** — Deny-all-by-default sandboxing. Each component receives only the permissions explicitly granted.
+- **Production-grade observability** — Three-level system (Off / Production / Diagnostic) with explicit overhead budgets. Native OpenTelemetry export for traces and metrics.
+- **Polyglot components** — Write components in any language targeting WebAssembly Components. Rust-first, with planned support for Go, Python, and more.
+- **OCI packaging** — Package and distribute components as OCI-compatible artifacts with signed provenance.
+- **CLI-first workflow** — `init`, `check`, `link`, `run`, `trace`, `bench`, `pack`, `publish`, `doctor`.
 
-**Deny-all security.** Components start with no permissions. Every capability — filesystem, network, clock, resource pool access — must be explicitly granted by the operator. Capability checks on hot paths are zero-overhead (pre-resolved at instantiation). All exercises and denials are audit-logged.
+## Performance
 
-**Consumer-first scheduling.** The reactor uses demand-driven scheduling: downstream consumers pull from upstream producers via credit-based flow control. Bounded queues with high/low watermark hysteresis prevent both overflow and oscillation.
+Torvyn treats benchmarks as product features. All performance claims are backed by reproducible methodology published in the repository.
 
-**Engine abstraction.** The runtime is not hard-coupled to Wasmtime. `WasmEngine` and `ComponentInvoker` traits abstract the execution layer, with Wasmtime as the default (feature-gated) implementation.
+| Metric | Target | Notes |
+|--------|--------|-------|
+| Per-element runtime overhead | < 5 us | Excludes component execution time |
+| Observability overhead (Production level) | < 500 ns per element | Counters + histograms only |
+| Copy accounting | Exactly 4 copies per element (Source-Processor-Sink) | Read/write per stage boundary |
+| Pipeline startup | Sub-second for cached components | Wasmtime compilation cached via `ComponentTypeId` |
 
-**Observability as a core primitive.** Metrics, tracing, and diagnostics are not optional sidecars — they are built into the runtime with configurable overhead levels. Production mode adds less than 500 nanoseconds per element.
+Benchmark comparisons against same-node gRPC, process boundaries, and conventional plugin approaches are published in [`benches/`](benches/) and tracked in CI to catch regressions. See `torvyn bench --help` for details on running benchmarks locally.
 
-## Project Status
+> **Note:** These are design targets for v0.1. Actual measurements will be published with each release once the benchmark suite is operational.
 
-Torvyn is in **active development**. The core runtime — from the type system foundation through the CLI entry point — is implemented across 13 crates. The project is pre-release and APIs are not yet stable.
+## Status
 
-**What works today:**
-- Complete type system and error model
-- WIT contract definitions, parsing, and validation
-- Configuration system with manifest loading, environment interpolation, and merging
-- Buffer pool management with 4-tier allocation and ownership tracking
-- Wasm engine abstraction with Wasmtime integration
-- Reactive scheduler with backpressure, demand propagation, and flow lifecycle
-- Capability-based security model with audit logging
-- Observability infrastructure (metrics, tracing, events)
-- Component linking and pipeline assembly
-- OCI packaging primitives
-- CLI scaffolding
+Torvyn is in **active development (Phase 0)**. The high-level and low-level designs are complete. Implementation is underway.
 
-**What's ahead:**
-- End-to-end integration tests with real Wasm components
-- Benchmark suite with baseline comparisons
-- Example pipelines and component templates
-- Documentation site
-- Registry infrastructure
-- Distributed execution (Phase 4)
+| Component | Status |
+|-----------|--------|
+| Core type system (`torvyn-types`) | Complete |
+| WIT contracts (`torvyn-contracts`) | Complete |
+| Configuration (`torvyn-config`) | Complete |
+| Wasm engine integration (`torvyn-engine`) | Complete |
+| Observability (`torvyn-observability`) | Complete |
+| Resource manager (`torvyn-resources`) | Complete |
+| Security (`torvyn-security`) | Complete |
+| Reactor / scheduler (`torvyn-reactor`) | Complete |
+| Linker (`torvyn-linker`) | Complete |
+| Pipeline (`torvyn-pipeline`) | Complete |
+| Packaging (`torvyn-packaging`) | Complete |
+| Host runtime (`torvyn-host`) | Complete |
+| CLI (`torvyn-cli`) | Complete |
+| Integration tests | Complete |
+| Benchmark suite | Complete |
+
+**What works today:** All core crates implemented, CLI commands, integration tests, benchmark suite.
+**What is next:** OSS infrastructure, first public release, community feedback.
+
+See [ROADMAP.md](documents/ROADMAP.md) for the full phased plan.
 
 ## Documentation
 
-Detailed design documents are in [`docs/design/`](docs/design/):
-
-- [Vision Document](docs/design/torvyn_vision.md) — canonical project vision, problem statement, and technical thesis
-- High-Level Implementation (HLI) documents covering contracts, runtime architecture, resources, scheduling, observability, security, CLI, packaging, and integration
-- Low-Level Implementation (LLI) blueprints for each crate
-
-## Building from Source
-
-```bash
-# Full workspace build
-cargo build --workspace
-
-# Build a specific crate
-cargo build -p torvyn-reactor
-
-# Run all tests
-cargo test --workspace
-
-# Run tests for a specific crate
-cargo test -p torvyn-types
-
-# Check for lint violations
-cargo clippy --workspace -- -D warnings
-
-# Generate documentation
-cargo doc --workspace --no-deps --open
-```
-
-### Feature Flags
-
-| Feature | Crate | Description |
-|---|---|---|
-| `wasmtime` | `torvyn-engine` | Enable Wasmtime-based execution (default) |
-| `mock` | `torvyn-engine` | Enable mock engine for testing |
-| `wit-parser` | `torvyn-contracts` | Enable WIT file parsing backend |
-| `serde` | `torvyn-types` | Enable serialization support |
+- [Getting Started](docs/getting-started.md) — Install, create, and run your first pipeline
+- [Concepts](docs/concepts/) — Contracts, resources, streams, capabilities, flows
+- [Architecture Guide](documents/ARCHITECTURE.md) — Crate structure, data flows, design decisions
+- [CLI Reference](docs/reference/cli.md) — All commands and options
+- [FAQ](FAQ.md) — Common questions and honest answers
+- [API Reference](https://docs.rs/torvyn) — Generated Rust API documentation
 
 ## Contributing
 
-Contributions are welcome. Please read the contributing guidelines before submitting pull requests.
+Torvyn welcomes contributions. Whether you are fixing a typo, reporting a bug, improving documentation, or implementing a feature — your participation makes the project better.
 
-### Code Standards
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on code style, testing, commit conventions, and the review process. For larger changes, open a Discussion or Issue first so the community can provide early feedback.
 
-- `#![deny(missing_docs)]` in every crate
-- Zero Clippy warnings (`clippy::all = "deny"`)
-- Every public function has at least one test
-- Every error path has a test that triggers it
-- State machines are tested for all valid and invalid transitions
-- Every `unsafe` block has a `// SAFETY:` comment proving correctness
+## Community
+
+- [GitHub Discussions](https://github.com/torvyn/torvyn/discussions) — Questions, ideas, and general conversation
+- [Issue Tracker](https://github.com/torvyn/torvyn/issues) — Bug reports and feature requests
+- [Roadmap](documents/ROADMAP.md) — What is planned and how to influence priorities
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE).
+Torvyn is licensed under the [Apache License, Version 2.0](LICENSE).
 
----
+Copyright 2025 Torvyn Contributors.
 
-<p align="center">
-  <sub>Built for the next generation of composable, observable, and safe streaming systems.</sub>
-</p>
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in Torvyn by you, as defined in the Apache-2.0 license, shall be licensed under the Apache License 2.0, without any additional terms or conditions.
+
+## Minimum Supported Rust Version
+
+The current MSRV is **Rust 1.78**. This is enforced in CI and will only be raised in minor or major version bumps, never in patch releases.

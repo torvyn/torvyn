@@ -396,9 +396,7 @@ mod tests {
         let event = DiagnosticEvent::new(
             Severity::Info,
             EventCategory::Lifecycle,
-            EventPayload::FlowStarted {
-                component_count: 3,
-            },
+            EventPayload::FlowStarted { component_count: 3 },
         );
         assert_eq!(event.severity, Severity::Info);
         assert_eq!(event.category, EventCategory::Lifecycle);

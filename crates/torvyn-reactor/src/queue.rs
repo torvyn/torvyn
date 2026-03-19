@@ -181,9 +181,9 @@ impl<T> BoundedQueue<T> {
         if self.len == 0 {
             return None;
         }
-        let element = self.buf[self.head].take().expect(
-            "BoundedQueue invariant violation: head slot is None when len > 0",
-        );
+        let element = self.buf[self.head]
+            .take()
+            .expect("BoundedQueue invariant violation: head slot is None when len > 0");
         self.head = (self.head + 1) % self.capacity;
         self.len -= 1;
         Some(element)

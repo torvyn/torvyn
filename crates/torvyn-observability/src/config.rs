@@ -220,7 +220,10 @@ impl std::fmt::Display for ConfigValidationError {
                 )
             }
             Self::InvalidHistogramBuckets => {
-                write!(f, "histogram_buckets must be non-empty and sorted ascending")
+                write!(
+                    f,
+                    "histogram_buckets must be non-empty and sorted ascending"
+                )
             }
             Self::ZeroBatchSize => write!(f, "export batch_size must be >= 1"),
             Self::ZeroExportInterval => write!(f, "export interval must be > 0"),

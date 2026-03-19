@@ -112,9 +112,7 @@ fn test_source_sink_pipeline_copy_count() {
 
         // Sink reads (via borrow)
         mgr.borrow_start(buf, ComponentId::new(2)).unwrap();
-        let _ = mgr
-            .read_payload(buf, OwnerId::Host, 0, 128, flow)
-            .unwrap(); // copy 2
+        let _ = mgr.read_payload(buf, OwnerId::Host, 0, 128, flow).unwrap(); // copy 2
         mgr.borrow_end(buf, ComponentId::new(2)).unwrap();
 
         // Release

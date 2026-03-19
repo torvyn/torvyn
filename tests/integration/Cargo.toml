@@ -1,0 +1,21 @@
+[package]
+name = "torvyn-integration-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Workspace-level integration tests for Torvyn"
+
+[dependencies]
+# Internal crates
+torvyn-types = { path = "../../crates/torvyn-types" }
+torvyn-engine = { path = "../../crates/torvyn-engine", default-features = false, features = ["mock"] }
+torvyn-reactor = { path = "../../crates/torvyn-reactor" }
+torvyn-resources = { path = "../../crates/torvyn-resources" }
+torvyn-security = { path = "../../crates/torvyn-security" }
+
+# External
+tokio = { version = "1.41.0", features = ["full"] }
+async-trait = "0.1"
+
+[lints]
+workspace = true

@@ -84,7 +84,10 @@ impl fmt::Display for FlowCreationError {
                 )
             }
             FlowCreationError::Internal(msg) => {
-                write!(f, "[E0419] Internal reactor error during flow creation: {msg}")
+                write!(
+                    f,
+                    "[E0419] Internal reactor error during flow creation: {msg}"
+                )
             }
         }
     }

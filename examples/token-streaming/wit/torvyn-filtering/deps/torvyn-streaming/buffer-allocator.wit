@@ -1,0 +1,8 @@
+package torvyn:streaming;
+
+interface buffer-allocator {
+    use types.{mutable-buffer, buffer-error, buffer};
+
+    allocate: func(capacity-hint: u64) -> result<mutable-buffer, buffer-error>;
+    clone-into-mutable: func(source: borrow<buffer>) -> result<mutable-buffer, buffer-error>;
+}

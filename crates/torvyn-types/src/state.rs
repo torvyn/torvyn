@@ -113,14 +113,14 @@ impl FlowState {
         matches!(
             (self, target),
             (FlowState::Created, FlowState::Validated)
-            | (FlowState::Created, FlowState::Failed)
-            | (FlowState::Validated, FlowState::Instantiated)
-            | (FlowState::Validated, FlowState::Failed)
-            | (FlowState::Instantiated, FlowState::Running)
-            | (FlowState::Running, FlowState::Draining)
-            | (FlowState::Draining, FlowState::Completed)
-            | (FlowState::Draining, FlowState::Cancelled)
-            | (FlowState::Draining, FlowState::Failed)
+                | (FlowState::Created, FlowState::Failed)
+                | (FlowState::Validated, FlowState::Instantiated)
+                | (FlowState::Validated, FlowState::Failed)
+                | (FlowState::Instantiated, FlowState::Running)
+                | (FlowState::Running, FlowState::Draining)
+                | (FlowState::Draining, FlowState::Completed)
+                | (FlowState::Draining, FlowState::Cancelled)
+                | (FlowState::Draining, FlowState::Failed)
         )
     }
 
@@ -298,7 +298,10 @@ impl ResourceState {
     pub const fn is_active(&self) -> bool {
         matches!(
             self,
-            ResourceState::Owned | ResourceState::Borrowed | ResourceState::Leased | ResourceState::Transit
+            ResourceState::Owned
+                | ResourceState::Borrowed
+                | ResourceState::Leased
+                | ResourceState::Transit
         )
     }
 }
@@ -329,7 +332,9 @@ mod tests {
     #[test]
     fn test_flow_state_created_to_validated() {
         assert!(FlowState::Created.can_transition_to(&FlowState::Validated));
-        assert!(FlowState::Created.transition_to(FlowState::Validated).is_ok());
+        assert!(FlowState::Created
+            .transition_to(FlowState::Validated)
+            .is_ok());
     }
 
     #[test]
@@ -430,9 +435,14 @@ mod tests {
     fn test_flow_state_complete_valid_transition_count() {
         // There are exactly 9 valid transitions
         let states = [
-            FlowState::Created, FlowState::Validated, FlowState::Instantiated,
-            FlowState::Running, FlowState::Draining, FlowState::Completed,
-            FlowState::Cancelled, FlowState::Failed,
+            FlowState::Created,
+            FlowState::Validated,
+            FlowState::Instantiated,
+            FlowState::Running,
+            FlowState::Draining,
+            FlowState::Completed,
+            FlowState::Cancelled,
+            FlowState::Failed,
         ];
         let mut valid_count = 0;
         for from in &states {
@@ -442,7 +452,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(valid_count, 9, "expected exactly 9 valid FlowState transitions");
+        assert_eq!(
+            valid_count, 9,
+            "expected exactly 9 valid FlowState transitions"
+        );
     }
 
     // === ResourceState valid transitions ===
@@ -450,7 +463,9 @@ mod tests {
     #[test]
     fn test_resource_state_pooled_to_owned() {
         assert!(ResourceState::Pooled.can_transition_to(&ResourceState::Owned));
-        assert!(ResourceState::Pooled.transition_to(ResourceState::Owned).is_ok());
+        assert!(ResourceState::Pooled
+            .transition_to(ResourceState::Owned)
+            .is_ok());
     }
 
     #[test]
@@ -497,8 +512,12 @@ mod tests {
     #[test]
     fn test_resource_state_any_to_freed() {
         let states = [
-            ResourceState::Pooled, ResourceState::Owned, ResourceState::Borrowed,
-            ResourceState::Leased, ResourceState::Transit, ResourceState::Freed,
+            ResourceState::Pooled,
+            ResourceState::Owned,
+            ResourceState::Borrowed,
+            ResourceState::Leased,
+            ResourceState::Transit,
+            ResourceState::Freed,
         ];
         for state in &states {
             assert!(

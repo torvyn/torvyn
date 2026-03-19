@@ -205,11 +205,8 @@ pub trait WitParser: Send + Sync {
     /// Parse WIT content from a string (for testing).
     ///
     /// # COLD PATH
-    fn parse_str(
-        &self,
-        name: &str,
-        contents: &str,
-    ) -> Result<Vec<ParsedPackage>, ValidationResult>;
+    fn parse_str(&self, name: &str, contents: &str)
+        -> Result<Vec<ParsedPackage>, ValidationResult>;
 }
 
 /// Concrete `wit-parser`-backed implementation.
@@ -336,11 +333,7 @@ impl WitParserImpl {
     }
 
     /// Convert a `wit_parser::Type` to our `ParsedType`.
-    fn convert_type(
-        &self,
-        resolve: &wit_parser::Resolve,
-        typ: &wit_parser::Type,
-    ) -> ParsedType {
+    fn convert_type(&self, resolve: &wit_parser::Resolve, typ: &wit_parser::Type) -> ParsedType {
         match typ {
             wit_parser::Type::Bool => ParsedType::Primitive("bool".into()),
             wit_parser::Type::U8 => ParsedType::Primitive("u8".into()),
@@ -356,9 +349,7 @@ impl WitParserImpl {
             wit_parser::Type::Char => ParsedType::Primitive("char".into()),
             wit_parser::Type::String => ParsedType::Primitive("string".into()),
             // LLI DEVIATION: ErrorContext variant added in wit-parser v0.227+
-            wit_parser::Type::ErrorContext => {
-                ParsedType::Named("error-context".into())
-            }
+            wit_parser::Type::ErrorContext => ParsedType::Named("error-context".into()),
             wit_parser::Type::Id(id) => {
                 let type_def = &resolve.types[*id];
                 match &type_def.kind {
@@ -570,8 +561,9 @@ impl WitParser for WitParserImpl {
     fn parse_directory(&self, dir: &Path) -> Result<Vec<ParsedPackage>, ValidationResult> {
         let mut resolve = wit_parser::Resolve::default();
 
-        let (pkg_id, _source_map) =
-            resolve.push_dir(dir).map_err(|e| self.convert_parse_error(&e, dir))?;
+        let (pkg_id, _source_map) = resolve
+            .push_dir(dir)
+            .map_err(|e| self.convert_parse_error(&e, dir))?;
 
         // Collect .wit files from the directory
         let source_files: Vec<PathBuf> = std::fs::read_dir(dir)

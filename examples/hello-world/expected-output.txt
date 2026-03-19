@@ -1,0 +1,17 @@
+$ torvyn run flow.main
+[torvyn] Loading flow 'main' from Torvyn.toml
+[torvyn] Validating contracts...  ok
+[torvyn] Linking components...    ok (2 components, 1 edge)
+[torvyn] Instantiating...         ok
+[torvyn] Running flow 'main'
+
+[hello-sink] seq=0: Hello, World! (message 1)
+[hello-sink] seq=1: Hello, World! (message 2)
+[hello-sink] seq=2: Hello, World! (message 3)
+[hello-sink] seq=3: Hello, World! (message 4)
+[hello-sink] seq=4: Hello, World! (message 5)
+[hello-sink] Stream complete.
+[hello-sink] Received 5 messages total.
+
+[torvyn] Flow 'main' completed. 5 elements processed.
+[torvyn] Duration: 12ms | Copies: 5 | Peak queue depth: 1

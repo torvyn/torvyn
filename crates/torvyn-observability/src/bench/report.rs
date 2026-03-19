@@ -2,7 +2,7 @@
 //!
 //! Per HLI Doc 05 §6.
 
-use crate::metrics::snapshot::{FlowMetricsSnapshot, delta};
+use crate::metrics::snapshot::{delta, FlowMetricsSnapshot};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -136,11 +136,7 @@ pub fn generate_report(
         0.0
     };
 
-    let total_latency: f64 = d
-        .components
-        .iter()
-        .map(|c| c.processing_time_mean_ns)
-        .sum();
+    let total_latency: f64 = d.components.iter().map(|c| c.processing_time_mean_ns).sum();
 
     let component_breakdown = d
         .components
@@ -196,9 +192,7 @@ pub fn generate_report(
             avg_copies_per_element: avg_copies,
         },
         queue_pressure,
-        resource_usage: ResourceUsageReport {
-            scheduler_wakeups,
-        },
+        resource_usage: ResourceUsageReport { scheduler_wakeups },
         component_breakdown,
     }
 }
@@ -209,12 +203,8 @@ pub fn generate_report(
 pub fn format_report(report: &BenchmarkReport) -> String {
     let mut out = String::with_capacity(2048);
 
-    out.push_str(
-        "╔══════════════════════════════════════════════════════════════╗\n",
-    );
-    out.push_str(
-        "║                    Torvyn Benchmark Report                   ║\n",
-    );
+    out.push_str("╔══════════════════════════════════════════════════════════════╗\n");
+    out.push_str("║                    Torvyn Benchmark Report                   ║\n");
     out.push_str(&format!(
         "║  Pipeline: {:<49}║\n",
         &report.pipeline_description
@@ -224,14 +214,10 @@ pub fn format_report(report: &BenchmarkReport) -> String {
         report.duration.as_secs_f64(),
         report.elements_processed
     ));
-    out.push_str(
-        "╠══════════════════════════════════════════════════════════════╣\n",
-    );
+    out.push_str("╠══════════════════════════════════════════════════════════════╣\n");
 
     // Latency
-    out.push_str(
-        "║  LATENCY (end-to-end per element)                            ║\n",
-    );
+    out.push_str("║  LATENCY (end-to-end per element)                            ║\n");
     out.push_str(&format!(
         "║    p50:   {:<53}║\n",
         format_ns(report.latency.p50_ns)
@@ -250,18 +236,14 @@ pub fn format_report(report: &BenchmarkReport) -> String {
     ));
 
     // Throughput
-    out.push_str(
-        "║  THROUGHPUT                                                  ║\n",
-    );
+    out.push_str("║  THROUGHPUT                                                  ║\n");
     out.push_str(&format!(
         "║    Sustained: {:.0} elements/sec{:<30}║\n",
         report.throughput.sustained_elements_per_sec, ""
     ));
 
     // Data movement
-    out.push_str(
-        "║  DATA MOVEMENT                                               ║\n",
-    );
+    out.push_str("║  DATA MOVEMENT                                               ║\n");
     out.push_str(&format!(
         "║    Total copies: {:<45}║\n",
         report.data_movement.total_copies
@@ -271,9 +253,7 @@ pub fn format_report(report: &BenchmarkReport) -> String {
         report.data_movement.avg_copies_per_element, ""
     ));
 
-    out.push_str(
-        "╚══════════════════════════════════════════════════════════════╝\n",
-    );
+    out.push_str("╚══════════════════════════════════════════════════════════════╝\n");
     out
 }
 

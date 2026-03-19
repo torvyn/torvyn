@@ -65,28 +65,19 @@ pub fn wit_streaming_path() -> String {
 ///
 /// # COLD PATH
 pub fn wit_filtering_path() -> String {
-    format!(
-        "{}/wit-ext/torvyn-filtering",
-        env!("CARGO_MANIFEST_DIR")
-    )
+    format!("{}/wit-ext/torvyn-filtering", env!("CARGO_MANIFEST_DIR"))
 }
 
 /// Returns the path to the bundled Torvyn aggregation WIT files.
 ///
 /// # COLD PATH
 pub fn wit_aggregation_path() -> String {
-    format!(
-        "{}/wit-ext/torvyn-aggregation",
-        env!("CARGO_MANIFEST_DIR")
-    )
+    format!("{}/wit-ext/torvyn-aggregation", env!("CARGO_MANIFEST_DIR"))
 }
 
 /// Returns the path to the bundled Torvyn capabilities WIT files.
 ///
 /// # COLD PATH
 pub fn wit_capabilities_path() -> String {
-    format!(
-        "{}/wit-ext/torvyn-capabilities",
-        env!("CARGO_MANIFEST_DIR")
-    )
+    format!("{}/wit-ext/torvyn-capabilities", env!("CARGO_MANIFEST_DIR"))
 }

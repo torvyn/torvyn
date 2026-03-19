@@ -5,9 +5,9 @@
 //! allocation-free on the hot path.
 
 use crate::{
-    ComponentId, FlowId, ResourceId, StreamId,
     enums::{CopyReason, ObservabilityLevel},
     error::ProcessErrorKind,
+    ComponentId, FlowId, ResourceId, StreamId,
 };
 
 /// The hot-path trait for recording observability events.

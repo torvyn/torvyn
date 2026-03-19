@@ -1,0 +1,7 @@
+package torvyn:filtering@0.1.0;
+
+interface filter {
+    use torvyn:streaming/types.{stream-element, process-error};
+
+    evaluate: func(element: stream-element) -> result<bool, process-error>;
+}

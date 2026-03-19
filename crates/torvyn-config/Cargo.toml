@@ -2,6 +2,9 @@
 name = "torvyn-config"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 description = "Configuration parsing, validation, and schema definitions for the Torvyn reactive streaming runtime"
 
 [features]

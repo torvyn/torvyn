@@ -1,10 +1,14 @@
 [workspace]
-members = ["crates/*"]
+members = ["crates/*", "tests/integration", "benches"]
+exclude = ["examples"]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/torvyn/torvyn"
+rust-version = "1.78"
 
 [workspace.dependencies]
 # External
@@ -15,18 +19,19 @@ thiserror = "2.0.6"
 tracing = "0.1.40"
 
 # Internal crates
-torvyn-types = { path = "crates/torvyn-types" }
-torvyn-contracts = { path = "crates/torvyn-contracts" }
-torvyn-config = { path = "crates/torvyn-config" }
-torvyn-engine = { path = "crates/torvyn-engine" }
-torvyn-observability = { path = "crates/torvyn-observability" }
-torvyn-resources = { path = "crates/torvyn-resources" }
-torvyn-security = { path = "crates/torvyn-security" }
-torvyn-reactor = { path = "crates/torvyn-reactor" }
-torvyn-linker = { path = "crates/torvyn-linker" }
-torvyn-pipeline = { path = "crates/torvyn-pipeline" }
-torvyn-packaging = { path = "crates/torvyn-packaging" }
-torvyn-host = { path = "crates/torvyn-host" }
+torvyn-types = { version = "0.1.0", path = "crates/torvyn-types" }
+torvyn-contracts = { version = "0.1.0", path = "crates/torvyn-contracts" }
+torvyn-config = { version = "0.1.0", path = "crates/torvyn-config" }
+torvyn-engine = { version = "0.1.0", path = "crates/torvyn-engine" }
+torvyn-observability = { version = "0.1.0", path = "crates/torvyn-observability" }
+torvyn-resources = { version = "0.1.0", path = "crates/torvyn-resources" }
+torvyn-security = { version = "0.1.0", path = "crates/torvyn-security" }
+torvyn-reactor = { version = "0.1.0", path = "crates/torvyn-reactor" }
+torvyn-linker = { version = "0.1.0", path = "crates/torvyn-linker" }
+torvyn-pipeline = { version = "0.1.0", path = "crates/torvyn-pipeline" }
+torvyn-packaging = { version = "0.1.0", path = "crates/torvyn-packaging" }
+torvyn-host = { version = "0.1.0", path = "crates/torvyn-host" }
+torvyn-cli = { version = "0.1.0", path = "crates/torvyn-cli" }
 
 [workspace.lints.clippy]
 all = "deny"

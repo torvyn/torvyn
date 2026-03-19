@@ -59,8 +59,7 @@ pub fn merge_runtime_config(base: &RuntimeConfig, overrides: &RuntimeConfig) -> 
         } else {
             base.default_fuel_per_invocation
         },
-        compilation_cache_dir: if overrides.compilation_cache_dir
-            != defaults.compilation_cache_dir
+        compilation_cache_dir: if overrides.compilation_cache_dir != defaults.compilation_cache_dir
         {
             overrides.compilation_cache_dir.clone()
         } else {
@@ -142,8 +141,7 @@ pub fn merge_observability_config(
         } else {
             base.tracing_endpoint.clone()
         },
-        tracing_sample_rate: if (overrides.tracing_sample_rate - defaults.tracing_sample_rate)
-            .abs()
+        tracing_sample_rate: if (overrides.tracing_sample_rate - defaults.tracing_sample_rate).abs()
             > f64::EPSILON
         {
             overrides.tracing_sample_rate
@@ -174,10 +172,7 @@ pub fn merge_observability_config(
 /// replace the base's grants on a per-component basis.
 ///
 /// # COLD PATH.
-pub fn merge_security_config(
-    base: &SecurityConfig,
-    overrides: &SecurityConfig,
-) -> SecurityConfig {
+pub fn merge_security_config(base: &SecurityConfig, overrides: &SecurityConfig) -> SecurityConfig {
     let defaults = SecurityConfig::default();
 
     let mut grants = base.grants.clone();

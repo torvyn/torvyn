@@ -96,7 +96,10 @@ pub fn check_compatibility(old: &ParsedPackage, new: &ParsedPackage) -> Compatib
     compare_worlds(&old.worlds, &new.worlds, &mut changes);
 
     // Determine overall verdict
-    let verdict = if changes.iter().any(|c| c.severity == ChangeSeverity::Breaking) {
+    let verdict = if changes
+        .iter()
+        .any(|c| c.severity == ChangeSeverity::Breaking)
+    {
         CompatibilityVerdict::Breaking
     } else if changes.iter().any(|c| c.severity == ChangeSeverity::Minor) {
         CompatibilityVerdict::CompatibleWithAdditions
@@ -496,10 +499,7 @@ mod tests {
     use super::*;
     use crate::parser::*;
 
-    fn make_package(
-        version: &str,
-        interfaces: HashMap<String, ParsedInterface>,
-    ) -> ParsedPackage {
+    fn make_package(version: &str, interfaces: HashMap<String, ParsedInterface>) -> ParsedPackage {
         ParsedPackage {
             name: "torvyn:streaming".into(),
             version: Some(semver::Version::parse(version).unwrap()),
@@ -509,9 +509,9 @@ mod tests {
         }
     }
 
-    fn make_interface(
-        functions: Vec<(&str, Vec<(&str, ParsedType)>, Option<ParsedType>)>,
-    ) -> ParsedInterface {
+    type FunctionDef<'a> = (&'a str, Vec<(&'a str, ParsedType)>, Option<ParsedType>);
+
+    fn make_interface(functions: Vec<FunctionDef<'_>>) -> ParsedInterface {
         let mut funcs = HashMap::new();
         for (name, params, result) in functions {
             funcs.insert(
@@ -589,7 +589,10 @@ mod tests {
         let new = make_package("0.2.0", new_interfaces);
 
         let report = check_compatibility(&old, &new);
-        assert_eq!(report.verdict, CompatibilityVerdict::CompatibleWithAdditions);
+        assert_eq!(
+            report.verdict,
+            CompatibilityVerdict::CompatibleWithAdditions
+        );
     }
 
     #[test]
@@ -674,7 +677,10 @@ mod tests {
         let new = make_package("0.2.0", new_interfaces);
 
         let report = check_compatibility(&old, &new);
-        assert_eq!(report.verdict, CompatibilityVerdict::CompatibleWithAdditions);
+        assert_eq!(
+            report.verdict,
+            CompatibilityVerdict::CompatibleWithAdditions
+        );
     }
 
     #[test]
@@ -786,7 +792,10 @@ mod tests {
         let new = make_package("0.2.0", new_interfaces);
 
         let report = check_compatibility(&old, &new);
-        assert_eq!(report.verdict, CompatibilityVerdict::CompatibleWithAdditions);
+        assert_eq!(
+            report.verdict,
+            CompatibilityVerdict::CompatibleWithAdditions
+        );
     }
 
     #[test]

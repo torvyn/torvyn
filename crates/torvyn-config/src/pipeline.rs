@@ -267,13 +267,9 @@ impl PipelineDefinition {
     ///
     /// # Errors
     /// Returns `Err(Vec<ConfigParseError>)` if parsing or validation fails.
-    pub fn from_toml_str(
-        toml_str: &str,
-        file_path: &str,
-    ) -> Result<Self, Vec<ConfigParseError>> {
-        let pipeline: Self = toml::from_str(toml_str).map_err(|e| {
-            vec![ConfigParseError::toml_syntax(file_path, &e)]
-        })?;
+    pub fn from_toml_str(toml_str: &str, file_path: &str) -> Result<Self, Vec<ConfigParseError>> {
+        let pipeline: Self = toml::from_str(toml_str)
+            .map_err(|e| vec![ConfigParseError::toml_syntax(file_path, &e)])?;
 
         let mut errors = ConfigErrors::new();
         pipeline.validate(file_path, &mut errors);
@@ -413,10 +409,7 @@ fn validate_flow(file: &str, name: &str, flow: &FlowDef, errors: &mut ConfigErro
                 file,
                 &format!("{prefix}.edges[{i}].to.node"),
                 &format!("Edge references non-existent node '{}'", edge.to.node),
-                &format!(
-                    "Ensure '{}' is defined in [{prefix}.nodes].",
-                    edge.to.node
-                ),
+                &format!("Ensure '{}' is defined in [{prefix}.nodes].", edge.to.node),
             ));
         }
         if edge.from.node == edge.to.node {
@@ -506,8 +499,7 @@ queue_depth = 128
 from = { node = "transform-1", port = "output" }
 to = { node = "sink-1", port = "input" }
 "#;
-        let pipeline =
-            PipelineDefinition::from_toml_str(toml_str, "pipeline.toml").unwrap();
+        let pipeline = PipelineDefinition::from_toml_str(toml_str, "pipeline.toml").unwrap();
         let flow = &pipeline.flows["main"];
         assert_eq!(flow.nodes.len(), 3);
         assert_eq!(flow.edges.len(), 2);
@@ -635,8 +627,7 @@ to = { node = "sink", port = "input" }
 
     #[test]
     fn test_pipeline_round_trip() {
-        let original =
-            PipelineDefinition::from_toml_str(MINIMAL_PIPELINE, "p.toml").unwrap();
+        let original = PipelineDefinition::from_toml_str(MINIMAL_PIPELINE, "p.toml").unwrap();
         let serialized = toml::to_string_pretty(&original).unwrap();
         let reparsed = PipelineDefinition::from_toml_str(&serialized, "p.toml").unwrap();
         assert_eq!(original.flows.len(), reparsed.flows.len());

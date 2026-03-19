@@ -135,8 +135,7 @@ mod tests {
     fn test_interpolate_multiple_vars() {
         std::env::set_var("TORVYN_TEST_A", "foo");
         std::env::set_var("TORVYN_TEST_B", "bar");
-        let result =
-            interpolate_env("${TORVYN_TEST_A}-${TORVYN_TEST_B}", "f", "k").unwrap();
+        let result = interpolate_env("${TORVYN_TEST_A}-${TORVYN_TEST_B}", "f", "k").unwrap();
         assert_eq!(result, "foo-bar");
         std::env::remove_var("TORVYN_TEST_A");
         std::env::remove_var("TORVYN_TEST_B");
@@ -144,8 +143,7 @@ mod tests {
 
     #[test]
     fn test_interpolate_missing_var_returns_error() {
-        let result =
-            interpolate_env("${DEFINITELY_NOT_SET_12345}", "Torvyn.toml", "some.key");
+        let result = interpolate_env("${DEFINITELY_NOT_SET_12345}", "Torvyn.toml", "some.key");
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.code, "E0705");

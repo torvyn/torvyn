@@ -15,7 +15,9 @@ use torvyn_types::{
     FlowId, FlowState, NoopEventSink, ProcessError, ResourceId, StreamId,
 };
 
-use torvyn_engine::{ComponentInstance, ComponentInvoker, OutputElement, ProcessResult, StreamElement};
+use torvyn_engine::{
+    ComponentInstance, ComponentInvoker, OutputElement, ProcessResult, StreamElement,
+};
 
 use torvyn_reactor::cancellation::CancellationReason;
 use torvyn_reactor::config::{FlowConfig, StreamConfig};
@@ -116,11 +118,7 @@ impl ComponentInvoker for TestInvoker {
         Ok(())
     }
 
-    async fn invoke_teardown(
-        &self,
-        _instance: &mut ComponentInstance,
-        _component_id: ComponentId,
-    ) {
+    async fn invoke_teardown(&self, _instance: &mut ComponentInstance, _component_id: ComponentId) {
     }
 }
 

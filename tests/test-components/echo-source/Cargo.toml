@@ -1,0 +1,16 @@
+[package]
+name = "test-echo-source"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Test source component: produces N numbered elements"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.41"
+
+[package.metadata.component]
+package = "torvyn:streaming"
+world = "data-source"

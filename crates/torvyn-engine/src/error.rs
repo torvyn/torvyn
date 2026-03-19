@@ -267,12 +267,13 @@ impl EngineError {
 impl From<EngineError> for torvyn_types::TorvynError {
     fn from(e: EngineError) -> Self {
         let types_err = match &e {
-            EngineError::CompilationFailed { source_hint, reason } => {
-                torvyn_types::EngineError::CompilationFailed {
-                    module: source_hint.clone().unwrap_or_default(),
-                    reason: reason.clone(),
-                }
-            }
+            EngineError::CompilationFailed {
+                source_hint,
+                reason,
+            } => torvyn_types::EngineError::CompilationFailed {
+                module: source_hint.clone().unwrap_or_default(),
+                reason: reason.clone(),
+            },
             EngineError::InstantiationFailed {
                 component_id,
                 reason,

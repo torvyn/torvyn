@@ -54,10 +54,7 @@ impl ReactorHandle {
     /// # Errors
     /// - [`FlowCreationError::InvalidTopology`] if the topology is invalid.
     /// - [`FlowCreationError::ReactorShuttingDown`] if the reactor is shutting down.
-    pub async fn create_flow(
-        &self,
-        config: FlowConfig,
-    ) -> Result<FlowId, FlowCreationError> {
+    pub async fn create_flow(&self, config: FlowConfig) -> Result<FlowId, FlowCreationError> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send(ReactorCommand::CreateFlow(config, tx))

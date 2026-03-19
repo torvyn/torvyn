@@ -77,11 +77,7 @@ fn test_event_sink_100k_invocations() {
     let collector = ObservabilityCollector::new_for_testing(ObservabilityConfig::default());
 
     let _obs = collector
-        .register_flow(
-            FlowId::new(1),
-            &[ComponentId::new(1)],
-            &[StreamId::new(1)],
-        )
+        .register_flow(FlowId::new(1), &[ComponentId::new(1)], &[StreamId::new(1)])
         .unwrap();
 
     for i in 0..100_000u64 {
@@ -100,16 +96,14 @@ fn test_event_sink_100k_invocations() {
 
 #[test]
 fn test_event_sink_off_level_zero_overhead() {
-    let mut config = ObservabilityConfig::default();
-    config.level = ObservabilityLevel::Off;
+    let config = ObservabilityConfig {
+        level: ObservabilityLevel::Off,
+        ..ObservabilityConfig::default()
+    };
     let collector = ObservabilityCollector::new_for_testing(config);
 
     let _obs = collector
-        .register_flow(
-            FlowId::new(1),
-            &[ComponentId::new(1)],
-            &[StreamId::new(1)],
-        )
+        .register_flow(FlowId::new(1), &[ComponentId::new(1)], &[StreamId::new(1)])
         .unwrap();
 
     for _ in 0..100_000 {
@@ -134,11 +128,7 @@ fn test_event_sink_error_counting() {
     let collector = ObservabilityCollector::new_for_testing(ObservabilityConfig::default());
 
     let _obs = collector
-        .register_flow(
-            FlowId::new(1),
-            &[ComponentId::new(1)],
-            &[StreamId::new(1)],
-        )
+        .register_flow(FlowId::new(1), &[ComponentId::new(1)], &[StreamId::new(1)])
         .unwrap();
 
     collector.record_invocation(

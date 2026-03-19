@@ -463,8 +463,7 @@ mod tests {
 
     #[test]
     fn test_invalid_value_converts_to_config_error() {
-        let parse_err =
-            ConfigParseError::invalid_value("f.toml", "key", "bad", "good", "fix it");
+        let parse_err = ConfigParseError::invalid_value("f.toml", "key", "bad", "good", "fix it");
         let config_err: ConfigError = parse_err.into();
         assert!(matches!(config_err, ConfigError::InvalidValue { .. }));
     }

@@ -1,4 +1,5 @@
-/target
+**/target
+examples/**/bindings.rs
 *.swp
 *.swo
 *~

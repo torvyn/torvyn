@@ -175,9 +175,7 @@ impl PortRange {
     /// # COLD PATH — called during config parsing.
     pub fn new(start: u16, end: u16) -> Result<Self, String> {
         if start > end {
-            return Err(format!(
-                "invalid port range: start ({start}) > end ({end})"
-            ));
+            return Err(format!("invalid port range: start ({start}) > end ({end})"));
         }
         Ok(Self { start, end })
     }
@@ -685,18 +683,15 @@ impl Capability {
                 Capability::FilesystemWrite { path: grant },
                 Capability::FilesystemWrite { path: req },
             ) => grant.contains_scope(req),
-            (
-                Capability::TcpConnect { scope: grant },
-                Capability::TcpConnect { scope: req },
-            ) => grant.contains_scope(req),
-            (
-                Capability::TcpListen { scope: grant },
-                Capability::TcpListen { scope: req },
-            ) => grant.contains_scope(req),
-            (
-                Capability::UdpAccess { scope: grant },
-                Capability::UdpAccess { scope: req },
-            ) => grant.contains_scope(req),
+            (Capability::TcpConnect { scope: grant }, Capability::TcpConnect { scope: req }) => {
+                grant.contains_scope(req)
+            }
+            (Capability::TcpListen { scope: grant }, Capability::TcpListen { scope: req }) => {
+                grant.contains_scope(req)
+            }
+            (Capability::UdpAccess { scope: grant }, Capability::UdpAccess { scope: req }) => {
+                grant.contains_scope(req)
+            }
             (
                 Capability::HttpOutgoing { scope: grant },
                 Capability::HttpOutgoing { scope: req },
@@ -714,8 +709,8 @@ impl Capability {
                 Capability::ResourceAllocate { pool: grant_pool },
                 Capability::ResourceAllocate { pool: req_pool },
             ) => match (grant_pool, req_pool) {
-                (None, _) => true,                  // unscoped grant covers anything
-                (Some(_), None) => false,            // scoped grant doesn't cover unscoped request
+                (None, _) => true,        // unscoped grant covers anything
+                (Some(_), None) => false, // scoped grant doesn't cover unscoped request
                 (Some(g), Some(r)) => g.pool_name() == r.pool_name(),
             },
             (
@@ -758,30 +753,21 @@ impl Capability {
                     None
                 }
             }
-            (
-                Capability::TcpConnect { scope: grant },
-                Capability::TcpConnect { scope: req },
-            ) => {
+            (Capability::TcpConnect { scope: grant }, Capability::TcpConnect { scope: req }) => {
                 if grant.contains_scope(req) {
                     Some(Capability::TcpConnect { scope: req.clone() })
                 } else {
                     None
                 }
             }
-            (
-                Capability::TcpListen { scope: grant },
-                Capability::TcpListen { scope: req },
-            ) => {
+            (Capability::TcpListen { scope: grant }, Capability::TcpListen { scope: req }) => {
                 if grant.contains_scope(req) {
                     Some(Capability::TcpListen { scope: req.clone() })
                 } else {
                     None
                 }
             }
-            (
-                Capability::UdpAccess { scope: grant },
-                Capability::UdpAccess { scope: req },
-            ) => {
+            (Capability::UdpAccess { scope: grant }, Capability::UdpAccess { scope: req }) => {
                 if grant.contains_scope(req) {
                     Some(Capability::UdpAccess { scope: req.clone() })
                 } else {
@@ -913,11 +899,10 @@ impl FromStr for Capability {
                 Ok(Capability::ResourceAllocate { pool })
             }
             ("torvyn", "pool-access") => {
-                let pool_name =
-                    scope_str.ok_or_else(|| CapabilityParseError::MissingScope {
-                        input: s.to_owned(),
-                        expected: "pool name".to_owned(),
-                    })?;
+                let pool_name = scope_str.ok_or_else(|| CapabilityParseError::MissingScope {
+                    input: s.to_owned(),
+                    expected: "pool name".to_owned(),
+                })?;
                 Ok(Capability::PoolAccess {
                     pool: PoolScope::new(pool_name),
                 })

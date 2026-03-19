@@ -161,14 +161,10 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
 
         // Set up optional flow deadline.
         let deadline_sleep = match self.timeouts.flow_deadline {
-            Some(d) => {
-                Box::pin(sleep(d))
-                    as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
-            }
-            None => {
-                Box::pin(std::future::pending())
-                    as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
-            }
+            Some(d) => Box::pin(sleep(d))
+                as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+            None => Box::pin(std::future::pending())
+                as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
         };
         tokio::pin!(deadline_sleep);
 
@@ -181,11 +177,10 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
             }
 
             // 2. Select next ready stage.
-            match self.scheduler.next_ready_stage(
-                &self.topology,
-                &self.streams,
-                &self.stream_index,
-            ) {
+            match self
+                .scheduler
+                .next_ready_stage(&self.topology, &self.streams, &self.stream_index)
+            {
                 Some(execution) => {
                     // 3. Execute the stage.
                     let result = self.execute_stage(&execution).await;
@@ -199,10 +194,11 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
                                     error = %flow_err,
                                     "FailFast: flow terminating"
                                 );
-                                self.cancellation.cancel(CancellationReason::DownstreamError {
-                                    component: execution.component_id,
-                                    error: ProcessError::Internal(format!("{flow_err}")),
-                                });
+                                self.cancellation
+                                    .cancel(CancellationReason::DownstreamError {
+                                        component: execution.component_id,
+                                        error: ProcessError::Internal(format!("{flow_err}")),
+                                    });
                                 break;
                             }
                             ErrorPolicy::SkipElement | ErrorPolicy::LogAndContinue => {
@@ -250,8 +246,7 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
 
                     if self.all_streams_complete() {
                         info!(flow_id = %self.flow_id, "all streams complete");
-                        self.cancellation
-                            .cancel(CancellationReason::SourceComplete);
+                        self.cancellation.cancel(CancellationReason::SourceComplete);
                         break;
                     }
 
@@ -350,9 +345,7 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
         let component_id = execution.component_id;
 
         let result = match &execution.action {
-            StageAction::PullFromSource => {
-                self.execute_pull(stage_idx, component_id).await
-            }
+            StageAction::PullFromSource => self.execute_pull(stage_idx, component_id).await,
             StageAction::ProcessElement { input_stream } => {
                 self.execute_process(stage_idx, component_id, *input_stream)
                     .await
@@ -428,9 +421,7 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
                     let push_result = stream.queue.push(elem_ref);
                     match push_result {
                         PushResult::Ok => {
-                            stream
-                                .metrics
-                                .record_enqueue(stream.queue.len() as u32);
+                            stream.metrics.record_enqueue(stream.queue.len() as u32);
                             self.event_sink.record_element_transfer(
                                 self.flow_id,
                                 stream.id,
@@ -623,12 +614,9 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
             let low_wm = stream.low_watermark_depth();
             let currently_active = stream.backpressure.is_active();
 
-            if let Some(activate) = check_backpressure_transition(
-                queue_len,
-                capacity,
-                low_wm,
-                currently_active,
-            ) {
+            if let Some(activate) =
+                check_backpressure_transition(queue_len, capacity, low_wm, currently_active)
+            {
                 if activate {
                     if stream.backpressure.try_activate() {
                         stream.metrics.record_backpressure_event();
@@ -703,11 +691,10 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
 
         while Instant::now() < drain_deadline {
             // Try to process one more element.
-            match self.scheduler.next_ready_stage(
-                &self.topology,
-                &self.streams,
-                &self.stream_index,
-            ) {
+            match self
+                .scheduler
+                .next_ready_stage(&self.topology, &self.streams, &self.stream_index)
+            {
                 Some(execution) => {
                     let _ = self.execute_stage(&execution).await;
                     tokio::task::yield_now().await;
@@ -751,11 +738,11 @@ mod tests {
     use crate::topology::{StageDefinition, StreamConnection};
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use torvyn_engine::{ComponentInstance, OutputElement};
     use torvyn_types::{
         BackpressurePolicy, BackpressureSignal, BufferHandle, ComponentRole, NoopEventSink,
         ResourceId,
     };
-    use torvyn_engine::{ComponentInstance, OutputElement};
 
     // -- Test invoker that doesn't need private fields --
 

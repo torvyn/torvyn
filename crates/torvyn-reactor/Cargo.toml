@@ -2,6 +2,9 @@
 name = "torvyn-reactor"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 description = "Stream scheduling, backpressure, and flow lifecycle for Torvyn"
 
 [dependencies]

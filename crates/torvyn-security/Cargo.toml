@@ -2,6 +2,9 @@
 name = "torvyn-security"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 description = "Capability model, sandboxing, and audit for Torvyn"
 
 [features]

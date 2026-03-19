@@ -40,11 +40,7 @@ pub enum ReactorCommand {
     /// List all flows with their current states.
     ListFlows(oneshot::Sender<Vec<(FlowId, FlowState)>>),
     /// Update the priority of a running flow.
-    UpdatePriority(
-        FlowId,
-        FlowPriority,
-        oneshot::Sender<Result<(), FlowError>>,
-    ),
+    UpdatePriority(FlowId, FlowPriority, oneshot::Sender<Result<(), FlowError>>),
     /// Initiate graceful shutdown with the given timeout.
     Shutdown(Duration, oneshot::Sender<ShutdownResult>),
 }

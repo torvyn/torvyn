@@ -157,10 +157,7 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
     /// Create and start a new flow.
     ///
     /// # COLD PATH
-    async fn create_flow(
-        &mut self,
-        config: FlowConfig,
-    ) -> Result<FlowId, FlowCreationError> {
+    async fn create_flow(&mut self, config: FlowConfig) -> Result<FlowId, FlowCreationError> {
         // Validate topology.
         config.topology.validate()?;
 
@@ -240,7 +237,11 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
         // Temporary: create a stub join handle that resolves immediately.
         let join_handle = tokio::spawn(async move {
             // Stub: real implementation runs FlowDriver::run().
-            (flow_id, FlowState::Completed, FlowCompletionStats::new(Duration::ZERO))
+            (
+                flow_id,
+                FlowState::Completed,
+                FlowCompletionStats::new(Duration::ZERO),
+            )
         });
 
         self.flows.insert(

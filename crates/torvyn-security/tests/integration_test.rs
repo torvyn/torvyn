@@ -33,10 +33,10 @@ fn test_end_to_end_capability_flow() {
     // Step 3: Resolve
     let result = DefaultCapabilityResolver::resolve(&caps, &grants).unwrap();
     assert_eq!(result.resolved.len(), 4);
-    assert!(result.warnings.iter().any(|w| matches!(
-        w,
-        ResolutionWarning::OptionalNotGranted { .. }
-    )));
+    assert!(result
+        .warnings
+        .iter()
+        .any(|w| matches!(w, ResolutionWarning::OptionalNotGranted { .. })));
 
     // Step 4: Build sandbox config
     let configurator = DefaultSandboxConfigurator;
@@ -78,10 +78,7 @@ fn test_end_to_end_capability_flow() {
 /// Test: deny-all default denies everything.
 #[test]
 fn test_deny_all_default() {
-    let caps = ComponentCapabilities::new(
-        vec![Capability::WallClock],
-        vec![],
-    );
+    let caps = ComponentCapabilities::new(vec![Capability::WallClock], vec![]);
     let grants = OperatorGrants::deny_all();
 
     // Resolution should fail

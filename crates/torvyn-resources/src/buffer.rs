@@ -2,7 +2,7 @@
 //!
 //! Buffers are allocated as a single contiguous memory region:
 //! `[header padding][payload of capacity bytes]`.
-//! The payload is aligned to [`PAYLOAD_ALIGNMENT`] bytes.
+//! The payload is aligned to `PAYLOAD_ALIGNMENT` bytes.
 //!
 //! # Safety
 //! This module contains `unsafe` code for allocation, deallocation, and
@@ -89,11 +89,7 @@ pub unsafe fn dealloc_buffer(ptr: NonNull<u8>, alloc_size: usize) {
 /// - The payload region must contain valid data in `[offset..offset+len]`.
 /// - No mutable references to the same payload region may exist.
 #[inline]
-pub unsafe fn read_payload(
-    buffer_ptr: NonNull<u8>,
-    offset: u32,
-    len: u32,
-) -> &'static [u8] {
+pub unsafe fn read_payload(buffer_ptr: NonNull<u8>, offset: u32, len: u32) -> &'static [u8] {
     // SAFETY: The caller guarantees bounds and validity.
     let payload_start = buffer_ptr.as_ptr().add(HEADER_SIZE);
     let read_start = payload_start.add(offset as usize);
@@ -110,11 +106,7 @@ pub unsafe fn read_payload(
 /// - The caller must have exclusive access to the buffer (owner, not borrowed).
 /// - `offset + data.len()` must not exceed the buffer's payload capacity.
 #[inline]
-pub unsafe fn write_payload(
-    buffer_ptr: NonNull<u8>,
-    offset: u32,
-    data: &[u8],
-) {
+pub unsafe fn write_payload(buffer_ptr: NonNull<u8>, offset: u32, data: &[u8]) {
     // SAFETY: The caller guarantees bounds, ownership, and exclusive access.
     let payload_start = buffer_ptr.as_ptr().add(HEADER_SIZE);
     let write_start = payload_start.add(offset as usize);

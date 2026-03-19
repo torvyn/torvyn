@@ -2,14 +2,55 @@
 name = "torvyn-packaging"
 version.workspace = true
 edition.workspace = true
-description = "OCI artifact assembly, signing, and distribution for Torvyn"
+description = "OCI artifact assembly, signing, and distribution for Torvyn components"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 
 [dependencies]
-torvyn-types.workspace = true
-torvyn-contracts.workspace = true
-torvyn-config.workspace = true
-serde.workspace = true
-thiserror.workspace = true
+# Workspace crates
+torvyn-types = { version = "0.1.0", path = "../torvyn-types" }
+torvyn-config = { version = "0.1.0", path = "../torvyn-config" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Versioning
+semver = "1"
+
+# Cryptography
+sha2 = "0.10"
+hex = "0.4"
+
+# Archive handling
+tar = "0.4"
+flate2 = "1"
+
+# Time
+time = { version = "0.3", features = ["formatting", "parsing"] }
+
+# Error handling
+thiserror = "2"
+
+# Async runtime (for RegistryClient trait)
+tokio = { version = "1", features = ["fs", "io-util", "rt"] }
+
+# Async trait (for RegistryClient)
+async-trait = "0.1"
+
+# Logging
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[features]
+default = []
+oci-registry = []  # Will add dep:oci-client when evaluated
+sigstore = []      # Will add dep:sigstore when evaluated
 
 [lints]
 workspace = true

@@ -1,0 +1,8 @@
+package torvyn:aggregation@0.1.0;
+
+interface aggregator {
+    use torvyn:streaming/types.{stream-element, output-element, process-error};
+
+    ingest: func(element: stream-element) -> result<option<output-element>, process-error>;
+    flush: func() -> result<list<output-element>, process-error>;
+}

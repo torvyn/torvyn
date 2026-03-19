@@ -69,9 +69,7 @@ fn test_parse_invalid_name_fixture() {
     assert!(result.is_err());
     let errors = result.unwrap_err();
     assert!(errors.iter().any(|e| e.code == "E0703"));
-    assert!(errors
-        .iter()
-        .any(|e| e.key_path.contains("torvyn.name")));
+    assert!(errors.iter().any(|e| e.key_path.contains("torvyn.name")));
 }
 
 #[test]
@@ -157,9 +155,9 @@ name = "round-trip"
 version = "1.2.3"
 contract_version = "0.1.0"
 description = "test desc"
-authors = ["Test Author"]
+authors = ["Ashutosh Mishra"]
 license = "MIT"
-repository = "https://example.com"
+repository = "https://github.com/torvyn/torvyn"
 
 [build]
 release = false
@@ -210,10 +208,7 @@ default = "https://registry.example.com"
     assert_eq!(original.torvyn.authors, reparsed.torvyn.authors);
     assert_eq!(original.torvyn.license, reparsed.torvyn.license);
     assert_eq!(original.build.release, reparsed.build.release);
-    assert_eq!(
-        original.test.timeout_seconds,
-        reparsed.test.timeout_seconds
-    );
+    assert_eq!(original.test.timeout_seconds, reparsed.test.timeout_seconds);
     assert_eq!(
         original.runtime.worker_threads,
         reparsed.runtime.worker_threads
@@ -361,8 +356,7 @@ capabilities = ["filesystem:read:/data/*"]
     assert!(errors.is_empty(), "Unexpected errors: {errors}");
 
     // Extract inline flows
-    let flows =
-        PipelineDefinition::from_manifest_flows(&manifest.flow, "Torvyn.toml").unwrap();
+    let flows = PipelineDefinition::from_manifest_flows(&manifest.flow, "Torvyn.toml").unwrap();
     assert!(flows.contains_key("main"));
     let main_flow = &flows["main"];
     assert_eq!(main_flow.nodes.len(), 2);

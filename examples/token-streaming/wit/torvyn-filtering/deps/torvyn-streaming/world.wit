@@ -1,0 +1,31 @@
+package torvyn:streaming;
+
+world transform {
+    import types;
+    import buffer-allocator;
+
+    export processor;
+}
+
+world managed-transform {
+    import types;
+    import buffer-allocator;
+
+    export processor;
+    export lifecycle;
+}
+
+world data-source {
+    import types;
+    import buffer-allocator;
+
+    export source;
+    export lifecycle;
+}
+
+world data-sink {
+    import types;
+
+    export sink;
+    export lifecycle;
+}

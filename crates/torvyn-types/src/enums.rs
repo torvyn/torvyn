@@ -45,7 +45,10 @@ impl ComponentRole {
     /// # COLD PATH — called during topology validation.
     #[inline]
     pub const fn is_producer(&self) -> bool {
-        matches!(self, ComponentRole::Source | ComponentRole::Processor | ComponentRole::Router)
+        matches!(
+            self,
+            ComponentRole::Source | ComponentRole::Processor | ComponentRole::Router
+        )
     }
 
     /// Returns `true` if this role consumes stream elements.
@@ -55,7 +58,10 @@ impl ComponentRole {
     pub const fn is_consumer(&self) -> bool {
         matches!(
             self,
-            ComponentRole::Processor | ComponentRole::Sink | ComponentRole::Filter | ComponentRole::Router
+            ComponentRole::Processor
+                | ComponentRole::Sink
+                | ComponentRole::Filter
+                | ComponentRole::Router
         )
     }
 }
@@ -155,7 +161,10 @@ impl BackpressurePolicy {
     /// # COLD PATH — called during configuration validation.
     #[inline]
     pub const fn may_lose_data(&self) -> bool {
-        matches!(self, BackpressurePolicy::DropOldest | BackpressurePolicy::DropNewest)
+        matches!(
+            self,
+            BackpressurePolicy::DropOldest | BackpressurePolicy::DropNewest
+        )
     }
 }
 
@@ -373,7 +382,10 @@ mod tests {
 
     #[test]
     fn test_backpressure_policy_default() {
-        assert_eq!(BackpressurePolicy::default(), BackpressurePolicy::BlockProducer);
+        assert_eq!(
+            BackpressurePolicy::default(),
+            BackpressurePolicy::BlockProducer
+        );
     }
 
     #[test]
@@ -408,15 +420,27 @@ mod tests {
 
     #[test]
     fn test_observability_level_from_u8() {
-        assert_eq!(ObservabilityLevel::from_u8(0), Some(ObservabilityLevel::Off));
-        assert_eq!(ObservabilityLevel::from_u8(1), Some(ObservabilityLevel::Production));
-        assert_eq!(ObservabilityLevel::from_u8(2), Some(ObservabilityLevel::Diagnostic));
+        assert_eq!(
+            ObservabilityLevel::from_u8(0),
+            Some(ObservabilityLevel::Off)
+        );
+        assert_eq!(
+            ObservabilityLevel::from_u8(1),
+            Some(ObservabilityLevel::Production)
+        );
+        assert_eq!(
+            ObservabilityLevel::from_u8(2),
+            Some(ObservabilityLevel::Diagnostic)
+        );
         assert_eq!(ObservabilityLevel::from_u8(3), None);
     }
 
     #[test]
     fn test_observability_level_default() {
-        assert_eq!(ObservabilityLevel::default(), ObservabilityLevel::Production);
+        assert_eq!(
+            ObservabilityLevel::default(),
+            ObservabilityLevel::Production
+        );
     }
 
     #[test]
@@ -446,8 +470,14 @@ mod tests {
 
     #[test]
     fn test_copy_reason_display() {
-        assert_eq!(format!("{}", CopyReason::HostToComponent), "HostToComponent");
-        assert_eq!(format!("{}", CopyReason::ComponentToHost), "ComponentToHost");
+        assert_eq!(
+            format!("{}", CopyReason::HostToComponent),
+            "HostToComponent"
+        );
+        assert_eq!(
+            format!("{}", CopyReason::ComponentToHost),
+            "ComponentToHost"
+        );
         assert_eq!(format!("{}", CopyReason::CrossComponent), "CrossComponent");
         assert_eq!(format!("{}", CopyReason::PoolReturn), "PoolReturn");
     }
