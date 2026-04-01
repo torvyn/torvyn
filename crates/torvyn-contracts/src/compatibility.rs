@@ -509,9 +509,9 @@ mod tests {
         }
     }
 
-    type FunctionDef<'a> = (&'a str, Vec<(&'a str, ParsedType)>, Option<ParsedType>);
+    type FuncSpec<'a> = (&'a str, Vec<(&'a str, ParsedType)>, Option<ParsedType>);
 
-    fn make_interface(functions: Vec<FunctionDef<'_>>) -> ParsedInterface {
+    fn make_interface(functions: Vec<FuncSpec<'_>>) -> ParsedInterface {
         let mut funcs = HashMap::new();
         for (name, params, result) in functions {
             funcs.insert(

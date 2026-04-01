@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://torvyn.github.io/torvyn/sitemap.xml

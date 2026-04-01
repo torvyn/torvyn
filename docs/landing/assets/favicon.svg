@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- Torvyn favicon: simplified shield + flow mark -->
+  <path d="M16 2 C9 2 4 7.5 4 13 C4 20 13 28 16 30 C19 28 28 20 28 13 C28 7.5 23 2 16 2Z" fill="#1E5EF0"/>
+  <path d="M8 14 C11 14 14 15.5 18 15.5 C22 15.5 25 14 27 13" stroke="#FFF" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+  <polygon points="25.5,12 28,14.5 25.5,17" fill="#FFF"/>
+  <circle cx="16" cy="15.5" r="2" fill="#0EA5A0"/>
+</svg>

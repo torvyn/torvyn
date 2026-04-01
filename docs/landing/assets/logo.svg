@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <!-- Torvyn Logo: Directed flow through an ownership boundary.
+       Three stream lines converge through a shield-like container,
+       suggesting composition, ownership, and forward momentum. -->
+
+  <!-- Outer shield / ownership boundary -->
+  <path d="M256 48
+           C 140 48 72 130 72 220
+           C 72 330 200 440 256 468
+           C 312 440 440 330 440 220
+           C 440 130 372 48 256 48Z"
+        fill="#1E5EF0" />
+
+  <!-- Inner cutout — lighter inset to add depth -->
+  <path d="M256 88
+           C 168 88 112 152 112 224
+           C 112 312 216 404 256 428
+           C 296 404 400 312 400 224
+           C 400 152 344 88 256 88Z"
+        fill="#1749C4" />
+
+  <!-- Stream lines: three parallel flows converging forward -->
+  <!-- Top stream -->
+  <path d="M160 180 C 200 180 240 200 280 210 C 320 220 360 210 380 200"
+        stroke="#FFFFFF" stroke-width="14" stroke-linecap="round" fill="none" opacity="0.9"/>
+  <!-- Middle stream (main, brightest) -->
+  <path d="M140 240 C 190 240 230 250 280 250 C 330 250 370 240 400 230"
+        stroke="#FFFFFF" stroke-width="18" stroke-linecap="round" fill="none"/>
+  <!-- Bottom stream -->
+  <path d="M170 300 C 210 300 250 290 290 285 C 330 280 360 285 380 290"
+        stroke="#FFFFFF" stroke-width="14" stroke-linecap="round" fill="none" opacity="0.9"/>
+
+  <!-- Arrow tip on middle stream — forward momentum -->
+  <polygon points="392,220 420,240 392,260" fill="#FFFFFF"/>
+
+  <!-- Teal accent dot — the "ownership handoff" point -->
+  <circle cx="280" cy="250" r="16" fill="#0EA5A0"/>
+  <circle cx="280" cy="250" r="8" fill="#FFFFFF"/>
+</svg>

@@ -88,9 +88,10 @@ mod tests {
 
     #[test]
     fn test_default_queue_depth_is_power_of_two_minus_one_or_reasonable() {
-        let depth = DEFAULT_QUEUE_DEPTH;
-        assert!(depth > 0);
-        assert!(depth <= 1024);
+        const _: () = {
+            assert!(DEFAULT_QUEUE_DEPTH > 0);
+            assert!(DEFAULT_QUEUE_DEPTH <= 1024);
+        };
     }
 
     #[test]

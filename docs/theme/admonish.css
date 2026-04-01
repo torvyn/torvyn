@@ -1,0 +1,312 @@
+/* =============================================================================
+   Torvyn Documentation — Admonition Box Styles
+   Semantic colors from oss_04_branding_and_identity.md
+   Compatible with mdbook-admonish and manual HTML admonitions
+   ============================================================================= */
+
+/* ---------------------------------------------------------------------------
+   Base Admonition
+   --------------------------------------------------------------------------- */
+.admonition,
+.warning,
+blockquote.admonish-note,
+blockquote.admonish-tip,
+blockquote.admonish-warning,
+blockquote.admonish-danger,
+blockquote.admonish-info,
+blockquote.admonish-example,
+blockquote.admonish-question,
+blockquote.admonish-abstract,
+blockquote.admonish-success,
+blockquote.admonish-failure,
+blockquote.admonish-bug {
+    border-left: 4px solid;
+    border-radius: 0 6px 6px 0;
+    padding: 0.85rem 1.0rem;
+    margin: 1.25rem 0;
+    font-size: 0.9375rem;
+    line-height: 1.6;
+}
+
+/* Admonition title */
+.admonition-title,
+.admonish-title,
+blockquote[class*="admonish-"] > .admonition-title {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-weight: 600;
+    font-size: 0.9375rem;
+    margin-bottom: 0.4rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+/* Admonition content */
+.admonition p:last-child,
+blockquote[class*="admonish-"] p:last-child {
+    margin-bottom: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Note / Info — Forge Blue / Info Blue
+   --------------------------------------------------------------------------- */
+.admonish-note,
+.admonition.note {
+    border-left-color: #2563EB;
+}
+
+.light .admonish-note,
+.rust .admonish-note,
+.light .admonition.note,
+.rust .admonition.note {
+    background-color: rgba(37, 99, 235, 0.06);
+}
+
+.navy .admonish-note,
+.coal .admonish-note,
+.ayu .admonish-note,
+.navy .admonition.note,
+.coal .admonition.note,
+.ayu .admonition.note {
+    background-color: rgba(37, 99, 235, 0.1);
+}
+
+.admonish-note .admonition-title,
+.admonition.note .admonition-title {
+    color: #2563EB;
+}
+
+/* ---------------------------------------------------------------------------
+   Tip / Success — Circuit Teal / Success Green
+   --------------------------------------------------------------------------- */
+.admonish-tip,
+.admonish-success,
+.admonition.tip,
+.admonition.success {
+    border-left-color: #16A34A;
+}
+
+.light .admonish-tip,
+.rust .admonish-tip,
+.light .admonish-success,
+.rust .admonish-success,
+.light .admonition.tip,
+.rust .admonition.tip,
+.light .admonition.success,
+.rust .admonition.success {
+    background-color: rgba(22, 163, 74, 0.06);
+}
+
+.navy .admonish-tip,
+.coal .admonish-tip,
+.ayu .admonish-tip,
+.navy .admonish-success,
+.coal .admonish-success,
+.ayu .admonish-success,
+.navy .admonition.tip,
+.coal .admonition.tip,
+.ayu .admonition.tip,
+.navy .admonition.success,
+.coal .admonition.success,
+.ayu .admonition.success {
+    background-color: rgba(22, 163, 74, 0.1);
+}
+
+.admonish-tip .admonition-title,
+.admonish-success .admonition-title,
+.admonition.tip .admonition-title,
+.admonition.success .admonition-title {
+    color: #16A34A;
+}
+
+/* ---------------------------------------------------------------------------
+   Warning / Caution — Warning Yellow
+   --------------------------------------------------------------------------- */
+.admonish-warning,
+.admonition.warning,
+.warning {
+    border-left-color: #CA8A04;
+}
+
+.light .admonish-warning,
+.rust .admonish-warning,
+.light .admonition.warning,
+.rust .admonition.warning,
+.light .warning {
+    background-color: rgba(202, 138, 4, 0.06);
+}
+
+.navy .admonish-warning,
+.coal .admonish-warning,
+.ayu .admonish-warning,
+.navy .admonition.warning,
+.coal .admonition.warning,
+.ayu .admonition.warning,
+.navy .warning,
+.coal .warning,
+.ayu .warning {
+    background-color: rgba(202, 138, 4, 0.1);
+}
+
+.admonish-warning .admonition-title,
+.admonition.warning .admonition-title {
+    color: #CA8A04;
+}
+
+/* ---------------------------------------------------------------------------
+   Danger / Error — Rust Ember / Error Red
+   --------------------------------------------------------------------------- */
+.admonish-danger,
+.admonish-failure,
+.admonish-bug,
+.admonition.danger,
+.admonition.failure,
+.admonition.bug {
+    border-left-color: #DC2626;
+}
+
+.light .admonish-danger,
+.rust .admonish-danger,
+.light .admonish-failure,
+.rust .admonish-failure,
+.light .admonish-bug,
+.rust .admonish-bug,
+.light .admonition.danger,
+.rust .admonition.danger,
+.light .admonition.failure,
+.rust .admonition.failure,
+.light .admonition.bug,
+.rust .admonition.bug {
+    background-color: rgba(220, 38, 38, 0.06);
+}
+
+.navy .admonish-danger,
+.coal .admonish-danger,
+.ayu .admonish-danger,
+.navy .admonish-failure,
+.coal .admonish-failure,
+.ayu .admonish-failure,
+.navy .admonish-bug,
+.coal .admonish-bug,
+.ayu .admonish-bug,
+.navy .admonition.danger,
+.coal .admonition.danger,
+.ayu .admonition.danger,
+.navy .admonition.failure,
+.coal .admonition.failure,
+.ayu .admonition.failure,
+.navy .admonition.bug,
+.coal .admonition.bug,
+.ayu .admonition.bug {
+    background-color: rgba(220, 38, 38, 0.1);
+}
+
+.admonish-danger .admonition-title,
+.admonish-failure .admonition-title,
+.admonish-bug .admonition-title,
+.admonition.danger .admonition-title,
+.admonition.failure .admonition-title,
+.admonition.bug .admonition-title {
+    color: #DC2626;
+}
+
+/* ---------------------------------------------------------------------------
+   Info — Info Blue (alias to note for mdbook-admonish compatibility)
+   --------------------------------------------------------------------------- */
+.admonish-info,
+.admonition.info {
+    border-left-color: #2563EB;
+}
+
+.light .admonish-info,
+.rust .admonish-info,
+.light .admonition.info,
+.rust .admonition.info {
+    background-color: rgba(37, 99, 235, 0.06);
+}
+
+.navy .admonish-info,
+.coal .admonish-info,
+.ayu .admonish-info,
+.navy .admonition.info,
+.coal .admonition.info,
+.ayu .admonition.info {
+    background-color: rgba(37, 99, 235, 0.1);
+}
+
+.admonish-info .admonition-title,
+.admonition.info .admonition-title {
+    color: #2563EB;
+}
+
+/* ---------------------------------------------------------------------------
+   Example — Circuit Teal
+   --------------------------------------------------------------------------- */
+.admonish-example,
+.admonition.example {
+    border-left-color: #0EA5A0;
+}
+
+.light .admonish-example,
+.rust .admonish-example,
+.light .admonition.example,
+.rust .admonition.example {
+    background-color: rgba(14, 165, 160, 0.06);
+}
+
+.navy .admonish-example,
+.coal .admonish-example,
+.ayu .admonish-example,
+.navy .admonition.example,
+.coal .admonition.example,
+.ayu .admonition.example {
+    background-color: rgba(14, 165, 160, 0.1);
+}
+
+.admonish-example .admonition-title,
+.admonition.example .admonition-title {
+    color: #0EA5A0;
+}
+
+/* ---------------------------------------------------------------------------
+   Question / Abstract — Forge Blue
+   --------------------------------------------------------------------------- */
+.admonish-question,
+.admonish-abstract,
+.admonition.question,
+.admonition.abstract {
+    border-left-color: #1E5EF0;
+}
+
+.light .admonish-question,
+.rust .admonish-question,
+.light .admonish-abstract,
+.rust .admonish-abstract,
+.light .admonition.question,
+.rust .admonition.question,
+.light .admonition.abstract,
+.rust .admonition.abstract {
+    background-color: rgba(30, 94, 240, 0.06);
+}
+
+.navy .admonish-question,
+.coal .admonish-question,
+.ayu .admonish-question,
+.navy .admonish-abstract,
+.coal .admonish-abstract,
+.ayu .admonish-abstract,
+.navy .admonition.question,
+.coal .admonition.question,
+.ayu .admonition.question,
+.navy .admonition.abstract,
+.coal .admonition.abstract,
+.ayu .admonition.abstract {
+    background-color: rgba(30, 94, 240, 0.1);
+}
+
+.admonish-question .admonition-title,
+.admonish-abstract .admonition-title,
+.admonition.question .admonition-title,
+.admonition.abstract .admonition-title {
+    color: #1E5EF0;
+}

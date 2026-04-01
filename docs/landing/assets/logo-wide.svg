@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 64" fill="none">
+  <!-- Torvyn logo: icon + wordmark (horizontal layout for headers, README) -->
+
+  <!-- Icon (scaled down shield+flow) -->
+  <path d="M32 4 C22 4 14 11 14 19 C14 28 27 38 32 40 C37 38 50 28 50 19 C50 11 42 4 32 4Z" fill="#1E5EF0"/>
+  <path d="M20 20 C24 20 28 21.5 33 21.5 C38 21.5 42 20 45 19" stroke="#FFF" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+  <polygon points="43.5,17.5 47,20 43.5,22.5" fill="#FFF"/>
+  <circle cx="32" cy="21.5" r="2" fill="#0EA5A0"/>
+
+  <!-- Wordmark -->
+  <text x="62" y="38" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
+        font-size="30" font-weight="700" letter-spacing="-0.5" fill="#0F172A">Torvyn</text>
+</svg>

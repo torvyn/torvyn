@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Torvyn — Ownership-Aware Reactive Streaming Runtime</title>
+
+    <meta name="description" content="Compose safe, low-latency streaming pipelines from typed components. Torvyn is an ownership-aware reactive runtime built in Rust on the WebAssembly Component Model.">
+    <meta name="keywords" content="torvyn, webassembly, wasm, streaming, rust, component model, reactive, backpressure, ownership, pipeline, stream processing">
+    <meta name="author" content="Torvyn Contributors">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://torvyn.github.io/torvyn/">
+
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://torvyn.github.io/torvyn/">
+    <meta property="og:title" content="Torvyn — Ownership-Aware Reactive Streaming Runtime">
+    <meta property="og:description" content="Compose safe, low-latency streaming pipelines from typed components. Built in Rust on the WebAssembly Component Model.">
+    <meta property="og:image" content="https://torvyn.github.io/torvyn/assets/og-image.png">
+    <meta property="og:site_name" content="Torvyn">
+
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Torvyn — Ownership-Aware Reactive Streaming Runtime">
+    <meta name="twitter:description" content="Compose safe, low-latency streaming pipelines from typed components. Built in Rust on the WebAssembly Component Model.">
+    <meta name="twitter:image" content="https://torvyn.github.io/torvyn/assets/og-image.png">
+
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareSourceCode",
+        "name": "Torvyn",
+        "description": "Ownership-aware reactive streaming runtime for WebAssembly components",
+        "programmingLanguage": "Rust",
+        "license": "https://opensource.org/licenses/Apache-2.0",
+        "codeRepository": "https://github.com/torvyn/torvyn",
+        "url": "https://torvyn.github.io/torvyn/",
+        "author": { "@type": "Organization", "name": "Torvyn Contributors" },
+        "keywords": ["webassembly", "streaming", "rust", "reactive", "wasm", "component model"]
+    }
+    </script>
+
+    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html { scroll-behavior: smooth; }
+
+        :root {
+            --blue: #1E5EF0;
+            --blue-hover: #1a4fd0;
+            --teal: #0EA5A0;
+            --ember: #E04E2D;
+            --bg: #FFFFFF;
+            --bg-alt: #F7F8FA;
+            --border: #E5E7EB;
+            --text: #0F172A;
+            --text-body: #374151;
+            --text-dim: #6B7280;
+            --code-bg: #0F1117;
+            --code-text: #E5E7EB;
+            --code-border: rgba(255,255,255,0.06);
+        }
+        [data-theme="dark"] {
+            --bg: #0F1117;
+            --bg-alt: #181C26;
+            --border: #2D3348;
+            --text: #F1F5F9;
+            --text-body: #D1D5DB;
+            --text-dim: #9CA3AF;
+            --code-bg: #0a0c12;
+            --code-border: rgba(255,255,255,0.04);
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            color: var(--text-body); background: var(--bg);
+            -webkit-font-smoothing: antialiased; line-height: 1.6;
+        }
+        code, pre { font-family: 'JetBrains Mono', monospace; }
+        a { color: var(--blue); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        .container { max-width: 1080px; margin: 0 auto; padding: 0 1.5rem; }
+        .skip-nav { position: absolute; top: -100%; left: 0; background: var(--blue); color: #fff; padding: 0.5rem 1rem; z-index: 1000; }
+        .skip-nav:focus { top: 0; }
+
+        /* ── Header ── */
+        .header {
+            position: sticky; top: 0; z-index: 100;
+            background: var(--bg); border-bottom: 1px solid var(--border);
+        }
+        .header-inner {
+            display: flex; align-items: center; justify-content: space-between;
+            height: 52px; max-width: 1080px; margin: 0 auto; padding: 0 1.5rem;
+        }
+        .logo { display: flex; align-items: center; gap: 0.5rem; color: var(--text); text-decoration: none; font-weight: 700; font-size: 1rem; }
+        .logo img { width: 22px; height: 22px; }
+        .nav { display: flex; align-items: center; gap: 1.25rem; }
+        .nav a { font-size: 0.8125rem; font-weight: 500; color: var(--text-dim); text-decoration: none; }
+        .nav a:hover { color: var(--text); text-decoration: none; }
+        .theme-btn {
+            background: none; border: 1px solid var(--border); border-radius: 4px;
+            padding: 2px 7px; cursor: pointer; color: var(--text-dim); font-size: 0.875rem; line-height: 1;
+        }
+        .theme-btn:hover { color: var(--text); }
+
+        /* ── Hero ── */
+        .hero { padding: 4rem 0 3rem; }
+        .hero h1 {
+            font-size: 2.5rem; font-weight: 700; line-height: 1.12;
+            letter-spacing: -0.025em; color: var(--text); width: 100%;
+            white-space: nowrap;
+        }
+        .hero-sub {
+            margin-top: 1rem; font-size: 1.0625rem; color: var(--text-dim);
+            line-height: 1.65; width: 100%;
+        }
+        .hero-actions {
+            margin-top: 1.5rem; display: flex; align-items: center; gap: 0.625rem; flex-wrap: wrap;
+        }
+        .btn {
+            display: inline-flex; align-items: center; gap: 0.4rem;
+            padding: 0.5rem 1.125rem; border-radius: 6px;
+            font-size: 0.875rem; font-weight: 600; text-decoration: none; border: none; cursor: pointer;
+        }
+        .btn:hover { text-decoration: none; }
+        .btn-p { background: var(--blue); color: #fff; }
+        .btn-p:hover { background: var(--blue-hover); color: #fff; }
+        .btn-s { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+        .btn-s:hover { background: var(--bg-alt); color: var(--text); }
+        .install {
+            display: inline-flex; align-items: center; gap: 0.5rem;
+            background: var(--bg-alt); border: 1px solid var(--border); border-radius: 6px;
+            padding: 0.4rem 0.75rem; font-size: 0.8125rem;
+        }
+        .install .dollar { color: var(--text-dim); font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; }
+        .install code { color: var(--text); font-size: 0.8125rem; }
+
+        /* ── Section defaults ── */
+        .section { padding: 3.5rem 0; }
+        .section-alt { background: var(--bg-alt); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+        .section-title {
+            font-size: 1.5rem; font-weight: 700; color: var(--text);
+            letter-spacing: -0.015em; margin-bottom: 0.375rem;
+        }
+        .section-desc { color: var(--text-dim); font-size: 0.9375rem; margin-bottom: 2rem; }
+
+        /* ── Why Torvyn ── */
+        .why-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.25rem; }
+        .why-card { padding: 1.25rem; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+        .why-card h3 { font-size: 0.9375rem; font-weight: 600; color: var(--text); margin-bottom: 0.25rem; }
+        .why-card p { font-size: 0.8125rem; color: var(--text-dim); line-height: 1.55; }
+
+        /* ── Code + How it works ── */
+        .code-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; align-items: start; }
+        .code-panel {
+            background: var(--code-bg); border-radius: 8px; border: 1px solid var(--code-border);
+            overflow: hidden;
+        }
+        .code-header {
+            padding: 0.4rem 0.875rem; background: rgba(255,255,255,0.03);
+            border-bottom: 1px solid var(--code-border);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .code-file { font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; font-weight: 600; color: var(--teal); }
+        .code-lang { font-size: 0.625rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: rgba(255,255,255,0.25); }
+        .code-panel pre {
+            padding: 0.75rem 0.875rem; overflow-x: auto;
+            font-size: 0.75rem; line-height: 1.6; color: var(--code-text); margin: 0;
+        }
+        .t-kw { color: #C792EA; } .t-ty { color: #FFCB6B; } .t-fn { color: #82AAFF; } .t-op { color: #89DDFF; }
+
+        .steps { list-style: none; }
+        .steps li { display: flex; gap: 0.75rem; margin-bottom: 1.25rem; }
+        .step-num {
+            flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%;
+            background: var(--blue); color: #fff; font-weight: 700; font-size: 0.75rem;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .steps h4 { font-size: 0.875rem; font-weight: 600; color: var(--text); }
+        .steps p { font-size: 0.8125rem; color: var(--text-dim); line-height: 1.5; }
+
+        /* ── Comparison ── */
+        .cmp-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+        .cmp-table th, .cmp-table td { padding: 0.625rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
+        .cmp-table thead th { font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); background: var(--bg-alt); }
+        .cmp-table td { color: var(--text-dim); }
+        .cmp-table td:first-child { color: var(--text); font-weight: 500; }
+        .cmp-table td:last-child { color: var(--blue); font-weight: 600; }
+
+        /* ── Use cases ── */
+        .uc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; }
+        .uc-card {
+            display: block; padding: 1.25rem; border: 1px solid var(--border); border-radius: 8px;
+            background: var(--bg); text-decoration: none; color: inherit;
+            transition: border-color 0.15s;
+        }
+        .uc-card:hover { border-color: var(--teal); text-decoration: none; color: inherit; }
+        .uc-card h3 { font-size: 0.9375rem; font-weight: 600; color: var(--text); margin-bottom: 0.25rem; }
+        .uc-card p { font-size: 0.8125rem; color: var(--text-dim); line-height: 1.5; }
+        .uc-arrow { display: inline-flex; align-items: center; gap: 0.25rem; margin-top: 0.5rem; color: var(--teal); font-size: 0.75rem; font-weight: 600; }
+
+        /* ── Quick start ── */
+        .qs-list {
+            display: grid; grid-template-columns: 180px 1fr; gap: 1.25rem 3rem;
+            align-items: center; max-width: 680px;
+        }
+        .qs-info h3 { font-size: 0.875rem; font-weight: 600; color: var(--text); line-height: 1.3; }
+        .qs-info p { font-size: 0.75rem; color: var(--text-dim); line-height: 1.4; }
+        .qs-cmd {
+            display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+            background: var(--code-bg); color: var(--code-text);
+            padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid var(--code-border);
+            font-family: 'JetBrains Mono', monospace; font-size: 0.8125rem;
+            min-width: 280px;
+        }
+        .qs-cmd code { white-space: nowrap; }
+        .copy-btn {
+            background: none; border: none; cursor: pointer; padding: 2px;
+            color: rgba(255,255,255,0.3); display: flex; align-items: center;
+            transition: color 0.15s;
+        }
+        .copy-btn:hover { color: rgba(255,255,255,0.6); }
+        .copy-btn svg { width: 14px; height: 14px; transition: opacity 0.2s, transform 0.2s; }
+        .copy-btn .icon-check { position: absolute; opacity: 0; transform: scale(0.8); color: #16A34A; }
+        .copy-btn .icon-copy { opacity: 1; transform: scale(1); }
+        .copy-btn.copied .icon-copy { opacity: 0; transform: scale(0.8); }
+        .copy-btn.copied .icon-check { opacity: 1; transform: scale(1); position: static; }
+
+        /* ── Diagram ── */
+        .diagram-wrap {
+            border: 1px solid var(--border); border-radius: 8px;
+            background: var(--bg); overflow: hidden;
+        }
+        .diagram-wrap .mermaid {
+            display: flex; justify-content: center; align-items: center;
+            padding: 2rem 1.5rem; min-height: 180px;
+        }
+        .diagram-wrap .mermaid svg { max-width: 100%; height: auto; }
+        .diagram-label {
+            font-size: 0.6875rem; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.08em; color: var(--text-dim); padding: 0.5rem 0.875rem 0;
+        }
+        .diagram-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+        @media (max-width: 768px) { .diagram-grid { grid-template-columns: 1fr; } }
+
+        /* ── Pipeline flow ── */
+        .pipeline-flow {
+            display: flex; align-items: flex-start; gap: 0;
+            overflow-x: auto; padding: 0.5rem 0;
+        }
+        .pipeline-step {
+            flex: 1; min-width: 140px; text-align: center;
+            display: flex; flex-direction: column; align-items: center;
+        }
+        .pipeline-icon {
+            width: 40px; height: 40px; border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            margin-bottom: 0.625rem;
+        }
+        .pipeline-label { font-size: 0.875rem; font-weight: 600; color: var(--text); margin-bottom: 0.25rem; }
+        .pipeline-detail { font-size: 0.6875rem; color: var(--text-dim); line-height: 1.45; max-width: 160px; margin-bottom: 0.5rem; }
+        .pipeline-cmd {
+            font-size: 0.6875rem; background: var(--bg-alt); border: 1px solid var(--border);
+            border-radius: 4px; padding: 0.2rem 0.5rem;
+        }
+        .pipeline-cmd code { font-size: 0.6875rem; color: var(--text); }
+        .pipeline-arrow {
+            display: flex; align-items: center; padding-top: 0.5rem; flex-shrink: 0;
+        }
+        @media (max-width: 768px) {
+            .pipeline-flow { flex-direction: column; align-items: stretch; }
+            .pipeline-step { flex-direction: row; text-align: left; gap: 0.75rem; min-width: 0; }
+            .pipeline-icon { margin-bottom: 0; flex-shrink: 0; }
+            .pipeline-detail { max-width: none; }
+            .pipeline-arrow { justify-content: center; transform: rotate(90deg); padding: 0; }
+        }
+
+        /* ── CTA ── */
+        .cta { text-align: center; padding: 3.5rem 0; }
+        .cta h2 { font-size: 1.5rem; font-weight: 700; color: var(--text); margin-bottom: 0.5rem; }
+        .cta p { color: var(--text-dim); font-size: 0.9375rem; max-width: 440px; margin: 0 auto 1.5rem; }
+        .cta .btn-group { display: flex; gap: 0.625rem; justify-content: center; flex-wrap: wrap; }
+
+        /* ── Footer ── */
+        .footer { border-top: 1px solid var(--border); padding: 1.5rem 0; }
+        .footer-inner { display: flex; align-items: center; justify-content: space-between; font-size: 0.75rem; color: var(--text-dim); }
+        .footer-inner strong { color: var(--text); }
+        .footer-links { display: flex; gap: 1rem; }
+        .footer-links a { color: var(--text-dim); text-decoration: none; }
+        .footer-links a:hover { color: var(--text); }
+
+        /* ── Responsive ── */
+        @media (max-width: 1024px) {
+            .why-grid { grid-template-columns: repeat(2, 1fr); }
+            .uc-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 1.875rem; }
+            .hero { padding: 2.5rem 0 2rem; }
+            .why-grid, .uc-grid { grid-template-columns: 1fr; }
+            .qs-list { grid-template-columns: 1fr; }
+            .code-grid { grid-template-columns: 1fr; }
+            .nav a { display: none; }
+            .nav a:first-child, .nav a:last-child { display: inline; }
+            .footer-inner { flex-direction: column; gap: 1rem; text-align: center; }
+        }
+    </style>
+</head>
+<body>
+
+<a href="#main" class="skip-nav">Skip to content</a>
+
+<header class="header">
+    <div class="header-inner">
+        <a href="/" class="logo">
+            <img src="assets/favicon.svg" alt="" width="22" height="22">
+            Torvyn
+        </a>
+        <nav class="nav">
+            <a href="docs/index.html">Docs</a>
+            <a href="api/torvyn_types/index.html">API</a>
+            <a href="docs/examples/hello-world.html">Examples</a>
+            <a href="docs/blog/launch-announcement.html">Blog</a>
+            <a href="https://github.com/torvyn/torvyn" target="_blank" rel="noopener">GitHub</a>
+            <button class="theme-btn" onclick="toggleTheme()" aria-label="Toggle theme">&#9790;</button>
+        </nav>
+    </div>
+</header>
+
+<main id="main">
+
+    <!-- Hero -->
+    <section class="hero">
+        <div class="container">
+            <h1>Safe streaming pipelines from typed Wasm&nbsp;components.</h1>
+            <p class="hero-sub">
+                Torvyn is an ownership-aware reactive runtime built in Rust on the WebAssembly Component Model.
+                Define contracts in WIT, implement in any language, compose pipelines with built-in backpressure and&nbsp;tracing.
+            </p>
+            <div class="hero-actions">
+                <a href="docs/getting-started/quickstart.html" class="btn btn-p">Get Started &rarr;</a>
+                <a href="https://github.com/torvyn/torvyn" class="btn btn-s" target="_blank" rel="noopener">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+                    GitHub
+                </a>
+                <div class="install">
+                    <span class="dollar">$</span>
+                    <code>cargo install torvyn</code>
+                    <button class="copy-btn" style="color: var(--text-dim);" onclick="copyCmd(this, 'cargo install torvyn')" aria-label="Copy command">
+                        <svg class="icon-copy" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                        <svg class="icon-check" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                    </button>
+                </div>
+                <a href="https://crates.io/crates/torvyn" class="btn btn-s" target="_blank" rel="noopener" style="background: none; border: none; padding: 0.5rem 0.25rem; color: var(--blue); font-weight: 500;">crates.io &nearr;</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- How Torvyn Works — Diagram -->
+    <section class="section">
+        <div class="container">
+            <h2 class="section-title">Overview</h2>
+            <p class="section-desc">Define typed contracts, compile components to Wasm, and let the host runtime handle scheduling, ownership, and observability.</p>
+            <div class="diagram-wrap">
+                <div class="mermaid">
+graph LR
+    W["Define WIT Contract"] --> C["Compile to Wasm"]
+    C --> L["torvyn link"]
+    L --> HOST
+
+    subgraph HOST ["Host Runtime"]
+        direction TB
+        R["Reactor"]
+        RM["Resource Manager"]
+        O["Observability"]
+    end
+
+    HOST --> SRC["Source"]
+    SRC --> PROC["Processor"]
+    PROC --> SNK["Sink"]
+    RM -.- SRC
+    RM -.- PROC
+    RM -.- SNK
+
+    classDef dev fill:#1E5EF0,stroke:#1a4fd0,color:#fff
+    classDef host fill:#0EA5A0,stroke:#0c918d,color:#fff
+    classDef comp fill:#242938,stroke:#3D4458,color:#E5E7EB
+
+    class W,C,L dev
+    class R,RM,O host
+    class SRC,PROC,SNK comp
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Why Torvyn -->
+    <section class="section section-alt">
+        <div class="container">
+            <h2 class="section-title">Why Torvyn</h2>
+            <p class="section-desc">Six engineering properties designed to work together, not bolted on after the fact.</p>
+            <div class="why-grid">
+                <div class="why-card">
+                    <h3>Contract-First Composition</h3>
+                    <p>Typed WIT contracts govern every interaction. <code>torvyn link</code> validates compatibility before runtime.</p>
+                </div>
+                <div class="why-card">
+                    <h3>Ownership-Aware Resources</h3>
+                    <p>Host-managed buffers with borrow, transfer, and copy semantics. Every byte tracked and accounted for.</p>
+                </div>
+                <div class="why-card">
+                    <h3>Reactive Backpressure</h3>
+                    <p>Credit-based demand propagation. No unbounded queues. Block, drop, or rate-limit per stream.</p>
+                </div>
+                <div class="why-card">
+                    <h3>Capability-Based Sandboxing</h3>
+                    <p>Deny-all by default. Each Wasm component receives only explicitly granted permissions.</p>
+                </div>
+                <div class="why-card">
+                    <h3>Production Observability</h3>
+                    <p>Native OpenTelemetry. Per-flow traces, metrics, copy accounting, and backpressure diagnostics.</p>
+                </div>
+                <div class="why-card">
+                    <h3>Portable Packaging</h3>
+                    <p>OCI-compatible artifacts. Same binary runs on cloud, edge, dev, and on-prem environments.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Buffer Ownership + Backpressure Diagrams -->
+    <section class="section">
+        <div class="container">
+            <h2 class="section-title">Under the Hood</h2>
+            <p class="section-desc">Two mechanisms that make Torvyn different: explicit buffer ownership tracking and credit-based backpressure propagation.</p>
+            <div class="diagram-grid">
+                <div class="diagram-wrap">
+                    <div class="diagram-label">Buffer Ownership Lifecycle</div>
+                    <div class="mermaid">
+stateDiagram-v2
+    [*] --> Pooled
+    Pooled --> Owned : allocate
+    Owned --> Frozen : freeze after write
+    Frozen --> Borrowed : lend to component
+    Borrowed --> Frozen : component returns
+    Frozen --> Pooled : release
+    Owned --> Pooled : release
+                    </div>
+                </div>
+                <div class="diagram-wrap">
+                    <div class="diagram-label">Credit-Based Backpressure</div>
+                    <div class="mermaid">
+sequenceDiagram
+    participant Sink
+    participant Processor
+    participant Source
+    Sink->>Processor: grant 10 credits
+    Processor->>Source: grant 10 credits
+    Source->>Processor: emit element (9 left)
+    Processor->>Sink: emit element (9 left)
+    Note over Sink: slow consumer
+    Note over Processor: 0 credits, paused
+    Note over Source: 0 credits, paused
+    Sink->>Processor: grant 5 credits
+    Processor->>Source: grant 5 credits
+    Source->>Processor: resume
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Code Example + How It Works -->
+    <section class="section section-alt">
+        <div class="container">
+            <h2 class="section-title">Define. Implement. Compose. Trace.</h2>
+            <p class="section-desc">A WIT contract specifies the interface. A component implements it. A config wires stages together. The runtime handles everything else.</p>
+            <div class="code-grid">
+                <div class="code-panel">
+                    <div class="code-header">
+                        <span class="code-file">streaming.wit</span>
+                        <span class="code-lang">WIT</span>
+                    </div>
+                    <pre><code><span class="t-kw">package</span> torvyn:streaming@0.1.0;
+
+<span class="t-kw">interface</span> types {
+    <span class="t-kw">resource</span> <span class="t-ty">buffer</span>;
+    <span class="t-kw">record</span> <span class="t-ty">packet-meta</span> {
+        trace-id<span class="t-op">:</span> <span class="t-ty">string</span>,
+        content-type<span class="t-op">:</span> <span class="t-ty">string</span>,
+        timestamp-ns<span class="t-op">:</span> <span class="t-ty">u64</span>,
+    }
+    <span class="t-kw">record</span> <span class="t-ty">stream-element</span> {
+        meta<span class="t-op">:</span> <span class="t-ty">packet-meta</span>,
+        payload<span class="t-op">:</span> <span class="t-kw">borrow</span><span class="t-op">&lt;</span><span class="t-ty">buffer</span><span class="t-op">&gt;</span>,
+    }
+    <span class="t-kw">variant</span> <span class="t-ty">process-error</span> {
+        invalid-input(<span class="t-ty">string</span>),
+        unavailable(<span class="t-ty">string</span>),
+        internal(<span class="t-ty">string</span>),
+    }
+}
+
+<span class="t-kw">interface</span> processor {
+    <span class="t-kw">use</span> types.{stream-element, process-error};
+    <span class="t-fn">process</span><span class="t-op">:</span> <span class="t-kw">func</span>(input<span class="t-op">:</span> <span class="t-ty">stream-element</span>)
+        <span class="t-op">-&gt;</span> <span class="t-kw">result</span><span class="t-op">&lt;</span><span class="t-ty">stream-element</span>, <span class="t-ty">process-error</span><span class="t-op">&gt;</span>;
+}</code></pre>
+                </div>
+                <div>
+                    <ol class="steps">
+                        <li>
+                            <div class="step-num">1</div>
+                            <div>
+                                <h4>Define contracts</h4>
+                                <p>Write a WIT interface specifying inputs, outputs, and error types. This is the source of truth for every component boundary.</p>
+                            </div>
+                        </li>
+                        <li>
+                            <div class="step-num">2</div>
+                            <div>
+                                <h4>Implement components</h4>
+                                <p>Write your domain logic in Rust, C, Go, or any language that compiles to WebAssembly. No runtime boilerplate.</p>
+                            </div>
+                        </li>
+                        <li>
+                            <div class="step-num">3</div>
+                            <div>
+                                <h4>Compose a pipeline</h4>
+                                <p>Wire stages together in TOML. The linker validates all contracts before a single byte flows through the system.</p>
+                            </div>
+                        </li>
+                        <li>
+                            <div class="step-num">4</div>
+                            <div>
+                                <h4>Run with full observability</h4>
+                                <p>Launch with per-stage latency, copy accounting, backpressure metrics, and OpenTelemetry traces — out of the box.</p>
+                            </div>
+                        </li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Developer Toolchain -->
+    <section class="section">
+        <div class="container">
+            <h2 class="section-title">Developer Toolchain</h2>
+            <p class="section-desc">Every stage validates correctness. Contract mismatches, missing capabilities, and cyclic dependencies are caught before runtime — not in production.</p>
+            <div class="pipeline-flow">
+                <div class="pipeline-step">
+                    <div class="pipeline-icon" style="background: #242938; color: #E5E7EB;">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+                    </div>
+                    <div class="pipeline-label">Define</div>
+                    <div class="pipeline-detail">Write <code>.wit</code> contracts specifying typed interfaces, data types, and error variants.</div>
+                    <div class="pipeline-cmd"><code>*.wit</code></div>
+                </div>
+                <div class="pipeline-arrow"><svg width="24" height="24" fill="none" stroke="var(--text-faint)" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12h14M13 5l7 7-7 7"/></svg></div>
+                <div class="pipeline-step">
+                    <div class="pipeline-icon" style="background: var(--blue); color: #fff;">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                    </div>
+                    <div class="pipeline-label">Check</div>
+                    <div class="pipeline-detail">Validate WIT syntax, semantic correctness, and type consistency.</div>
+                    <div class="pipeline-cmd"><code>torvyn check</code></div>
+                </div>
+                <div class="pipeline-arrow"><svg width="24" height="24" fill="none" stroke="var(--text-faint)" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12h14M13 5l7 7-7 7"/></svg></div>
+                <div class="pipeline-step">
+                    <div class="pipeline-icon" style="background: var(--blue); color: #fff;">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 7h3a1 1 0 001-1V4m0 0L4 8m4-4v12a2 2 0 002 2h8a2 2 0 002-2V8l-4-4H8z"/></svg>
+                    </div>
+                    <div class="pipeline-label">Build</div>
+                    <div class="pipeline-detail">Compile components to Wasm from Rust, C, Go, or any supported language.</div>
+                    <div class="pipeline-cmd"><code>torvyn build</code></div>
+                </div>
+                <div class="pipeline-arrow"><svg width="24" height="24" fill="none" stroke="var(--text-faint)" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12h14M13 5l7 7-7 7"/></svg></div>
+                <div class="pipeline-step">
+                    <div class="pipeline-icon" style="background: var(--blue); color: #fff;">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+                    </div>
+                    <div class="pipeline-label">Link</div>
+                    <div class="pipeline-detail">Verify contract compatibility across all components. Detect cycles and missing capabilities.</div>
+                    <div class="pipeline-cmd"><code>torvyn link</code></div>
+                </div>
+                <div class="pipeline-arrow"><svg width="24" height="24" fill="none" stroke="var(--text-faint)" stroke-width="2" viewBox="0 0 24 24"><path d="M5 12h14M13 5l7 7-7 7"/></svg></div>
+                <div class="pipeline-step">
+                    <div class="pipeline-icon" style="background: var(--teal); color: #fff;">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    </div>
+                    <div class="pipeline-label">Run</div>
+                    <div class="pipeline-detail">Launch the pipeline with OpenTelemetry tracing, backpressure, and per-flow diagnostics.</div>
+                    <div class="pipeline-cmd"><code>torvyn run</code></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Comparison -->
+    <section class="section section-alt">
+        <div class="container">
+            <h2 class="section-title">How Torvyn Compares</h2>
+            <p class="section-desc">Wasm-level isolation without network overhead. Typed contracts at every boundary. Built-in observability.</p>
+            <div style="overflow-x: auto; border: 1px solid var(--border); border-radius: 8px;">
+                <table class="cmp-table">
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th>Microservices</th>
+                            <th>Containers</th>
+                            <th>In-Process</th>
+                            <th>Torvyn</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Isolation</td><td>Process</td><td>OS</td><td>None</td><td>Wasm sandbox</td></tr>
+                        <tr><td>Contracts</td><td>Schema (lax)</td><td>None</td><td>None</td><td>WIT (strict)</td></tr>
+                        <tr><td>Boundary cost</td><td>~ms (network)</td><td>~100 &micro;s</td><td>~0</td><td>&lt; 5 &micro;s</td></tr>
+                        <tr><td>Polyglot</td><td>Yes</td><td>Yes</td><td>No</td><td>Yes (Wasm)</td></tr>
+                        <tr><td>Observability</td><td>Per-service</td><td>External</td><td>Manual</td><td>Built-in OTel</td></tr>
+                        <tr><td>Backpressure</td><td>Queue overflow</td><td>External</td><td>Manual</td><td>Credit-based</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p style="margin-top: 0.75rem;"><a href="docs/comparisons/vs-microservices.html" style="font-size: 0.8125rem; font-weight: 500;">See detailed comparisons &rarr;</a></p>
+        </div>
+    </section>
+
+    <!-- Use Cases -->
+    <section class="section">
+        <div class="container">
+            <h2 class="section-title">Where Torvyn Fits</h2>
+            <p class="section-desc">Same-node pipelines, edge processing, secure plugins, and event-driven architectures.</p>
+            <div class="uc-grid">
+                <a href="docs/use-cases/ai-inference.html" class="uc-card">
+                    <h3>AI Inference Pipelines</h3>
+                    <p>Compose preprocessing, scoring, and delivery as isolated, traced components.</p>
+                    <span class="uc-arrow">Read more &rarr;</span>
+                </a>
+                <a href="docs/use-cases/edge-processing.html" class="uc-card">
+                    <h3>Edge Processing</h3>
+                    <p>Lightweight Wasm pipelines at the edge with minimal footprint.</p>
+                    <span class="uc-arrow">Read more &rarr;</span>
+                </a>
+                <a href="docs/use-cases/event-driven.html" class="uc-card">
+                    <h3>Event-Driven</h3>
+                    <p>Contract-defined components with typed interfaces and bounded queuing.</p>
+                    <span class="uc-arrow">Read more &rarr;</span>
+                </a>
+                <a href="docs/use-cases/plugin-systems.html" class="uc-card">
+                    <h3>Secure Plugins</h3>
+                    <p>Third-party code in sandboxed Wasm with auditable capability grants.</p>
+                    <span class="uc-arrow">Read more &rarr;</span>
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Quick Start -->
+    <section class="section section-alt">
+        <div class="container">
+            <h2 class="section-title">Get Up and Running</h2>
+            <p class="section-desc">Three commands to a traced, backpressure-aware pipeline.</p>
+            <div class="qs-list">
+                <div class="qs-info"><h3>1. Install</h3><p>Install the CLI from crates.io.</p></div>
+                <div class="qs-cmd">
+                    <code>$ cargo install torvyn</code>
+                    <button class="copy-btn" onclick="copyCmd(this, 'cargo install torvyn')" aria-label="Copy command">
+                        <svg class="icon-copy" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                        <svg class="icon-check" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                    </button>
+                </div>
+
+                <div class="qs-info"><h3>2. Create a project</h3><p>Scaffold contracts and config.</p></div>
+                <div class="qs-cmd">
+                    <code>$ torvyn init my-pipeline</code>
+                    <button class="copy-btn" onclick="copyCmd(this, 'torvyn init my-pipeline')" aria-label="Copy command">
+                        <svg class="icon-copy" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                        <svg class="icon-check" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                    </button>
+                </div>
+
+                <div class="qs-info"><h3>3. Run</h3><p>Validate, link, and launch.</p></div>
+                <div class="qs-cmd">
+                    <code>$ torvyn run --trace</code>
+                    <button class="copy-btn" onclick="copyCmd(this, 'torvyn run --trace')" aria-label="Copy command">
+                        <svg class="icon-copy" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                        <svg class="icon-check" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="cta">
+        <div class="container">
+            <h2>Build something with Torvyn</h2>
+            <p>We are looking for early adopters. Try it, break it, tell us what worked and what did not.</p>
+            <div class="btn-group">
+                <a href="docs/getting-started/quickstart.html" class="btn btn-p">Get Started &rarr;</a>
+                <a href="https://github.com/torvyn/torvyn/discussions" class="btn btn-s" target="_blank" rel="noopener">Discussions</a>
+                <a href="https://github.com/torvyn/torvyn/blob/main/CONTRIBUTING.md" class="btn btn-s" target="_blank" rel="noopener">Contributing</a>
+            </div>
+        </div>
+    </section>
+
+</main>
+
+<footer class="footer">
+    <div class="container">
+        <div class="footer-inner">
+            <div><strong>Torvyn</strong> &mdash; Open source. Apache 2.0 with LLVM Exception.</div>
+            <nav class="footer-links">
+                <a href="docs/index.html">Docs</a>
+                <a href="api/torvyn_types/index.html">API</a>
+                <a href="docs/blog/launch-announcement.html">Blog</a>
+                <a href="docs/comparisons/vs-microservices.html">Comparisons</a>
+                <a href="https://github.com/torvyn/torvyn" target="_blank" rel="noopener">GitHub</a>
+            </nav>
+        </div>
+    </div>
+</footer>
+
+<script>
+    function getTheme() {
+        const s = localStorage.getItem('torvyn-theme');
+        if (s) return s;
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    function applyTheme(t) {
+        document.documentElement.setAttribute('data-theme', t);
+        localStorage.setItem('torvyn-theme', t);
+    }
+    function toggleTheme() {
+        const cur = document.documentElement.getAttribute('data-theme') || 'light';
+        applyTheme(cur === 'dark' ? 'light' : 'dark');
+    }
+    function copyCmd(btn, text) {
+        navigator.clipboard.writeText(text);
+        btn.classList.add('copied');
+        setTimeout(function() { btn.classList.remove('copied'); }, 1500);
+    }
+    applyTheme(getTheme());
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+    function renderMermaid() {
+        var dk = (document.documentElement.getAttribute('data-theme') || 'light') === 'dark';
+        mermaid.initialize({
+            startOnLoad: false,
+            theme: dk ? 'dark' : 'default',
+            themeVariables: dk ? {
+                primaryColor:'#1E5EF0', primaryTextColor:'#E5E7EB', primaryBorderColor:'#2D3348',
+                lineColor:'#6B7280', secondaryColor:'#0EA5A0', tertiaryColor:'#1B1F2A',
+                background:'#0F1117', mainBkg:'#1B1F2A', nodeBorder:'#2D3348',
+                edgeLabelBackground:'#1B1F2A'
+            } : {
+                primaryColor:'#1E5EF0', primaryTextColor:'#fff', primaryBorderColor:'#1a4fd0',
+                lineColor:'#9CA3AF', secondaryColor:'#0EA5A0', tertiaryColor:'#F9FAFB',
+                background:'#FFFFFF', mainBkg:'#F9FAFB', nodeBorder:'#E5E7EB',
+                edgeLabelBackground:'#F9FAFB'
+            },
+            flowchart: { curve: 'basis', padding: 12 },
+            fontFamily: 'Inter, sans-serif',
+            fontSize: 12
+        });
+        document.querySelectorAll('.mermaid').forEach(function(el) {
+            var id = 'mm-' + Math.random().toString(36).slice(2, 9);
+            var src = el.getAttribute('data-src') || el.textContent;
+            if (!el.getAttribute('data-src')) el.setAttribute('data-src', src);
+            mermaid.render(id, src).then(function(result) { el.innerHTML = result.svg; })
+                .catch(function(e) { console.warn('Mermaid error:', e); });
+        });
+    }
+    var origApply = applyTheme;
+    applyTheme = function(t) { origApply(t); renderMermaid(); };
+    renderMermaid();
+</script>
+
+</body>
+</html>

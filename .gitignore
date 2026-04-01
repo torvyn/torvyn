@@ -1,8 +1,9 @@
 **/target
 examples/**/bindings.rs
+_site/
+docs/book/
 *.swp
 *.swo
 *~
 .DS_Store
 Thumbs.db
-docs

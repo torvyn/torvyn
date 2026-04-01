@@ -1,0 +1,167 @@
+/* =============================================================================
+   Torvyn Rustdoc — Custom CSS Override
+   Visual consistency with the mdBook documentation site
+   Applied via RUSTDOCFLAGS="--extend-css docs/rustdoc-custom.css"
+   ============================================================================= */
+
+/* ---------------------------------------------------------------------------
+   Google Fonts
+   --------------------------------------------------------------------------- */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
+
+/* ---------------------------------------------------------------------------
+   Light Theme Overrides
+   --------------------------------------------------------------------------- */
+:root, body.light {
+    --main-background-color: #FFFFFF;
+    --main-color: #1B1F2A;
+    --settings-input-color: #1B1F2A;
+    --sidebar-background-color: #F9FAFB;
+    --sidebar-background-color-hover: #E5E7EB;
+    --code-block-background-color: #F9FAFB;
+    --scrollbar-track-background-color: #F9FAFB;
+    --scrollbar-thumb-background-color: #c4c4c4;
+    --scrollbar-color: #c4c4c4 #F9FAFB;
+    --headings-border-bottom-color: #E5E7EB;
+    --border-color: #E5E7EB;
+    --button-background-color: #FFFFFF;
+    --right-side-color: #6B7280;
+    --code-attribute-color: #1E5EF0;
+    --toggles-color: #6B7280;
+    --search-input-focused-border-color: #1E5EF0;
+    --copy-path-button-color: #6B7280;
+    --copy-path-img-filter: invert(50%);
+    --copy-path-img-hover-filter: invert(25%);
+    --codeblock-error-hover-color: #DC2626;
+    --codeblock-error-color: #E04E2D;
+    --codeblock-ignore-hover-color: #CA8A04;
+    --codeblock-ignore-color: #CA8A04;
+    --type-link-color: #1E5EF0;
+    --trait-link-color: #0EA5A0;
+    --assoc-item-link-color: #1E5EF0;
+    --function-link-color: #1E5EF0;
+    --macro-link-color: #16A34A;
+    --keyword-link-color: #1E5EF0;
+    --mod-link-color: #1E5EF0;
+    --link-color: #1E5EF0;
+    --sidebar-link-color: #1B1F2A;
+    --sidebar-current-link-background-color: rgba(30, 94, 240, 0.08);
+    --search-result-link-focus-background-color: rgba(30, 94, 240, 0.08);
+    --search-result-border-color: #E5E7EB;
+    --stab-background-color: rgba(202, 138, 4, 0.08);
+    --stab-code-color: #CA8A04;
+    --search-color: #1B1F2A;
+}
+
+/* ---------------------------------------------------------------------------
+   Dark Theme Overrides
+   --------------------------------------------------------------------------- */
+body.dark, body.ayu {
+    --main-background-color: #0F1117;
+    --main-color: #E5E7EB;
+    --settings-input-color: #E5E7EB;
+    --sidebar-background-color: #1B1F2A;
+    --sidebar-background-color-hover: #2D3348;
+    --code-block-background-color: #1B1F2A;
+    --scrollbar-track-background-color: #1B1F2A;
+    --scrollbar-thumb-background-color: #3a3f52;
+    --scrollbar-color: #3a3f52 #1B1F2A;
+    --headings-border-bottom-color: #2D3348;
+    --border-color: #2D3348;
+    --button-background-color: #1B1F2A;
+    --right-side-color: #9CA3AF;
+    --code-attribute-color: #4B83F5;
+    --toggles-color: #9CA3AF;
+    --search-input-focused-border-color: #4B83F5;
+    --copy-path-button-color: #9CA3AF;
+    --copy-path-img-filter: invert(70%);
+    --copy-path-img-hover-filter: invert(85%);
+    --codeblock-error-hover-color: #DC2626;
+    --codeblock-error-color: #E04E2D;
+    --codeblock-ignore-hover-color: #CA8A04;
+    --codeblock-ignore-color: #CA8A04;
+    --type-link-color: #4B83F5;
+    --trait-link-color: #2FC2BD;
+    --assoc-item-link-color: #4B83F5;
+    --function-link-color: #4B83F5;
+    --macro-link-color: #22C55E;
+    --keyword-link-color: #4B83F5;
+    --mod-link-color: #4B83F5;
+    --link-color: #4B83F5;
+    --sidebar-link-color: #E5E7EB;
+    --sidebar-current-link-background-color: rgba(75, 131, 245, 0.12);
+    --search-result-link-focus-background-color: rgba(75, 131, 245, 0.12);
+    --search-result-border-color: #2D3348;
+    --stab-background-color: rgba(202, 138, 4, 0.12);
+    --stab-code-color: #CA8A04;
+    --search-color: #E5E7EB;
+}
+
+/* ---------------------------------------------------------------------------
+   Typography
+   --------------------------------------------------------------------------- */
+body, .sidebar, .search-input, .search-results, .main-heading,
+.settings, .source, button, select, input {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+pre, code, .rust code, .docblock code, .code-header,
+.rustdoc .example-wrap pre {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
+code {
+    font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------------
+   Banner — Link back to main docs
+   --------------------------------------------------------------------------- */
+body::before {
+    content: "\2190  Back to Torvyn Docs";
+    display: block;
+    background-color: var(--sidebar-background-color);
+    border-bottom: 1px solid var(--border-color);
+    padding: 0.5rem 1.0rem;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--link-color);
+    cursor: pointer;
+    text-decoration: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Heading Styles
+   --------------------------------------------------------------------------- */
+h1.fqn, h1.main-heading {
+    font-size: 1.75rem;
+    font-weight: 700;
+    border-bottom: 2px solid var(--headings-border-bottom-color);
+    padding-bottom: 0.5rem;
+}
+
+h2 {
+    font-weight: 700;
+}
+
+h3 {
+    font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------------
+   Scrollbar (WebKit)
+   --------------------------------------------------------------------------- */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--scrollbar-track-background-color);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb-background-color);
+    border-radius: 4px;
+}

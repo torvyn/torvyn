@@ -1,0 +1,461 @@
+/* =============================================================================
+   Torvyn Documentation — Custom mdBook Theme
+   Brand: oss_04_branding_and_identity.md
+   Fonts: Inter (body), JetBrains Mono (code)
+   ============================================================================= */
+
+/* ---------------------------------------------------------------------------
+   Google Fonts — Inter 400/500/600/700, JetBrains Mono 400/700
+   --------------------------------------------------------------------------- */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
+
+/* ---------------------------------------------------------------------------
+   CSS Custom Properties — Light Mode (default)
+   --------------------------------------------------------------------------- */
+:root {
+    /* Brand colors */
+    --torvyn-forge-blue: #1E5EF0;
+    --torvyn-slate-dark: #1B1F2A;
+    --torvyn-slate-medium: #6B7280;
+    --torvyn-circuit-teal: #0EA5A0;
+    --torvyn-rust-ember: #E04E2D;
+
+    /* Semantic colors */
+    --torvyn-success: #16A34A;
+    --torvyn-warning: #CA8A04;
+    --torvyn-error: #DC2626;
+    --torvyn-info: #2563EB;
+
+    /* Fonts */
+    --torvyn-font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --torvyn-font-code: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
+/* Light mode surfaces — applied to .light and .rust themes */
+.light, .rust {
+    --bg: #FFFFFF;
+    --fg: #1B1F2A;
+
+    --sidebar-bg: #F9FAFB;
+    --sidebar-fg: #1B1F2A;
+    --sidebar-non-existant: #6B7280;
+    --sidebar-active: #1E5EF0;
+    --sidebar-spacer: #E5E7EB;
+
+    --scrollbar: #c4c4c4;
+
+    --icons: #6B7280;
+    --icons-hover: #1E5EF0;
+
+    --links: #1E5EF0;
+
+    --inline-code-color: #1B1F2A;
+
+    --theme-popup-bg: #FFFFFF;
+    --theme-popup-border: #E5E7EB;
+    --theme-hover: #F9FAFB;
+
+    --quote-bg: #F9FAFB;
+    --quote-border: #E5E7EB;
+
+    --warning-border: #CA8A04;
+
+    --table-border-color: #E5E7EB;
+    --table-header-bg: #F9FAFB;
+    --table-alternate-bg: #F9FAFB;
+
+    --searchbar-border-color: #E5E7EB;
+    --searchbar-bg: #FFFFFF;
+    --searchbar-fg: #1B1F2A;
+    --searchbar-shadow-color: rgba(30, 94, 240, 0.08);
+    --searchresults-header-fg: #6B7280;
+    --searchresults-border-color: #E5E7EB;
+    --searchresults-li-bg: #F9FAFB;
+    --search-mark-bg: rgba(30, 94, 240, 0.15);
+
+    --color-scheme: light;
+}
+
+/* Dark mode surfaces — applied to .navy, .coal, and .ayu themes */
+.navy, .coal, .ayu {
+    --bg: #0F1117;
+    --fg: #E5E7EB;
+
+    --sidebar-bg: #1B1F2A;
+    --sidebar-fg: #E5E7EB;
+    --sidebar-non-existant: #9CA3AF;
+    --sidebar-active: #4B83F5;
+    --sidebar-spacer: #2D3348;
+
+    --scrollbar: #3a3f52;
+
+    --icons: #9CA3AF;
+    --icons-hover: #4B83F5;
+
+    --links: #4B83F5;
+
+    --inline-code-color: #E5E7EB;
+
+    --theme-popup-bg: #1B1F2A;
+    --theme-popup-border: #2D3348;
+    --theme-hover: #2D3348;
+
+    --quote-bg: #1B1F2A;
+    --quote-border: #2D3348;
+
+    --warning-border: #CA8A04;
+
+    --table-border-color: #2D3348;
+    --table-header-bg: #1B1F2A;
+    --table-alternate-bg: rgba(27, 31, 42, 0.5);
+
+    --searchbar-border-color: #2D3348;
+    --searchbar-bg: #1B1F2A;
+    --searchbar-fg: #E5E7EB;
+    --searchbar-shadow-color: rgba(0, 0, 0, 0.3);
+    --searchresults-header-fg: #9CA3AF;
+    --searchresults-border-color: #2D3348;
+    --searchresults-li-bg: #1B1F2A;
+    --search-mark-bg: rgba(75, 131, 245, 0.25);
+
+    --color-scheme: dark;
+}
+
+/* ---------------------------------------------------------------------------
+   Base Typography
+   --------------------------------------------------------------------------- */
+body {
+    font-family: var(--torvyn-font-body);
+    color-scheme: var(--color-scheme);
+}
+
+.content main {
+    font-size: 1.25rem;
+    line-height: 1.7;
+    max-width: 72ch;
+}
+
+/* Heading hierarchy — brand spec */
+.content main h1 {
+    font-size: 2.25rem;
+    font-weight: 700;
+    line-height: 1.25;
+    margin-top: 0;
+    margin-bottom: 1.5rem;
+    border-bottom: 2px solid var(--torvyn-forge-blue);
+    padding-bottom: 0.5rem;
+}
+
+.content main h2 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    line-height: 1.3;
+    margin-top: 2.5rem;
+    margin-bottom: 1.0rem;
+    border-bottom: 1px solid var(--table-border-color);
+    padding-bottom: 0.35rem;
+}
+
+.content main h3 {
+    font-size: 1.4rem;
+    font-weight: 600;
+    line-height: 1.4;
+    margin-top: 2.0rem;
+    margin-bottom: 0.75rem;
+}
+
+.content main h4 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    line-height: 1.5;
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+/* Paragraph spacing */
+.content main p {
+    margin-bottom: 1.0rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Links
+   --------------------------------------------------------------------------- */
+.content main a {
+    color: var(--links);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s ease;
+}
+
+.content main a:hover {
+    border-bottom-color: var(--links);
+}
+
+/* ---------------------------------------------------------------------------
+   Code — Inline & Blocks
+   --------------------------------------------------------------------------- */
+code, pre, .hljs {
+    font-family: var(--torvyn-font-code);
+}
+
+/* Inline code */
+.content main code {
+    font-size: 0.9em;
+    padding: 0.15em 0.35em;
+    border-radius: 4px;
+}
+
+.light .content main code,
+.rust .content main code {
+    background-color: #F3F4F6;
+    border: 1px solid #E5E7EB;
+}
+
+.navy .content main code,
+.coal .content main code,
+.ayu .content main code {
+    background-color: #1B1F2A;
+    border: 1px solid #2D3348;
+}
+
+/* Code blocks (pre > code) */
+pre {
+    font-size: 1.0rem;
+    line-height: 1.6;
+    padding: 1.0rem !important;
+    border-radius: 6px !important;
+    overflow-x: auto;
+}
+
+.light pre, .rust pre {
+    background-color: #F9FAFB !important;
+    border: 1px solid #E5E7EB;
+}
+
+.navy pre, .coal pre, .ayu pre {
+    background-color: #1B1F2A !important;
+    border: 1px solid #2D3348;
+}
+
+/* Reset inline code styles inside code blocks */
+pre > code {
+    padding: 0;
+    border: none;
+    background: transparent;
+    border-radius: 0;
+}
+
+/* Line numbers in code blocks */
+pre .linenumber {
+    color: var(--torvyn-slate-medium);
+    min-width: 2em;
+    padding-right: 0.75em;
+    user-select: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Tables
+   --------------------------------------------------------------------------- */
+.content main table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.5rem 0;
+    font-size: 1.1rem;
+}
+
+.content main table th {
+    background-color: var(--table-header-bg);
+    font-weight: 600;
+    text-align: left;
+    padding: 0.65rem 0.85rem;
+    border: 1px solid var(--table-border-color);
+}
+
+.content main table td {
+    padding: 0.55rem 0.85rem;
+    border: 1px solid var(--table-border-color);
+}
+
+.content main table tr:nth-child(2n) {
+    background-color: var(--table-alternate-bg);
+}
+
+/* ---------------------------------------------------------------------------
+   Blockquotes
+   --------------------------------------------------------------------------- */
+.content main blockquote {
+    border-left: 4px solid var(--torvyn-forge-blue);
+    background-color: var(--quote-bg);
+    padding: 0.75rem 1.0rem;
+    margin: 1.0rem 0;
+    border-radius: 0 4px 4px 0;
+}
+
+.content main blockquote p {
+    margin-bottom: 0.25rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Sidebar
+   --------------------------------------------------------------------------- */
+.sidebar {
+    font-family: var(--torvyn-font-body);
+    font-size: 1.05rem;
+}
+
+.sidebar .sidebar-scrollbox {
+    padding: 1rem 0.75rem;
+}
+
+.sidebar ol.chapter li a {
+    font-weight: 400;
+    padding: 0.3rem 0.75rem;
+    border-radius: 4px;
+    transition: background-color 0.12s ease;
+}
+
+.sidebar ol.chapter li a:hover {
+    background-color: var(--theme-hover);
+}
+
+.sidebar ol.chapter li.chapter-item.expanded a.active,
+.sidebar ol.chapter li a.active {
+    color: var(--sidebar-active);
+    font-weight: 600;
+    border-left: 3px solid var(--sidebar-active);
+    padding-left: calc(0.75rem - 3px);
+}
+
+/* Sidebar section headers (part titles) */
+.sidebar .chapter-title {
+    font-weight: 700;
+    font-size: 0.8125rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--torvyn-slate-medium);
+    padding: 0.5rem 0.75rem 0.25rem;
+    margin-top: 0.75rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Header / Menu Bar
+   --------------------------------------------------------------------------- */
+#menu-bar {
+    font-family: var(--torvyn-font-body);
+    border-bottom: 1px solid var(--table-border-color);
+}
+
+#menu-bar .menu-title {
+    font-weight: 700;
+    font-size: 1.0rem;
+    letter-spacing: -0.01em;
+}
+
+/* Theme toggle and icon buttons */
+#menu-bar .icon-button {
+    transition: color 0.12s ease;
+}
+
+#menu-bar .icon-button:hover {
+    color: var(--torvyn-forge-blue);
+}
+
+/* ---------------------------------------------------------------------------
+   Search
+   --------------------------------------------------------------------------- */
+#searchbar {
+    font-family: var(--torvyn-font-body);
+    border-radius: 6px;
+    border: 1px solid var(--searchbar-border-color);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+#searchbar:focus {
+    border-color: var(--torvyn-forge-blue);
+    box-shadow: 0 0 0 3px var(--searchbar-shadow-color);
+    outline: none;
+}
+
+.searchresults a {
+    color: var(--links);
+}
+
+mark {
+    background-color: var(--search-mark-bg);
+    border-radius: 2px;
+    padding: 0.1em 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Navigation Arrows (Prev / Next)
+   --------------------------------------------------------------------------- */
+.nav-chapters {
+    color: var(--torvyn-slate-medium);
+    transition: color 0.12s ease;
+}
+
+.nav-chapters:hover {
+    color: var(--torvyn-forge-blue);
+}
+
+/* ---------------------------------------------------------------------------
+   Theme Popup
+   --------------------------------------------------------------------------- */
+#theme-list {
+    border-radius: 6px;
+    border: 1px solid var(--theme-popup-border);
+}
+
+#theme-list > button {
+    font-family: var(--torvyn-font-body);
+    transition: background-color 0.1s ease;
+}
+
+#theme-list > button:hover {
+    background-color: var(--theme-hover);
+}
+
+/* ---------------------------------------------------------------------------
+   Scrollbar Styling (WebKit)
+   --------------------------------------------------------------------------- */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--scrollbar);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--torvyn-slate-medium);
+}
+
+/* ---------------------------------------------------------------------------
+   Print Styles
+   --------------------------------------------------------------------------- */
+@media print {
+    .content main {
+        max-width: 100%;
+        font-size: 11pt;
+    }
+
+    .content main h1 {
+        border-bottom-color: #1B1F2A;
+    }
+
+    .content main a {
+        color: #1B1F2A;
+        text-decoration: underline;
+    }
+
+    pre {
+        border: 1px solid #ccc;
+        page-break-inside: avoid;
+    }
+}

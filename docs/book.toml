@@ -1,0 +1,42 @@
+[book]
+title = "Torvyn Documentation"
+description = "Documentation for the Torvyn ownership-aware reactive streaming runtime"
+authors = ["Torvyn Contributors"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/torvyn/torvyn"
+edit-url-template = "https://github.com/torvyn/torvyn/edit/main/docs/{path}"
+site-url = "/"
+additional-css = [
+    "theme/torvyn.css",
+    "theme/admonish.css",
+]
+additional-js = [
+    "theme/mermaid-init.js", "mermaid.min.js",
+]
+no-section-label = false
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 20
+boost-hierarchy = 2
+
+[output.html.playground]
+editable = false
+copy-js = true
+line-numbers = true
