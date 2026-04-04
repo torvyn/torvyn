@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Developer CLI for the Torvyn streaming runtime"
+readme = "README.md"
 
 [[bin]]
 name = "torvyn"

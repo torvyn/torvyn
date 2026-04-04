@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Runtime orchestration shell for Torvyn"
+readme = "README.md"
 
 [features]
 default = ["signal"]

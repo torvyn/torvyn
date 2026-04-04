@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Tracing, metrics, and observability for Torvyn"
+readme = "README.md"
 
 [dependencies]
 torvyn-types.workspace = true

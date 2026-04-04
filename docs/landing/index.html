@@ -696,6 +696,104 @@ sequenceDiagram
         </div>
     </section>
 
+    <!-- Architecture Diagrams -->
+    <section class="section">
+        <div class="container">
+            <h2 class="section-title">Architecture</h2>
+            <p class="section-desc">13 crates in six build tiers. Strictly acyclic dependency graph enabling maximum parallel compilation.</p>
+            <div class="diagram-wrap" style="margin-bottom: 1.5rem;">
+                <div class="diagram-label">Crate Dependency Graph</div>
+                <div class="mermaid">
+graph TB
+    subgraph T6 ["Tier 6 &middot; Entry Points"]
+        CLI["torvyn-cli"]
+        HOST["torvyn-host"]
+    end
+
+    subgraph T5 ["Tier 5 &middot; Topology"]
+        PIPELINE["torvyn-pipeline"]
+        PACKAGING["torvyn-packaging"]
+    end
+
+    subgraph T4 ["Tier 4 &middot; Composition"]
+        LINKER["torvyn-linker"]
+        REACTOR["torvyn-reactor"]
+    end
+
+    subgraph T3 ["Tier 3 &middot; Resources"]
+        RESOURCES["torvyn-resources"]
+        SECURITY["torvyn-security"]
+    end
+
+    subgraph T2 ["Tier 2 &middot; Core Services"]
+        CONFIG["torvyn-config"]
+        CONTRACTS["torvyn-contracts"]
+        ENGINE["torvyn-engine"]
+        OBS["torvyn-observability"]
+    end
+
+    subgraph T1 ["Tier 1 &middot; Foundation"]
+        TYPES["torvyn-types"]
+    end
+
+    CLI --> HOST
+    HOST --> PIPELINE
+    HOST --> PACKAGING
+    HOST --> REACTOR
+    PIPELINE --> LINKER
+    PIPELINE --> REACTOR
+    PACKAGING --> LINKER
+    LINKER --> CONTRACTS
+    LINKER --> ENGINE
+    LINKER --> RESOURCES
+    LINKER --> SECURITY
+    REACTOR --> ENGINE
+    REACTOR --> OBS
+    REACTOR --> RESOURCES
+    RESOURCES --> CONFIG
+    RESOURCES --> OBS
+    SECURITY --> CONFIG
+    CONFIG --> TYPES
+    CONTRACTS --> TYPES
+    ENGINE --> TYPES
+    OBS --> TYPES
+                </div>
+            </div>
+            <div class="diagram-wrap">
+                <div class="diagram-label">Stream Element Hot Path</div>
+                <div class="mermaid">
+sequenceDiagram
+    participant S as Source
+    participant H as Host Runtime
+    participant RM as Resource Manager
+    participant P as Processor
+    participant K as Sink
+
+    rect rgb(232, 245, 233)
+        S->>H: pull() returns output-element
+        Note right of S: COPY 1
+        H->>RM: transfer buffer ownership
+    end
+
+    rect rgb(227, 242, 253)
+        H->>P: process(stream-element)
+        Note right of P: COPY 2 (read) + COPY 3 (write)
+        P-->>H: process-result
+        H->>RM: release input, transfer output
+    end
+
+    rect rgb(255, 243, 224)
+        H->>K: push(stream-element)
+        Note right of K: COPY 4
+        K-->>H: backpressure-signal
+        H->>RM: release buffer to pool
+    end
+                </div>
+            </div>
+            <p style="margin-top: 0.75rem;"><a href="https://github.com/torvyn/torvyn/blob/main/documents/ARCHITECTURE.md" style="font-size: 0.8125rem; font-weight: 500;">Full architecture guide &rarr;</a></p>
+        </div>
+    </section>
+
     <!-- CTA -->
     <section class="cta">
         <div class="container">

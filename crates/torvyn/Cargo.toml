@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Ownership-aware reactive streaming runtime for WebAssembly components"
+readme = "README.md"
 keywords = ["wasm", "streaming", "reactive", "webassembly", "pipeline"]
 categories = ["wasm", "asynchronous"]
 

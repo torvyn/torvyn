@@ -23,7 +23,7 @@ additional-css = [
     "theme/admonish.css",
 ]
 additional-js = [
-    "theme/mermaid-init.js", "mermaid.min.js",
+    "theme/mermaid-init.js", "mermaid.min.js", "theme/home-button.js",
 ]
 no-section-label = false
 

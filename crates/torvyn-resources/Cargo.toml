@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Buffer pools, ownership tracking, and copy accounting for Torvyn"
+readme = "README.md"
 
 [dependencies]
 torvyn-types.workspace = true

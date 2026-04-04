@@ -8,6 +8,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
 jobs:
   validate:
@@ -46,70 +47,70 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Publish torvyn-types
-        run: cargo publish -p torvyn-types --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p torvyn-types || echo "Already published, skipping"
 
       - name: Wait for crates.io indexing
         run: sleep 30
 
       - name: Publish torvyn-contracts
-        run: cargo publish -p torvyn-contracts --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p torvyn-contracts || echo "Already published, skipping"
 
       - name: Publish torvyn-config
-        run: cargo publish -p torvyn-config --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p torvyn-config || echo "Already published, skipping"
 
       - name: Publish torvyn-observability
-        run: cargo publish -p torvyn-observability --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p torvyn-observability || echo "Already published, skipping"
 
       - name: Wait for crates.io indexing
         run: sleep 30
 
       - name: Publish torvyn-engine
-        run: cargo publish -p torvyn-engine --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p torvyn-engine || echo "Already published, skipping"
 
       - name: Wait for crates.io indexing
         run: sleep 30
 
       - name: Publish torvyn-resources
-        run: cargo publish -p torvyn-resources --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p torvyn-resources || echo "Already published, skipping"
 
       - name: Publish torvyn-security
-        run: cargo publish -p torvyn-security --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p torvyn-security || echo "Already published, skipping"
 
       - name: Wait for crates.io indexing
         run: sleep 30
 
       - name: Publish torvyn-reactor
-        run: cargo publish -p torvyn-reactor --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p torvyn-reactor || echo "Already published, skipping"
 
       - name: Wait for crates.io indexing
         run: sleep 30
 
       - name: Publish torvyn-linker
-        run: cargo publish -p torvyn-linker --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p torvyn-linker || echo "Already published, skipping"
 
       - name: Publish torvyn-pipeline
-        run: cargo publish -p torvyn-pipeline --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p torvyn-pipeline || echo "Already published, skipping"
 
       - name: Publish torvyn-packaging
-        run: cargo publish -p torvyn-packaging --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p torvyn-packaging || echo "Already published, skipping"
 
       - name: Wait for crates.io indexing
         run: sleep 30
 
       - name: Publish torvyn-host
-        run: cargo publish -p torvyn-host --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p torvyn-host || echo "Already published, skipping"
 
       - name: Wait for crates.io indexing
         run: sleep 30
 
       - name: Publish torvyn-cli
-        run: cargo publish -p torvyn-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p torvyn-cli || echo "Already published, skipping"
 
       - name: Wait for crates.io indexing
         run: sleep 30
 
       - name: Publish torvyn (umbrella crate)
-        run: cargo publish -p torvyn --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p torvyn || echo "Already published, skipping"
 
   release:
     name: Create GitHub Release

@@ -437,6 +437,39 @@ mark {
 }
 
 /* ---------------------------------------------------------------------------
+   Home Button
+   --------------------------------------------------------------------------- */
+.torvyn-home-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.25rem 0.65rem;
+    margin-right: 0.5rem;
+    border-radius: 4px;
+    font-family: var(--torvyn-font-body);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: #fff;
+    background: var(--torvyn-forge-blue);
+    text-decoration: none;
+    border: none;
+    cursor: pointer;
+    transition: background 0.12s ease;
+    line-height: 1.6;
+}
+
+.torvyn-home-btn:hover {
+    background: #1a4fd0;
+    text-decoration: none;
+}
+
+.torvyn-home-btn svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+}
+
+/* ---------------------------------------------------------------------------
    Print Styles
    --------------------------------------------------------------------------- */
 @media print {

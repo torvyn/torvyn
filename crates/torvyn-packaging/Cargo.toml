@@ -3,6 +3,7 @@ name = "torvyn-packaging"
 version.workspace = true
 edition.workspace = true
 description = "OCI artifact assembly, signing, and distribution for Torvyn components"
+readme = "README.md"
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true

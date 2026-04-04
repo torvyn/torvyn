@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Stream scheduling, backpressure, and flow lifecycle for Torvyn"
+readme = "README.md"
 
 [dependencies]
 torvyn-types.workspace = true

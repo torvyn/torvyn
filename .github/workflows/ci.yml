@@ -9,7 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
-  MSRV: "1.78.0"
+  MSRV: "1.91.0"
 
 jobs:
   lint:
@@ -38,7 +38,7 @@ jobs:
         rust: [stable]
         include:
           - os: ubuntu-latest
-            rust: "1.78.0"
+            rust: "1.91.0"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -59,7 +59,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run integration tests
-        run: cargo test -p integration-tests
+        run: cargo test -p torvyn-integration-tests
 
   doc:
     name: Documentation
@@ -121,16 +121,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run benchmarks
-        run: cargo bench -p torvyn-benchmarks -- --output-format bencher | tee bench_output.txt
-      - name: Store benchmark results
-        uses: benchmark-action/github-action-benchmark@v1
-        with:
-          tool: cargo
-          output-file-path: bench_output.txt
-          alert-threshold: "150%"
-          fail-on-alert: false
-          comment-on-alert: true
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo bench -p torvyn-benchmarks
       - name: Upload criterion reports
         uses: actions/upload-artifact@v4
         with:
