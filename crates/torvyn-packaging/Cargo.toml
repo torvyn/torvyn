@@ -10,8 +10,8 @@ rust-version.workspace = true
 
 [dependencies]
 # Workspace crates
-torvyn-types = { version = "0.1.0", path = "../torvyn-types" }
-torvyn-config = { version = "0.1.0", path = "../torvyn-config" }
+torvyn-types = { version = "0.1.1", path = "../torvyn-types" }
+torvyn-config = { version = "0.1.1", path = "../torvyn-config" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
