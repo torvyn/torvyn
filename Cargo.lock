@@ -2466,7 +2466,7 @@ checksum = "ab16f14aed21ee8bfd8ec22513f7287cd4a91aa92e44edfe2c17ddd004e92607"
 
 [[package]]
 name = "torvyn"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "tokio",
@@ -2501,7 +2501,7 @@ dependencies = [
 
 [[package]]
 name = "torvyn-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "assert_cmd",
  "chrono",
@@ -2527,7 +2527,7 @@ dependencies = [
 
 [[package]]
 name = "torvyn-config"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2538,7 +2538,7 @@ dependencies = [
 
 [[package]]
 name = "torvyn-contracts"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "semver",
  "serde",
@@ -2551,7 +2551,7 @@ dependencies = [
 
 [[package]]
 name = "torvyn-engine"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "parking_lot",
@@ -2566,7 +2566,7 @@ dependencies = [
 
 [[package]]
 name = "torvyn-host"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "thiserror 2.0.18",
  "tokio",
@@ -2597,7 +2597,7 @@ dependencies = [
 
 [[package]]
 name = "torvyn-linker"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -2609,7 +2609,7 @@ dependencies = [
 
 [[package]]
 name = "torvyn-observability"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2621,7 +2621,7 @@ dependencies = [
 
 [[package]]
 name = "torvyn-packaging"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "flate2",
@@ -2643,7 +2643,7 @@ dependencies = [
 
 [[package]]
 name = "torvyn-pipeline"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "thiserror 2.0.18",
  "tokio",
@@ -2658,7 +2658,7 @@ dependencies = [
 
 [[package]]
 name = "torvyn-reactor"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "thiserror 2.0.18",
@@ -2672,7 +2672,7 @@ dependencies = [
 
 [[package]]
 name = "torvyn-resources"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "parking_lot",
  "torvyn-types",
@@ -2680,7 +2680,7 @@ dependencies = [
 
 [[package]]
 name = "torvyn-security"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2690,7 +2690,7 @@ dependencies = [
 
 [[package]]
 name = "torvyn-types"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
 ]

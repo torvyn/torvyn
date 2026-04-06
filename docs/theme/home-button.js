@@ -1,9 +1,11 @@
 (function() {
-    var menuBar = document.getElementById('menu-bar');
+    var menuBar = document.getElementById('mdbook-menu-bar') || document.getElementById('menu-bar');
     if (!menuBar) return;
 
     var rightButtons = menuBar.querySelector('.right-buttons');
     if (!rightButtons) return;
+
+    if (rightButtons.querySelector('.torvyn-home-btn')) return;
 
     var homeLink = document.createElement('a');
     homeLink.href = '/torvyn/';

@@ -449,10 +449,11 @@ mark {
     font-family: var(--torvyn-font-body);
     font-size: 0.8125rem;
     font-weight: 600;
-    color: #fff;
+    color: #fff !important;
     background: var(--torvyn-forge-blue);
-    text-decoration: none;
+    text-decoration: none !important;
     border: none;
+    border-bottom: none !important;
     cursor: pointer;
     transition: background 0.12s ease;
     line-height: 1.6;
@@ -460,7 +461,9 @@ mark {
 
 .torvyn-home-btn:hover {
     background: #1a4fd0;
-    text-decoration: none;
+    color: #fff !important;
+    text-decoration: none !important;
+    border-bottom: none !important;
 }
 
 .torvyn-home-btn svg {
