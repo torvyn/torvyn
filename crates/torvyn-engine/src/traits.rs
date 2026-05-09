@@ -114,6 +114,20 @@ pub trait WasmEngine: Send + Sync + 'static {
     ///
     /// # WARM PATH — called for observability and limit checks.
     fn memory_usage(&self, instance: &ComponentInstance) -> usize;
+
+    /// Construct a default [`ImportBindings`] suitable for instantiation.
+    ///
+    /// For Phase 0, this returns engine-specific empty bindings:
+    /// - The Wasmtime backend returns an empty `Linker`.
+    /// - The mock backend returns mock bindings.
+    ///
+    /// Phase 1 will introduce capability-resolved bindings via a separate
+    /// API; this method gives downstream crates (e.g., `torvyn-pipeline`)
+    /// a stable seam for the cold path that does not require knowing the
+    /// concrete backend.
+    ///
+    /// # COLD PATH — called once per component instantiation.
+    fn default_imports(&self) -> ImportBindings;
 }
 
 // ---------------------------------------------------------------------------
@@ -206,6 +220,58 @@ pub trait ComponentInvoker: Send + Sync + 'static {
 }
 
 // ---------------------------------------------------------------------------
+// Blanket impl: Arc<I>: ComponentInvoker
+// ---------------------------------------------------------------------------
+
+// Forwarding impl so a single shared invoker can be cloned into per-flow
+// drivers. The reactor coordinator stores `Arc<I>`; each flow driver
+// receives a clone, and this impl makes the driver's bound on
+// `I: ComponentInvoker` satisfiable for the wrapped Arc.
+#[async_trait]
+impl<I: ComponentInvoker> ComponentInvoker for std::sync::Arc<I> {
+    async fn invoke_pull(
+        &self,
+        instance: &mut ComponentInstance,
+        component_id: ComponentId,
+    ) -> Result<Option<OutputElement>, ProcessError> {
+        (**self).invoke_pull(instance, component_id).await
+    }
+
+    async fn invoke_process(
+        &self,
+        instance: &mut ComponentInstance,
+        component_id: ComponentId,
+        element: StreamElement,
+    ) -> Result<ProcessResult, ProcessError> {
+        (**self)
+            .invoke_process(instance, component_id, element)
+            .await
+    }
+
+    async fn invoke_push(
+        &self,
+        instance: &mut ComponentInstance,
+        component_id: ComponentId,
+        element: StreamElement,
+    ) -> Result<BackpressureSignal, ProcessError> {
+        (**self).invoke_push(instance, component_id, element).await
+    }
+
+    async fn invoke_init(
+        &self,
+        instance: &mut ComponentInstance,
+        component_id: ComponentId,
+        config: &str,
+    ) -> Result<(), ProcessError> {
+        (**self).invoke_init(instance, component_id, config).await
+    }
+
+    async fn invoke_teardown(&self, instance: &mut ComponentInstance, component_id: ComponentId) {
+        (**self).invoke_teardown(instance, component_id).await;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -214,9 +280,156 @@ mod tests {
     // Verify that the trait bounds are correct by checking concrete types
     // satisfy Send + Sync. The actual trait object safety is tested in
     // the mock module.
+    use super::*;
+    use async_trait::async_trait;
+    use std::sync::Arc;
+    use torvyn_types::{BackpressureSignal, ComponentId, ProcessError};
+
     #[test]
     fn test_trait_bounds_compile() {
         fn _assert_send_sync<T: Send + Sync + 'static>() {}
         // These are compile-time checks only; no runtime assertion needed.
+    }
+
+    /// Trivial invoker that records call counts via shared atomics.
+    /// Used to verify the `Arc<I>: ComponentInvoker` blanket impl forwards
+    /// each method to the inner implementation.
+    struct CountingInvoker {
+        pulls: std::sync::atomic::AtomicU64,
+        processes: std::sync::atomic::AtomicU64,
+        pushes: std::sync::atomic::AtomicU64,
+        inits: std::sync::atomic::AtomicU64,
+        teardowns: std::sync::atomic::AtomicU64,
+    }
+
+    impl CountingInvoker {
+        fn new() -> Self {
+            Self {
+                pulls: std::sync::atomic::AtomicU64::new(0),
+                processes: std::sync::atomic::AtomicU64::new(0),
+                pushes: std::sync::atomic::AtomicU64::new(0),
+                inits: std::sync::atomic::AtomicU64::new(0),
+                teardowns: std::sync::atomic::AtomicU64::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ComponentInvoker for CountingInvoker {
+        async fn invoke_pull(
+            &self,
+            _instance: &mut ComponentInstance,
+            _component_id: ComponentId,
+        ) -> Result<Option<crate::types::OutputElement>, ProcessError> {
+            self.pulls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(None)
+        }
+
+        async fn invoke_process(
+            &self,
+            _instance: &mut ComponentInstance,
+            _component_id: ComponentId,
+            _element: crate::types::StreamElement,
+        ) -> Result<crate::types::ProcessResult, ProcessError> {
+            self.processes
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(crate::types::ProcessResult::Filtered)
+        }
+
+        async fn invoke_push(
+            &self,
+            _instance: &mut ComponentInstance,
+            _component_id: ComponentId,
+            _element: crate::types::StreamElement,
+        ) -> Result<BackpressureSignal, ProcessError> {
+            self.pushes
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(BackpressureSignal::Ready)
+        }
+
+        async fn invoke_init(
+            &self,
+            _instance: &mut ComponentInstance,
+            _component_id: ComponentId,
+            _config: &str,
+        ) -> Result<(), ProcessError> {
+            self.inits
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+
+        async fn invoke_teardown(
+            &self,
+            _instance: &mut ComponentInstance,
+            _component_id: ComponentId,
+        ) {
+            self.teardowns
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn test_arc_blanket_forwards_all_methods() {
+        use crate::mock::MockEngine;
+        use crate::WasmEngine;
+
+        let inner = Arc::new(CountingInvoker::new());
+        let arc_invoker: Arc<CountingInvoker> = Arc::clone(&inner);
+
+        // Build a mock instance to call methods against.
+        let engine = MockEngine::new();
+        let compiled = engine.compile_component(b"test").unwrap();
+        let imports = MockEngine::mock_imports();
+        let mut instance = engine
+            .instantiate(&compiled, imports, ComponentId::new(1))
+            .await
+            .unwrap();
+
+        // Use Arc<CountingInvoker> as a ComponentInvoker via the blanket impl.
+        let invoker_via_arc: &dyn ComponentInvoker = &arc_invoker;
+        let _ = invoker_via_arc
+            .invoke_pull(&mut instance, ComponentId::new(1))
+            .await;
+        let _ = invoker_via_arc
+            .invoke_process(
+                &mut instance,
+                ComponentId::new(1),
+                crate::types::StreamElement {
+                    meta: torvyn_types::ElementMeta::new(0, 0, String::new()),
+                    payload: torvyn_types::BufferHandle::new(torvyn_types::ResourceId::new(0, 0)),
+                },
+            )
+            .await;
+        let _ = invoker_via_arc
+            .invoke_push(
+                &mut instance,
+                ComponentId::new(1),
+                crate::types::StreamElement {
+                    meta: torvyn_types::ElementMeta::new(0, 0, String::new()),
+                    payload: torvyn_types::BufferHandle::new(torvyn_types::ResourceId::new(0, 0)),
+                },
+            )
+            .await;
+        let _ = invoker_via_arc
+            .invoke_init(&mut instance, ComponentId::new(1), "{}")
+            .await;
+        invoker_via_arc
+            .invoke_teardown(&mut instance, ComponentId::new(1))
+            .await;
+
+        // Each method incremented the shared counter exactly once.
+        assert_eq!(inner.pulls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(
+            inner.processes.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(inner.pushes.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(inner.inits.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(
+            inner.teardowns.load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
     }
 }

@@ -336,6 +336,10 @@ impl WasmEngine for WasmtimeEngine {
             _ => 0,
         }
     }
+
+    fn default_imports(&self) -> ImportBindings {
+        Self::import_bindings_from_linker(self.create_linker())
+    }
 }
 
 // ---------------------------------------------------------------------------

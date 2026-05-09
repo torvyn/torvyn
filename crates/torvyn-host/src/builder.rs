@@ -16,13 +16,34 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::sync::mpsc;
 use tracing::info;
 
 use torvyn_config::{load_pipeline, ObservabilityConfig, RuntimeConfig, SecurityConfig};
-use torvyn_engine::{WasmtimeEngine, WasmtimeEngineConfig};
+use torvyn_engine::{WasmtimeEngine, WasmtimeEngineConfig, WasmtimeInvoker};
+use torvyn_reactor::{
+    coordinator::ReactorCoordinator,
+    events::{ReactorCommand, ReactorEvent},
+    handle::ReactorHandle,
+};
+use torvyn_types::NoopEventSink;
 
 use crate::error::{HostError, StartupError};
 use crate::host::TorvynHost;
+
+/// Default capacity of the reactor command channel.
+///
+/// Sized to absorb a burst of cold-path commands (flow creation,
+/// cancellation) without backpressuring the host. The reactor processes
+/// commands quickly so this rarely matters in practice.
+const REACTOR_COMMAND_CHANNEL_CAPACITY: usize = 256;
+
+/// Default capacity of the reactor event channel.
+///
+/// Sized for observability events. Events are produced by flow drivers
+/// and consumed by observability subscribers; bounded to prevent unbounded
+/// memory growth if no subscriber drains.
+const REACTOR_EVENT_CHANNEL_CAPACITY: usize = 1024;
 
 // ---------------------------------------------------------------------------
 // HostConfig
@@ -219,7 +240,9 @@ impl HostBuilder {
     /// # Errors
     /// Returns `HostError::Config` if configuration is invalid.
     /// Returns `HostError::Startup` if any subsystem fails to initialize.
-    #[allow(clippy::unused_async)] // Will use await when cross-crate integration is enabled
+    // `async` is required even though no `.await` is used: `tokio::spawn`
+    // requires an active Tokio runtime context, which an async fn provides.
+    #[allow(clippy::unused_async)]
     pub async fn build(mut self) -> Result<TorvynHost, HostError> {
         // Step 1: Parse config file if specified
         if let Some(ref path) = self.config_path {
@@ -274,24 +297,37 @@ impl HostBuilder {
         );
         info!("Wasm engine initialized");
 
-        // 3b: Initialize observability
-        // CROSS-CRATE DEPENDENCY: ObservabilityCollector::init()
-        info!("Observability system initialized");
+        // 3b: Initialize the component invoker (Wasmtime backend).
+        let invoker = Arc::new(WasmtimeInvoker::new());
+        info!("Component invoker initialized");
 
-        // 3c: Initialize resource manager
-        // CROSS-CRATE DEPENDENCY: ResourceManager::new()
-        info!("Resource manager initialized");
+        // 3c: Spawn the reactor coordinator and obtain its handle.
+        let (cmd_tx, cmd_rx) = mpsc::channel::<ReactorCommand>(REACTOR_COMMAND_CHANNEL_CAPACITY);
+        let (event_tx, _event_rx) = mpsc::channel::<ReactorEvent>(REACTOR_EVENT_CHANNEL_CAPACITY);
 
-        // 3d: Initialize security manager
-        // CROSS-CRATE DEPENDENCY: SecurityManager::new()
-        info!("Security manager initialized");
+        // Phase 0 uses the no-op event sink; observability wiring will
+        // replace this in a later phase. NoopEventSink is `Clone`, which
+        // satisfies the coordinator's `E: EventSink + Clone + 'static`
+        // bound and lets each spawned flow driver receive its own copy.
+        let event_sink = Arc::new(NoopEventSink);
+        let coordinator = ReactorCoordinator::new(
+            cmd_rx,
+            event_tx,
+            Arc::clone(&invoker),
+            Arc::clone(&event_sink),
+        );
+        let coordinator_join = tokio::spawn(coordinator.run());
+        let reactor = ReactorHandle::new(cmd_tx);
+        info!("Reactor coordinator spawned");
 
-        // 3e: Create reactor coordinator and handle
-        // CROSS-CRATE DEPENDENCY: ReactorCoordinator::start()
-        info!("Reactor started");
-
-        // Step 4: Construct host
-        Ok(TorvynHost::new(self.config, engine))
+        // Step 4: Construct host with all subsystem handles wired in.
+        Ok(TorvynHost::new(
+            self.config,
+            engine,
+            invoker,
+            reactor,
+            Some(coordinator_join),
+        ))
     }
 }
 
@@ -348,8 +384,11 @@ mod tests {
 
     #[test]
     fn test_builder_with_shutdown_timeout() {
-        let builder = HostBuilder::new().with_shutdown_timeout(Duration::from_secs(60));
-        assert_eq!(builder.config.shutdown_timeout, Duration::from_secs(60));
+        // 45s chosen as an arbitrary non-default, non-minute-multiple
+        // value: it exercises the setter while avoiding clippy's
+        // `duration_suboptimal_units` lint that fires on multiples of 60s.
+        let builder = HostBuilder::new().with_shutdown_timeout(Duration::from_secs(45));
+        assert_eq!(builder.config.shutdown_timeout, Duration::from_secs(45));
     }
 
     #[test]

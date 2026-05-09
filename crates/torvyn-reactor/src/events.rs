@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use tokio::sync::oneshot;
 
+use torvyn_engine::ComponentInstance;
 use torvyn_types::{ComponentId, FlowId, FlowState, StreamId};
 
 use crate::cancellation::CancellationReason;
@@ -25,6 +26,10 @@ use crate::metrics::FlowCompletionStats;
 /// sender for the response.
 pub enum ReactorCommand {
     /// Create a new flow with the given configuration.
+    ///
+    /// Note: as of v0.1, this is a placeholder kept for backward
+    /// compatibility. To run a flow with real component instances, use
+    /// [`SpawnFlow`](Self::SpawnFlow).
     CreateFlow(
         FlowConfig,
         oneshot::Sender<Result<FlowId, FlowCreationError>>,
@@ -43,6 +48,20 @@ pub enum ReactorCommand {
     UpdatePriority(FlowId, FlowPriority, oneshot::Sender<Result<(), FlowError>>),
     /// Initiate graceful shutdown with the given timeout.
     Shutdown(Duration, oneshot::Sender<ShutdownResult>),
+    /// Spawn a fully-instantiated flow. This is the production path that
+    /// pairs a `FlowConfig` with the matching `Vec<ComponentInstance>`
+    /// produced by the host's engine. The coordinator builds streams,
+    /// constructs a real [`FlowDriver`](crate::flow_driver::FlowDriver),
+    /// and runs it on a Tokio task.
+    SpawnFlow {
+        /// Per-flow configuration (topology, timeouts, queue defaults).
+        config: FlowConfig,
+        /// Component instances, one per stage in `config.topology.stages`.
+        /// The order must match `config.topology.stages` exactly.
+        instances: Vec<ComponentInstance>,
+        /// Reply channel for the assigned `FlowId`.
+        reply: oneshot::Sender<Result<FlowId, FlowCreationError>>,
+    },
 }
 
 impl std::fmt::Debug for ReactorCommand {
@@ -58,6 +77,17 @@ impl std::fmt::Debug for ReactorCommand {
                 write!(f, "UpdatePriority({id}, {pri})")
             }
             ReactorCommand::Shutdown(timeout, _) => write!(f, "Shutdown({timeout:?})"),
+            ReactorCommand::SpawnFlow {
+                config, instances, ..
+            } => {
+                write!(
+                    f,
+                    "SpawnFlow(stages={}, instances={}, priority={:?})",
+                    config.topology.stages.len(),
+                    instances.len(),
+                    config.priority,
+                )
+            }
         }
     }
 }

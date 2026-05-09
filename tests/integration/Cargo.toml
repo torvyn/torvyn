@@ -12,6 +12,7 @@ torvyn-engine = { path = "../../crates/torvyn-engine", default-features = false,
 torvyn-reactor = { path = "../../crates/torvyn-reactor" }
 torvyn-resources = { path = "../../crates/torvyn-resources" }
 torvyn-security = { path = "../../crates/torvyn-security" }
+torvyn-pipeline = { path = "../../crates/torvyn-pipeline" }
 
 # External
 tokio = { version = "1.41.0", features = ["full"] }

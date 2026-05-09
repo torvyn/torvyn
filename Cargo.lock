@@ -2589,6 +2589,7 @@ dependencies = [
  "async-trait",
  "tokio",
  "torvyn-engine",
+ "torvyn-pipeline",
  "torvyn-reactor",
  "torvyn-resources",
  "torvyn-security",

@@ -132,6 +132,10 @@ impl WasmEngine for MockEngine {
             0
         }
     }
+
+    fn default_imports(&self) -> ImportBindings {
+        Self::mock_imports()
+    }
 }
 
 /// Mock component invoker for testing.

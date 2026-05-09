@@ -10,9 +10,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
-use torvyn_engine::WasmtimeEngine;
+use torvyn_engine::{WasmtimeEngine, WasmtimeInvoker};
+use torvyn_reactor::ReactorHandle;
 use torvyn_types::{FlowId, FlowState};
 
 use crate::builder::HostConfig;
@@ -99,28 +101,22 @@ pub struct TorvynHost {
     config: HostConfig,
 
     /// Wasm engine (shared via Arc for use by linker and invoker).
-    #[allow(dead_code)]
     engine: Arc<WasmtimeEngine>,
 
-    /// Reactor handle for creating and managing flows.
-    // CROSS-CRATE DEPENDENCY: ReactorHandle from torvyn-reactor.
-    // reactor: ReactorHandle,
+    /// Component invoker, shared with the reactor coordinator and (via
+    /// `Arc::clone`) with each flow driver during flow spawning.
+    invoker: Arc<WasmtimeInvoker>,
 
-    /// Resource manager (shared via Arc).
-    // CROSS-CRATE DEPENDENCY: ResourceManager from torvyn-resources.
-    // resources: Arc<ResourceManager>,
+    /// Reactor handle for creating and managing flows. Sends commands to
+    /// the coordinator task spawned during `HostBuilder::build`.
+    reactor: ReactorHandle,
 
-    /// Security manager (shared via Arc).
-    // CROSS-CRATE DEPENDENCY: SecurityManager from torvyn-security.
-    // security: Arc<SecurityManager>,
-
-    /// Observability collector.
-    // CROSS-CRATE DEPENDENCY: ObservabilityCollector from torvyn-observability.
-    // observability: ObservabilityCollector,
-
-    /// Component invoker (shared via Arc for use by pipeline instantiation).
-    // CROSS-CRATE DEPENDENCY: WasmtimeInvoker from torvyn-engine.
-    // invoker: Arc<WasmtimeInvoker>,
+    /// Join handle for the reactor coordinator task. Held for the
+    /// lifetime of the host so the coordinator stays alive; on host drop,
+    /// the reactor's `command_tx` closes and the coordinator exits.
+    /// Marked `_` because we do not await it directly — Tokio runtime
+    /// teardown reaps the task on drop.
+    _coordinator_join: Option<JoinHandle<()>>,
 
     /// Active flow records. Protected by `RwLock` for concurrent inspection.
     flows: Arc<RwLock<HashMap<FlowId, FlowRecord>>>,
@@ -139,6 +135,7 @@ impl std::fmt::Debug for TorvynHost {
             .field("config", &self.config)
             .field("status", &self.status)
             .field("next_flow_id", &self.next_flow_id)
+            .field("reactor", &self.reactor)
             .finish_non_exhaustive()
     }
 }
@@ -156,24 +153,48 @@ impl TorvynHost {
     pub(crate) fn new(
         config: HostConfig,
         engine: Arc<WasmtimeEngine>,
-        // reactor: ReactorHandle,
-        // resources: Arc<ResourceManager>,
-        // security: Arc<SecurityManager>,
-        // observability: ObservabilityCollector,
-        // invoker: Arc<WasmtimeInvoker>,
+        invoker: Arc<WasmtimeInvoker>,
+        reactor: ReactorHandle,
+        coordinator_join: Option<JoinHandle<()>>,
     ) -> Self {
         Self {
             config,
             engine,
-            // reactor,
-            // resources,
-            // security,
-            // observability,
-            // invoker,
+            invoker,
+            reactor,
+            _coordinator_join: coordinator_join,
             flows: Arc::new(RwLock::new(HashMap::new())),
             status: HostStatus::Ready,
             next_flow_id: 1,
         }
+    }
+
+    /// Returns a reference to the shared Wasm engine.
+    ///
+    /// # COLD PATH — used by `instantiate_pipeline` callers and
+    /// inspection tools.
+    #[inline]
+    #[must_use]
+    pub fn engine(&self) -> &Arc<WasmtimeEngine> {
+        &self.engine
+    }
+
+    /// Returns a reference to the shared component invoker.
+    ///
+    /// # COLD PATH
+    #[inline]
+    #[must_use]
+    pub fn invoker(&self) -> &Arc<WasmtimeInvoker> {
+        &self.invoker
+    }
+
+    /// Returns a reference to the reactor handle for flow management.
+    ///
+    /// # COLD PATH
+    #[inline]
+    #[must_use]
+    pub fn reactor(&self) -> &ReactorHandle {
+        &self.reactor
     }
 
     /// Start a flow from a pipeline definition.
@@ -432,12 +453,23 @@ impl TorvynHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::mpsc;
     use torvyn_engine::WasmtimeEngineConfig;
+    use torvyn_reactor::events::ReactorCommand;
 
     fn make_test_host() -> TorvynHost {
+        // Build a host with a "dead" reactor handle: the receiver is
+        // dropped immediately, so any subsequent send fails. Host tests
+        // exercise the host's bookkeeping (FlowRecord state, status
+        // transitions) and do not send commands through the reactor —
+        // this keeps the test setup synchronous and avoids spinning up
+        // a full coordinator task per test.
         let config = HostConfig::default();
         let engine = Arc::new(WasmtimeEngine::new(WasmtimeEngineConfig::default()).unwrap());
-        TorvynHost::new(config, engine)
+        let invoker = Arc::new(WasmtimeInvoker::new());
+        let (cmd_tx, _cmd_rx) = mpsc::channel::<ReactorCommand>(1);
+        let reactor = ReactorHandle::new(cmd_tx);
+        TorvynHost::new(config, engine, invoker, reactor, None)
     }
 
     #[test]

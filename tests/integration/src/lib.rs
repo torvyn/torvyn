@@ -396,11 +396,23 @@ pub async fn build_driver(
 /// The coordinator runs in a background Tokio task. The returned handle
 /// can create flows, query state, and shut down.
 pub fn spawn_coordinator(invoker: TestInvoker) -> (ReactorHandle, tokio::task::JoinHandle<()>) {
+    spawn_coordinator_with_arc(Arc::new(invoker))
+}
+
+/// Spawn a [`ReactorCoordinator`] using an existing `Arc<TestInvoker>`.
+///
+/// Use this variant when the test needs to share the same invoker
+/// instance with another component (e.g., to pass the same `Arc` to
+/// [`torvyn_pipeline::instantiate_pipeline`] and to the coordinator so
+/// that any shared state — `CollectSequences` collectors, behaviour
+/// configuration — is observed consistently end-to-end).
+pub fn spawn_coordinator_with_arc(
+    invoker: Arc<TestInvoker>,
+) -> (ReactorHandle, tokio::task::JoinHandle<()>) {
     let (cmd_tx, cmd_rx) = mpsc::channel::<ReactorCommand>(256);
     let (event_tx, _event_rx) = mpsc::channel::<ReactorEvent>(256);
 
-    let coordinator =
-        ReactorCoordinator::new(cmd_rx, event_tx, Arc::new(invoker), Arc::new(NoopEventSink));
+    let coordinator = ReactorCoordinator::new(cmd_rx, event_tx, invoker, Arc::new(NoopEventSink));
 
     let join = tokio::spawn(coordinator.run());
     let handle = ReactorHandle::new(cmd_tx);

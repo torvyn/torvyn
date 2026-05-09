@@ -20,7 +20,7 @@ use crate::cancellation::{CancellationReason, FlowCancellation};
 use crate::config::FlowConfig;
 use crate::error::{FlowCreationError, FlowError};
 use crate::events::{ReactorCommand, ReactorEvent, ShutdownResult};
-use crate::flow_driver::FlowDriverHandle;
+use crate::flow_driver::{FlowDriver, FlowDriverHandle};
 use crate::metrics::FlowCompletionStats;
 use crate::stream::StreamState;
 
@@ -47,15 +47,10 @@ pub struct ReactorCoordinator<I: ComponentInvoker, E: EventSink> {
     flows: HashMap<FlowId, FlowEntry>,
     /// Next flow ID (monotonically increasing).
     next_flow_id: AtomicU64,
-    /// The component invoker (shared across flow drivers).
-    /// CROSS-CRATE DEPENDENCY: requires ComponentInvoker from torvyn-engine.
-    // LLI DEVIATION: prefixed with _ to suppress dead_code warning;
-    // real implementation will use this when spawning flow drivers.
-    _invoker: Arc<I>,
-    /// The event sink for observability.
-    // LLI DEVIATION: prefixed with _ to suppress dead_code warning;
-    // real implementation will clone this into each flow driver.
-    _event_sink: Arc<E>,
+    /// The component invoker, shared across flow drivers via `Arc::clone`.
+    invoker: Arc<I>,
+    /// The event sink for observability. Cloned into each flow driver.
+    event_sink: Arc<E>,
     /// Whether the coordinator is shutting down.
     shutting_down: bool,
 }
@@ -75,8 +70,8 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
             event_tx,
             flows: HashMap::new(),
             next_flow_id: AtomicU64::new(1),
-            _invoker: invoker,
-            _event_sink: event_sink,
+            invoker,
+            event_sink,
             shutting_down: false,
         }
     }
@@ -151,7 +146,131 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
                 let result = self.shutdown(timeout).await;
                 let _ = reply.send(result);
             }
+            ReactorCommand::SpawnFlow {
+                config,
+                instances,
+                reply,
+            } => {
+                if self.shutting_down {
+                    let _ = reply.send(Err(FlowCreationError::ReactorShuttingDown));
+                    return;
+                }
+                let result = self.spawn_flow_with_instances(config, instances);
+                let _ = reply.send(result);
+            }
         }
+    }
+
+    /// Spawn a fully-instantiated flow. Builds streams from the topology,
+    /// constructs a real `FlowDriver`, spawns its `run()` on a Tokio task,
+    /// and stores the join handle.
+    ///
+    /// # COLD PATH — called once per `ReactorCommand::SpawnFlow`.
+    ///
+    /// # Errors
+    /// - [`FlowCreationError::InvalidTopology`] if the topology fails
+    ///   validation or `instances.len()` does not match the stage count.
+    fn spawn_flow_with_instances(
+        &mut self,
+        config: FlowConfig,
+        instances: Vec<ComponentInstance>,
+    ) -> Result<FlowId, FlowCreationError> {
+        // 1. Validate topology.
+        config.topology.validate()?;
+
+        // 2. Validate instance/stage parity.
+        let stage_count = config.topology.stages.len();
+        if instances.len() != stage_count {
+            return Err(FlowCreationError::InvalidTopology(format!(
+                "instance count ({}) does not match topology stage count ({})",
+                instances.len(),
+                stage_count,
+            )));
+        }
+
+        // 3. Assign flow ID.
+        let flow_id = FlowId::new(self.next_flow_id.fetch_add(1, Ordering::Relaxed));
+
+        // 4. Build streams from connections.
+        let streams: Vec<StreamState> = config
+            .topology
+            .connections
+            .iter()
+            .enumerate()
+            .map(|(idx, conn)| {
+                let capacity = conn
+                    .config
+                    .capacity
+                    .unwrap_or(config.default_queue_capacity);
+                let policy = conn
+                    .config
+                    .backpressure_policy
+                    .unwrap_or(config.default_backpressure_policy);
+                let low_wm = conn
+                    .config
+                    .low_watermark_ratio
+                    .unwrap_or(config.default_low_watermark_ratio);
+
+                StreamState::new(
+                    StreamId::new(idx as u64),
+                    flow_id,
+                    config.topology.stages[conn.from_stage].component_id,
+                    config.topology.stages[conn.to_stage].component_id,
+                    capacity,
+                    policy,
+                    low_wm,
+                )
+            })
+            .collect();
+
+        // 5. Cancellation token. The handle keeps a clone; the driver
+        //    receives the original which it threads into its select! loop.
+        let cancellation = FlowCancellation::new();
+        let handle_cancellation = cancellation.clone();
+
+        let handle = FlowDriverHandle {
+            flow_id,
+            cancellation: handle_cancellation,
+            state: FlowState::Instantiated,
+        };
+
+        // 6. Clone the shared subsystems for the driver.
+        // `Arc<I>: ComponentInvoker` via the blanket impl in torvyn-engine.
+        let invoker_for_driver: Arc<I> = Arc::clone(&self.invoker);
+        let event_sink_for_driver: E = (*self.event_sink).clone();
+        let event_tx_for_driver = self.event_tx.clone();
+
+        // 7. Spawn the flow driver task. The driver consumes config,
+        //    instances, streams, and cancellation; `Arc<I>` and the event
+        //    sink clone keep the host's shared subsystems alive.
+        let join_handle = tokio::spawn(async move {
+            let driver = FlowDriver::new(
+                flow_id,
+                config,
+                instances,
+                streams,
+                invoker_for_driver,
+                event_sink_for_driver,
+                cancellation,
+                event_tx_for_driver,
+            );
+            driver.run().await
+        });
+
+        self.flows.insert(
+            flow_id,
+            FlowEntry {
+                handle,
+                join_handle,
+            },
+        );
+
+        info!(
+            flow_id = %flow_id,
+            stages = stage_count,
+            "flow spawned"
+        );
+        Ok(flow_id)
     }
 
     /// Create and start a new flow.

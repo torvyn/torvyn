@@ -33,6 +33,8 @@ pub use builder::PipelineTopologyBuilder;
 pub use convert::flow_def_to_topology;
 pub use error::{PipelineError, ValidationReport};
 pub use handle::PipelineHandle;
+pub use instantiate::instantiate_pipeline;
+pub use shutdown::shutdown_pipeline;
 pub use topology::{
     EdgeConfig, ErrorPolicy, NodeConfig, PipelineTopology, TopologyEdge, TopologyNode,
 };

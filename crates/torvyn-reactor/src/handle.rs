@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
+use torvyn_engine::ComponentInstance;
 use torvyn_types::{FlowId, FlowState};
 
 use crate::cancellation::CancellationReason;
@@ -51,6 +52,11 @@ impl ReactorHandle {
     ///
     /// # COLD PATH
     ///
+    /// Note: as of v0.1, this command path is a placeholder retained for
+    /// backward compatibility. To actually run a flow, use
+    /// [`spawn_flow`](Self::spawn_flow), which pairs the config with the
+    /// component instances the host has already instantiated.
+    ///
     /// # Errors
     /// - [`FlowCreationError::InvalidTopology`] if the topology is invalid.
     /// - [`FlowCreationError::ReactorShuttingDown`] if the reactor is shutting down.
@@ -58,6 +64,45 @@ impl ReactorHandle {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send(ReactorCommand::CreateFlow(config, tx))
+            .await
+            .map_err(|_| FlowCreationError::ReactorShuttingDown)?;
+        rx.await
+            .map_err(|_| FlowCreationError::Internal("coordinator dropped".into()))?
+    }
+
+    /// Spawn a fully-instantiated flow.
+    ///
+    /// This is the production cold-path entry: the host has already
+    /// compiled, instantiated, and `lifecycle.init`'d each component, and
+    /// passes the resulting [`ComponentInstance`]s here. The coordinator
+    /// builds the per-flow [`StreamState`](crate::stream::StreamState)
+    /// values from the topology, constructs a real
+    /// [`FlowDriver`](crate::flow_driver::FlowDriver), and spawns it as a
+    /// Tokio task.
+    ///
+    /// # COLD PATH — called once per flow during `instantiate_pipeline`.
+    ///
+    /// # Preconditions
+    /// - `instances.len() == config.topology.stages.len()`
+    /// - `instances[i]` is the live instance for `config.topology.stages[i]`.
+    ///
+    /// # Errors
+    /// - [`FlowCreationError::InvalidTopology`] if validation fails or the
+    ///   instance count does not match the stage count.
+    /// - [`FlowCreationError::ReactorShuttingDown`] if the reactor is shutting down.
+    /// - [`FlowCreationError::Internal`] if the coordinator has been dropped.
+    pub async fn spawn_flow(
+        &self,
+        config: FlowConfig,
+        instances: Vec<ComponentInstance>,
+    ) -> Result<FlowId, FlowCreationError> {
+        let (reply, rx) = oneshot::channel();
+        self.command_tx
+            .send(ReactorCommand::SpawnFlow {
+                config,
+                instances,
+                reply,
+            })
             .await
             .map_err(|_| FlowCreationError::ReactorShuttingDown)?;
         rx.await
