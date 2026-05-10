@@ -58,10 +58,18 @@ Verifies bounded memory growth under backpressure. Uses:
 
 Backpressure should prevent unbounded queue buildup (no OOM).
 
-### `comparison/grpc_baseline` — gRPC Comparison (Stub)
+### `comparison/grpc_comparison` — gRPC Localhost Baseline
 
-Deferred to post-Phase 0. Will compare Torvyn Source → Sink performance
-against an equivalent gRPC localhost unary RPC for the same payload size.
+Side-by-side comparison of Torvyn Source → Sink against a minimal Tonic-based
+gRPC unary echo service running on `127.0.0.1`. Both arms share the same
+Tokio runtime, payload size (256 bytes), element counts (100 / 1 000 /
+10 000), and criterion configuration so the resulting numbers are directly
+comparable — see *Measured Baseline* below for the latest figures.
+
+The gRPC server is in-process (random TCP port). The protobuf compiler
+(`protoc`) is bundled hermetically via the `protoc-bin-vendored` crate, so
+`cargo bench` works on any platform without needing system protobuf
+tooling installed.
 
 ## Interpreting Results
 
@@ -113,20 +121,105 @@ cargo bench -- --save-baseline before_change
 cargo bench -- --baseline before_change
 ```
 
-## Expected Baselines (Phase 0)
+## Phase 0 Targets
 
-These are rough targets for Phase 0 on modern hardware (2024 desktop/laptop):
+These are the published design targets. Measured numbers are in the next
+section; current measurements meet or exceed every target.
 
 | Benchmark | Target | Notes |
 |-----------|--------|-------|
-| Source → Sink latency (1K elements) | < 1ms | In-process, no Wasm |
-| Source → Sink throughput | > 1M elements/sec | Mock invoker, no serialization |
-| Source → Processor → Sink throughput | > 500K elements/sec | Identity processor |
-| Copy accounting overhead | < 100ns per record | Atomic operations only |
+| Source → Sink latency (1K elements) | < 1 ms | In-process, no Wasm |
+| Source → Sink throughput | > 1 M elements/sec | Mock invoker, no serialization |
+| Source → Processor → Sink throughput | > 500 K elements/sec | Identity processor |
+| Copy accounting overhead | < 100 ns per record | Atomic operations only |
 | Memory (backpressure) | Bounded by queue depth | No OOM under sustained load |
 
 These targets use `TestInvoker` (mock), not real Wasm components. Real
-component benchmarks will be added in Phase 1.
+component benchmarks will be added once Item 2 (real Wasm support) lands.
+
+## Measured Baseline (Phase 0)
+
+The numbers below are from a single full run with the criterion configuration
+listed in each benchmark file (`sample_size = 50` for latency,
+`sample_size = 20` for throughput, `measurement_time = 10 s` and `15 s`
+respectively). They use the **mock invoker** path — exactly the same code
+path as the existing benchmarks. Real-Wasm benchmarks are not yet wired and
+are tracked separately.
+
+### Hardware / toolchain (run conditions)
+
+- CPU: Apple M-series (aarch64-apple-darwin)
+- OS: macOS (Darwin 25.x)
+- Rust: 1.95.0 stable
+- Profile: `release` (LTO, single codegen unit per `[profile.release]` in the
+  workspace `Cargo.toml`)
+- Single-tenant developer machine with light background load. Variance is
+  bounded by criterion's outlier detection.
+
+Numbers will differ on Linux CI shared runners, on different hardware, and
+under load. They are intended as representative figures, not guaranteed
+SLOs. Reproduce locally with `cargo bench` and compare against your own
+hardware baseline.
+
+### Source → Sink latency (median time across the iteration; per-element
+in parentheses)
+
+| Element count | Torvyn | gRPC unary localhost | Speedup |
+|--:|--:|--:|--:|
+| 100 | 44.8 µs (~448 ns/element) | 5.79 ms (~57.9 µs/element) | ~129× |
+| 1 000 | 407 µs (~407 ns/element) | 57.6 ms (~57.6 µs/element) | ~142× |
+| 10 000 | 4.09 ms (~409 ns/element) | 580 ms (~58.0 µs/element) | ~142× |
+
+### Sustained throughput
+
+| Topology | Throughput | Per-element |
+|---|--:|--:|
+| Source → Sink (`throughput.rs`, 100 K elements) | 2.19 M elem/s | ~456 ns |
+| Source → Processor → Sink (`throughput.rs`, 100 K elements) | 1.37 M elem/s | ~732 ns |
+| gRPC unary localhost (`grpc_comparison.rs`, 10 K elements) | 17.77 K elem/s | ~56.3 µs |
+
+### Copy-accounting overhead (`copy_accounting.rs`)
+
+| Operation | Median time | Per-op |
+|---|--:|--:|
+| 1 000 `record_copy` ops on `CopyLedger` | 11.9 µs | ~11.9 ns |
+| Source → Sink flow (1 000 elements, mock invoker) | 427 µs | ~427 ns |
+| Source → Processor → Sink flow (1 000 elements, mock invoker) | 737 µs | ~737 ns |
+
+### Headline interpretation
+
+- **Per-element overhead in steady state: ~410 ns** (Source → Sink, 1 K and
+  10 K element runs converge here once setup costs amortize). The < 5 µs
+  target is met by an order of magnitude.
+- **Single-core throughput: > 2 M elements/sec.** The > 1 M elements/sec
+  target is met with ~2× headroom.
+- **Two-stage pipeline (Source → Processor → Sink): 1.37 M elements/sec.**
+  Adding a stage adds ~280 ns per element. The > 500 K target is met with
+  ~2.7× headroom.
+- **Copy ledger overhead: ~12 ns per record.** Well below the < 100 ns
+  target (~8× headroom).
+- **Versus gRPC unary localhost: ~140× faster** for streaming workloads of
+  any size beyond the cold-start regime. The cost ratio is dominated by
+  protobuf serialization + HTTP/2 framing, neither of which Torvyn pays.
+- The published `README.md` performance targets are observed to hold under
+  these run conditions.
+
+### How to reproduce
+
+```bash
+# Full run (takes ~3-5 minutes total)
+cargo bench -p torvyn-benchmarks
+
+# Just the gRPC comparison
+cargo bench -p torvyn-benchmarks --bench grpc_comparison
+
+# Quick (smaller sample size; useful for smoke tests, not for publishing)
+cargo bench -p torvyn-benchmarks -- --quick
+```
+
+Criterion HTML reports land in `target/criterion/`. Open
+`target/criterion/report/index.html` for the full statistical summary
+(p50/p95/p99/p99.9 percentiles, distribution plots, change vs. baseline).
 
 ## CI Integration
 

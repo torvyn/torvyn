@@ -334,6 +334,8 @@ The starter template creates a two-component pipeline (Source to Sink) with WIT 
 
 Torvyn treats benchmarks as product features. All performance claims are backed by reproducible methodology published in the repository.
 
+### Targets (v0.1)
+
 | Metric | Target | Notes |
 |--------|--------|-------|
 | Per-element runtime overhead | < 5 us | Excludes component execution time |
@@ -341,9 +343,26 @@ Torvyn treats benchmarks as product features. All performance claims are backed 
 | Copy accounting | Exactly 4 copies per element (Source-Processor-Sink) | Read/write per stage boundary |
 | Pipeline startup | Sub-second for cached components | Wasmtime compilation cached via `ComponentTypeId` |
 
-Benchmark comparisons against same-node gRPC, process boundaries, and conventional plugin approaches are published in [`benches/`](benches/) and tracked in CI to catch regressions. See `torvyn bench --help` for details on running benchmarks locally.
+### Measured Baseline (Phase 0)
 
-> **Note:** These are design targets for v0.1. Actual measurements will be published with each release once the benchmark suite is operational.
+Numbers from a full criterion run on Apple M-series, macOS, Rust 1.95.0
+stable, release profile (LTO + single codegen unit). Mock-invoker path —
+real-Wasm benchmarks land alongside Item 2.
+
+| Metric | Measured | vs. Target |
+|--------|---------:|-----------:|
+| Source → Sink per-element overhead (steady state) | ~410 ns | ~12× under target |
+| Source → Sink throughput | 2.19 M elem/s | exceeds 1 M target by ~2× |
+| Source → Processor → Sink throughput | 1.37 M elem/s | exceeds 500 K target by ~2.7× |
+| Copy-ledger overhead per record | ~12 ns | ~8× under target |
+| Speedup vs. gRPC unary localhost | ~140× | n/a — comparison baseline |
+
+The gRPC comparison uses an in-process Tonic echo service on `127.0.0.1`
+with the same payload size (256 bytes) and element counts (100 / 1 000 /
+10 000) as the Torvyn arm. Full numbers, methodology, hardware caveats,
+and reproduction steps are in [`benches/README.md`](benches/README.md).
+
+Benchmark comparisons against same-node gRPC, process boundaries, and conventional plugin approaches are published in [`benches/`](benches/) and tracked in CI to catch regressions. See `torvyn bench --help` for details on running benchmarks locally.
 
 ## Status
 

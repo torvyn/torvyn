@@ -1,0 +1,27 @@
+// Minimal Echo service for the gRPC baseline benchmark.
+//
+// Compiled by `tonic-build` via `benches/build.rs` into Rust types in OUT_DIR.
+// The benchmark spawns an in-process Tonic server on TCP localhost and measures
+// the latency / throughput of unary `Process` calls — to provide an apples-to-
+// apples comparison against Torvyn's Source -> Sink pipeline.
+
+syntax = "proto3";
+
+package torvyn.bench.echo;
+
+service Echo {
+  // Returns the request unchanged. Models the cheapest non-trivial gRPC unary
+  // call: server-side cost is dominated by transport (HTTP/2 framing, protobuf
+  // serialization) rather than application logic — exactly what we want to
+  // measure as the "transport baseline."
+  rpc Process(Payload) returns (Payload);
+}
+
+message Payload {
+  // Application payload bytes. Held as raw bytes (not a typed message) so the
+  // benchmark can vary payload size without changing the .proto.
+  bytes  data     = 1;
+
+  // Monotonic sequence number, mirroring Torvyn's `ElementMeta.sequence`.
+  uint64 sequence = 2;
+}

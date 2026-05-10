@@ -18,6 +18,23 @@ tokio = { version = "1.41.0", features = ["full"] }
 async-trait = "0.1"
 criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
 
+# gRPC comparison baseline (used by `comparison/grpc_comparison.rs`).
+# Tonic 0.12 + prost 0.13 are stable and have MSRVs well below 1.91.
+tonic = "0.12"
+prost = "0.13"
+# `tokio-stream` provides `TcpListenerStream`, used to bind on a random port
+# (`127.0.0.1:0`) and feed the resulting stream into Tonic's
+# `serve_with_incoming` so we can recover the bound address for the client.
+tokio-stream = { version = "0.1", features = ["net"] }
+
+[build-dependencies]
+# `tonic-build` invokes `protoc` to compile `.proto` files.
+# `protoc-bin-vendored` bundles a hermetic protoc binary so the build does
+# not depend on a system-installed protobuf compiler — keeping `cargo bench`
+# self-contained both locally and in CI.
+tonic-build = "0.12"
+protoc-bin-vendored = "3"
+
 [lints.rust]
 # Criterion macros generate undocumented functions; benchmarks don't need doc warnings.
 missing_docs = "allow"
@@ -39,4 +56,9 @@ harness = false
 
 [[bench]]
 name = "memory"
+harness = false
+
+[[bench]]
+name = "grpc_comparison"
+path = "comparison/grpc_comparison.rs"
 harness = false
