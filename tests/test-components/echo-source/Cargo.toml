@@ -3,14 +3,19 @@ name = "test-echo-source"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Test source component: produces N numbered elements"
+description = "Test source component: allocates a host buffer, writes the sequence number, freezes, and returns."
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.41"
+wit-bindgen-rt = { version = "0.41", features = ["bitflags"] }
 
 [package.metadata.component]
 package = "torvyn:streaming"
+
+[package.metadata.component.target]
+path = "../../../crates/torvyn-contracts/wit/torvyn-streaming"
 world = "data-source"
+
+[workspace]

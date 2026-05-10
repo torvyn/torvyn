@@ -61,6 +61,24 @@ jobs:
       - name: Run integration tests
         run: cargo test -p torvyn-integration-tests
 
+  wasm-e2e:
+    name: Wasm End-to-End
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install wasm32-wasip2 target
+        run: rustup target add wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm-e2e
+      - uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: cargo-component@0.21.1
+      - name: Run real-Wasm end-to-end tests
+        run: cargo test -p torvyn-integration-tests --features wasm-e2e --test test_real_wasm_e2e
+
   doc:
     name: Documentation
     runs-on: ubuntu-latest

@@ -17,6 +17,7 @@ tracing-support = ["dep:tracing"]
 [dependencies]
 # Internal
 torvyn-types.workspace = true
+torvyn-resources.workspace = true
 
 # Wasmtime (feature-gated)
 # LLI DEVIATION: pinned to v42 per spike findings (LLI assumed v29)

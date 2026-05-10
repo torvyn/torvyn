@@ -1,36 +1,42 @@
-//! Echo source: produces numbered elements for testing.
+//! Echo source: produces N numbered elements through the real
+//! buffer-allocator path so the host's `DefaultResourceManager` sees one
+//! `ComponentToHost` copy event per element (8 bytes — the sequence
+//! number encoded little-endian).
 //!
-//! Configuration (JSON string via lifecycle.init):
+//! Configuration (JSON string via `lifecycle.init`):
 //! ```json
-//! { "count": 1000 }
+//! { "count": 100 }
 //! ```
+//! Empty config falls back to 1000.
+
+#[allow(warnings)]
+mod bindings;
 
 use std::cell::RefCell;
 
-wit_bindgen::generate!({
-    world: "data-source",
-    path: "../../../crates/torvyn-contracts/wit/torvyn-streaming",
-});
+use bindings::exports::torvyn::streaming::{lifecycle, source};
+use bindings::torvyn::streaming::buffer_allocator::allocate;
+use bindings::torvyn::streaming::types::{
+    BackpressureSignal, ElementMeta, OutputElement, ProcessError,
+};
 
 struct EchoSource;
 
 thread_local! {
-    static STATE: RefCell<EchoSourceState> = RefCell::new(EchoSourceState {
-        remaining: 0,
-        sequence: 0,
-    });
+    static STATE: RefCell<State> = const { RefCell::new(State { remaining: 0, sequence: 0 }) };
 }
 
-struct EchoSourceState {
+struct State {
     remaining: u64,
     sequence: u64,
 }
 
-impl Guest for EchoSource {
+impl lifecycle::Guest for EchoSource {
     fn init(config: String) -> Result<(), ProcessError> {
         let count: u64 = if config.is_empty() {
-            1000 // default
+            1000
         } else {
+            // Minimal JSON parser sufficient for `{"count":N}` and `{}`.
             config
                 .trim()
                 .strip_prefix("{\"count\":")
@@ -48,34 +54,41 @@ impl Guest for EchoSource {
         Ok(())
     }
 
-    fn teardown() {
-        // Nothing to clean up
-    }
+    fn teardown() {}
+}
 
+impl source::Guest for EchoSource {
     fn pull() -> Result<Option<OutputElement>, ProcessError> {
-        STATE.with(|s| {
+        let (seq, has_more) = STATE.with(|s| {
             let mut state = s.borrow_mut();
             if state.remaining == 0 {
-                return Ok(None); // Stream complete
+                return (0, false);
             }
-
             let seq = state.sequence;
             state.sequence += 1;
             state.remaining -= 1;
+            (seq, true)
+        });
+        if !has_more {
+            return Ok(None);
+        }
 
-            // Produce a payload: the sequence number as 8 bytes (little-endian)
-            let payload = seq.to_le_bytes().to_vec();
+        let mb = allocate(8).map_err(|_| ProcessError::Internal("allocate failed".into()))?;
+        mb.write(0, &seq.to_le_bytes())
+            .map_err(|_| ProcessError::Internal("write failed".into()))?;
+        let buf = mb.freeze();
 
-            Ok(Some(OutputElement {
-                meta: ElementMeta {
-                    sequence: seq,
-                    timestamp_ns: 0,
-                    content_type: "application/octet-stream".into(),
-                },
-                payload,
-            }))
-        })
+        Ok(Some(OutputElement {
+            meta: ElementMeta {
+                sequence: seq,
+                timestamp_ns: 0,
+                content_type: "application/octet-stream".into(),
+            },
+            payload: buf,
+        }))
     }
+
+    fn notify_backpressure(_signal: BackpressureSignal) {}
 }
 
-export!(EchoSource);
+bindings::export!(EchoSource with_types_in bindings);

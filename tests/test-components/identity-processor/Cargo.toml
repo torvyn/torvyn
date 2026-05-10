@@ -3,14 +3,19 @@ name = "test-identity-processor"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Test processor component: passes elements through unchanged"
+description = "Test processor component: reads input bytes, allocates a new host buffer, writes them through, returns the freshly owned buffer."
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.41"
+wit-bindgen-rt = { version = "0.41", features = ["bitflags"] }
 
 [package.metadata.component]
 package = "torvyn:streaming"
+
+[package.metadata.component.target]
+path = "../../../crates/torvyn-contracts/wit/torvyn-streaming"
 world = "transform"
+
+[workspace]

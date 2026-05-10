@@ -24,11 +24,10 @@ use async_trait::async_trait;
 use wasmtime::component::Resource;
 use wasmtime::Trap;
 
-use torvyn_types::{
-    BackpressureSignal, BufferHandle, ComponentId, ElementMeta, ProcessError, ResourceId,
-};
+use torvyn_resources::OwnerId;
+use torvyn_types::{BackpressureSignal, ComponentId, ElementMeta, ProcessError};
 
-use crate::host_state::HostBuffer;
+use crate::host_state::{HostBuffer, HostState};
 use crate::traits::ComponentInvoker;
 use crate::types::{
     ComponentInstance, ComponentInstanceInner, OutputElement, ProcessResult, StreamElement,
@@ -108,21 +107,53 @@ impl WasmtimeInvoker {
     }
 
     /// Translate a WIT `output-element` produced by the guest into Torvyn's
-    /// [`OutputElement`]. The owned buffer resource stays in the host's
-    /// resource table; the table index is encoded as a [`BufferHandle`].
+    /// [`OutputElement`], performing the Component → Host ownership
+    /// transfer that hands the underlying buffer to the runtime.
+    ///
+    /// Steps:
+    /// 1. Delete the per-store `HostBuffer` entry — the guest no longer
+    ///    holds a handle to it (Component Model semantics: returning an
+    ///    owned resource consumes the guest handle).
+    /// 2. Look up the manager-wide [`BufferHandle`] and the buffer's
+    ///    last-known owner.
+    /// 3. Drive the manager's ownership state machine
+    ///    `Owned(Component) → Transit → Owned(Host)` via
+    ///    `transfer_ownership`.
+    /// 4. Return the Torvyn [`OutputElement`] for the reactor.
+    ///
+    /// On any failure the buffer's manager-side state may be inconsistent;
+    /// we propagate as `ProcessError::Internal` and rely on flow-level
+    /// cleanup (`Drop for HostState`) to reclaim leaks.
     ///
     /// # HOT PATH — called per element produced by a source/processor.
-    #[inline]
-    fn convert_output_element(out: wit_types::OutputElement) -> OutputElement {
-        let payload_idx = out.payload.rep();
-        OutputElement {
+    fn convert_output_element(
+        state: &mut HostState,
+        out: wit_types::OutputElement,
+        component_id: ComponentId,
+    ) -> Result<OutputElement, ProcessError> {
+        let entry: HostBuffer = state.table.delete(out.payload).map_err(|e| {
+            ProcessError::Internal(format!(
+                "Component {component_id} returned an unknown buffer resource: {e}"
+            ))
+        })?;
+        let from = entry.owner;
+        let handle = entry.handle;
+        state
+            .resources
+            .transfer_ownership(handle, from, OwnerId::Host)
+            .map_err(|e| {
+                ProcessError::Internal(format!(
+                    "Component {component_id} → host buffer transfer failed: {e}"
+                ))
+            })?;
+        Ok(OutputElement {
             meta: ElementMeta::new(
                 out.meta.sequence,
                 out.meta.timestamp_ns,
                 out.meta.content_type,
             ),
-            payload: BufferHandle::new(ResourceId::new(payload_idx, 0)),
-        }
+            payload: handle,
+        })
     }
 
     /// Translate a WIT `backpressure-signal` to the Torvyn domain enum.
@@ -134,40 +165,44 @@ impl WasmtimeInvoker {
         }
     }
 
-    /// Build a borrowed `Resource<HostBuffer>` referring to the table entry
-    /// at `handle.resource_id().index()`. The resource is borrowed (not
-    /// owned), so the host retains responsibility for cleaning the table
-    /// entry up after the call returns.
-    ///
-    /// # HOT PATH — called per element entering a processor/sink.
-    #[inline]
-    fn borrow_buffer(handle: BufferHandle) -> Resource<HostBuffer> {
-        Resource::new_borrow(handle.resource_id().index())
-    }
-
-    /// Build a borrowed flow-context resource. Session 2.1 uses index 0 as
+    /// Build a borrowed flow-context resource. Session 2.2 uses index 0 as
     /// a placeholder — the real flow context is plumbed through by the
-    /// reactor in Session 2.2.
+    /// reactor in a later session.
     #[inline]
     fn borrow_flow_context() -> Resource<crate::host_state::HostFlowContext> {
         Resource::new_borrow(0)
     }
 
     /// Build the bindgen `stream-element` record from a Torvyn
-    /// [`StreamElement`]. The payload is passed as a borrowed buffer
-    /// resource; the runtime retains ownership of the underlying host
-    /// buffer.
-    #[inline]
-    fn to_wit_stream_element(element: &StreamElement) -> wit_types::StreamElement {
-        wit_types::StreamElement {
+    /// [`StreamElement`]. The host inserts a `HostBuffer` entry into the
+    /// per-store resource table on the spot, recording that the buffer is
+    /// currently `Owned(Host)` and being borrowed for the duration of the
+    /// downstream call. The returned [`Resource<HostBuffer>`] is borrowed
+    /// (the host retains the table entry); the caller is responsible for
+    /// pairing this with `manager.borrow_start` / `borrow_end` calls in
+    /// future sessions that exercise process / push end-to-end.
+    fn to_wit_stream_element(
+        state: &mut HostState,
+        element: &StreamElement,
+    ) -> wasmtime::Result<wit_types::StreamElement> {
+        let wrapper = HostBuffer {
+            handle: element.payload,
+            owner: OwnerId::Host,
+        };
+        let resource = state
+            .table
+            .push(wrapper)
+            .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
+        let rep = resource.rep();
+        Ok(wit_types::StreamElement {
             meta: wit_types::ElementMeta {
                 sequence: element.meta.sequence,
                 timestamp_ns: element.meta.timestamp_ns,
                 content_type: element.meta.content_type.clone(),
             },
-            payload: Self::borrow_buffer(element.payload),
+            payload: Resource::new_borrow(rep),
             context: Self::borrow_flow_context(),
-        }
+        })
     }
 }
 
@@ -186,23 +221,27 @@ impl ComponentInvoker for WasmtimeInvoker {
         component_id: ComponentId,
     ) -> Result<Option<OutputElement>, ProcessError> {
         let state = Self::wasmtime_state(instance)?;
-        let bindings = match &state.bindings {
-            Some(WitBindings::DataSource(b)) => b,
-            _ => {
-                return Err(ProcessError::Internal(format!(
-                    "Component {component_id} is not a data-source — `pull` is not exported"
-                )));
-            }
+        let outer = {
+            let bindings = match &state.bindings {
+                Some(WitBindings::DataSource(b)) => b,
+                _ => {
+                    return Err(ProcessError::Internal(format!(
+                        "Component {component_id} is not a data-source — `pull` is not exported"
+                    )));
+                }
+            };
+            bindings
+                .torvyn_streaming_source()
+                .call_pull(&mut state.store)
+                .await
+                .map_err(|e| Self::convert_wasm_error(e, component_id, "pull"))?
         };
 
-        let outer = bindings
-            .torvyn_streaming_source()
-            .call_pull(&mut state.store)
-            .await
-            .map_err(|e| Self::convert_wasm_error(e, component_id, "pull"))?;
-
         match outer {
-            Ok(Some(out)) => Ok(Some(Self::convert_output_element(out))),
+            Ok(Some(out)) => {
+                let host_state = state.store.data_mut();
+                Self::convert_output_element(host_state, out, component_id).map(Some)
+            }
             Ok(None) => Ok(None),
             Err(e) => Err(Self::convert_wit_process_error(e)),
         }
@@ -216,7 +255,9 @@ impl ComponentInvoker for WasmtimeInvoker {
         element: StreamElement,
     ) -> Result<ProcessResult, ProcessError> {
         let state = Self::wasmtime_state(instance)?;
-        let wit_element = Self::to_wit_stream_element(&element);
+
+        let wit_element = Self::to_wit_stream_element(state.store.data_mut(), &element)
+            .map_err(|e| ProcessError::Internal(format!("stream-element marshal: {e}")))?;
 
         let outer = match &state.bindings {
             Some(WitBindings::Transform(b)) => {
@@ -239,7 +280,9 @@ impl ComponentInvoker for WasmtimeInvoker {
         let inner = outer.map_err(|e| Self::convert_wasm_error(e, component_id, "process"))?;
         match inner {
             Ok(wit_types::ProcessResult::Emit(out)) => {
-                Ok(ProcessResult::Output(Self::convert_output_element(out)))
+                let host_state = state.store.data_mut();
+                Self::convert_output_element(host_state, out, component_id)
+                    .map(ProcessResult::Output)
             }
             Ok(wit_types::ProcessResult::Drop) => Ok(ProcessResult::Filtered),
             Err(e) => Err(Self::convert_wit_process_error(e)),
@@ -254,21 +297,25 @@ impl ComponentInvoker for WasmtimeInvoker {
         element: StreamElement,
     ) -> Result<BackpressureSignal, ProcessError> {
         let state = Self::wasmtime_state(instance)?;
-        let bindings = match &state.bindings {
-            Some(WitBindings::DataSink(b)) => b,
-            _ => {
-                return Err(ProcessError::Internal(format!(
-                    "Component {component_id} is not a data-sink — `push` is not exported"
-                )));
-            }
-        };
-        let wit_element = Self::to_wit_stream_element(&element);
 
-        let outer = bindings
-            .torvyn_streaming_sink()
-            .call_push(&mut state.store, &wit_element)
-            .await
-            .map_err(|e| Self::convert_wasm_error(e, component_id, "push"))?;
+        let wit_element = Self::to_wit_stream_element(state.store.data_mut(), &element)
+            .map_err(|e| ProcessError::Internal(format!("stream-element marshal: {e}")))?;
+
+        let outer = {
+            let bindings = match &state.bindings {
+                Some(WitBindings::DataSink(b)) => b,
+                _ => {
+                    return Err(ProcessError::Internal(format!(
+                        "Component {component_id} is not a data-sink — `push` is not exported"
+                    )));
+                }
+            };
+            bindings
+                .torvyn_streaming_sink()
+                .call_push(&mut state.store, &wit_element)
+                .await
+                .map_err(|e| Self::convert_wasm_error(e, component_id, "push"))?
+        };
 
         match outer {
             Ok(s) => Ok(Self::convert_backpressure_signal(s)),
@@ -441,34 +488,95 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_convert_output_element_preserves_fields() {
-        let out = wit_types::OutputElement {
+    #[tokio::test]
+    async fn test_convert_output_element_transfers_ownership_to_host() {
+        use std::sync::Arc;
+        use torvyn_resources::DefaultResourceManager;
+        use torvyn_types::{FlowId, ResourceState};
+
+        let resources = Arc::new(DefaultResourceManager::new_for_testing());
+        let cid = ComponentId::new(7);
+        let flow = FlowId::new(7);
+        let mut host_state = HostState::new(
+            cid,
+            wasmtime::StoreLimitsBuilder::new().build(),
+            1_000_000,
+            Arc::clone(&resources),
+            flow,
+        );
+        let component_owner = OwnerId::Component(cid);
+
+        // Simulate a buffer the guest just allocated and is about to return
+        // as part of an output-element.
+        let handle = resources
+            .allocate(component_owner, 256, flow)
+            .expect("allocate");
+        let wrapper = HostBuffer {
+            handle,
+            owner: component_owner,
+        };
+        let resource = host_state.table.push(wrapper).expect("push");
+        let wit_out = wit_types::OutputElement {
             meta: wit_types::ElementMeta {
                 sequence: 42,
                 timestamp_ns: 1_234_567,
                 content_type: "application/json".into(),
             },
-            payload: Resource::new_own(7),
+            payload: resource,
         };
-        let converted = WasmtimeInvoker::convert_output_element(out);
+
+        let converted =
+            WasmtimeInvoker::convert_output_element(&mut host_state, wit_out, cid).expect("ok");
+
         assert_eq!(converted.meta.sequence, 42);
         assert_eq!(converted.meta.timestamp_ns, 1_234_567);
         assert_eq!(converted.meta.content_type, "application/json");
-        assert_eq!(converted.payload.resource_id().index(), 7);
+        assert_eq!(converted.payload, handle);
+
+        let info = resources.inspect(handle).expect("inspect");
+        assert_eq!(
+            info.owner,
+            OwnerId::Host,
+            "buffer must now be owned by the host"
+        );
+        assert_eq!(info.state, ResourceState::Owned);
     }
 
-    #[test]
-    fn test_to_wit_stream_element_borrows_payload() {
+    #[tokio::test]
+    async fn test_to_wit_stream_element_inserts_host_borrow() {
+        use std::sync::Arc;
+        use torvyn_resources::DefaultResourceManager;
+        use torvyn_types::{BufferHandle, FlowId, ResourceId};
+
+        let resources = Arc::new(DefaultResourceManager::new_for_testing());
+        let cid = ComponentId::new(7);
+        let mut host_state = HostState::new(
+            cid,
+            wasmtime::StoreLimitsBuilder::new().build(),
+            1_000_000,
+            Arc::clone(&resources),
+            FlowId::new(7),
+        );
+
+        let handle = BufferHandle::new(ResourceId::new(99, 1));
         let element = StreamElement {
             meta: ElementMeta::new(10, 2_000, "text/plain".into()),
-            payload: BufferHandle::new(ResourceId::new(11, 0)),
+            payload: handle,
         };
-        let wit_element = WasmtimeInvoker::to_wit_stream_element(&element);
+        let wit_element =
+            WasmtimeInvoker::to_wit_stream_element(&mut host_state, &element).expect("ok");
+
         assert_eq!(wit_element.meta.sequence, 10);
         assert_eq!(wit_element.meta.content_type, "text/plain");
-        // `Resource::rep()` exposes the underlying handle index; a borrowed
-        // resource preserves the index the host passed in.
-        assert_eq!(wit_element.payload.rep(), 11);
+        // The host pushed an entry into the per-store table for this call.
+        let rep = wit_element.payload.rep();
+        let entry = host_state
+            .table
+            .get(&wasmtime::component::Resource::<HostBuffer>::new_borrow(
+                rep,
+            ))
+            .expect("table entry exists");
+        assert_eq!(entry.handle, handle, "BufferHandle preserved on insert");
+        assert_eq!(entry.owner, OwnerId::Host, "host-owned for the borrow");
     }
 }

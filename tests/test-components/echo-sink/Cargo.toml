@@ -3,14 +3,19 @@ name = "test-echo-sink"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Test sink component: collects elements and verifies ordering"
+description = "Test sink component: reads the borrowed payload of each pushed element (records one HostToComponent copy)."
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.41"
+wit-bindgen-rt = { version = "0.41", features = ["bitflags"] }
 
 [package.metadata.component]
 package = "torvyn:streaming"
+
+[package.metadata.component.target]
+path = "../../../crates/torvyn-contracts/wit/torvyn-streaming"
 world = "data-sink"
+
+[workspace]

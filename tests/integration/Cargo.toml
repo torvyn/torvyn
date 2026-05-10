@@ -4,11 +4,18 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 description = "Workspace-level integration tests for Torvyn"
+build = "build.rs"
+
+[features]
+# Gate the real-Wasm end-to-end test (`tests/test_real_wasm_e2e.rs`).
+# CI's dedicated `wasm-e2e` job enables this; plain `cargo test --workspace`
+# does not, keeping the standard test matrix toolchain-free.
+wasm-e2e = []
 
 [dependencies]
 # Internal crates
 torvyn-types = { path = "../../crates/torvyn-types" }
-torvyn-engine = { path = "../../crates/torvyn-engine", default-features = false, features = ["mock"] }
+torvyn-engine = { path = "../../crates/torvyn-engine", default-features = false, features = ["mock", "wasmtime-backend"] }
 torvyn-reactor = { path = "../../crates/torvyn-reactor" }
 torvyn-resources = { path = "../../crates/torvyn-resources" }
 torvyn-security = { path = "../../crates/torvyn-security" }
@@ -20,3 +27,7 @@ async-trait = "0.1"
 
 [lints]
 workspace = true
+
+[[test]]
+name = "test_real_wasm_e2e"
+required-features = ["wasm-e2e"]

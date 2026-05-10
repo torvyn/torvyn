@@ -8,11 +8,14 @@
 //! - `post_return_async()` removed: deprecated no-op in v42
 //! - `wasmtime::Error` is distinct from `anyhow::Error` in v42
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store, StoreLimitsBuilder};
 
-use torvyn_types::ComponentId;
+use torvyn_resources::DefaultResourceManager;
+use torvyn_types::{ComponentId, FlowId};
 
 use crate::config::WasmtimeEngineConfig;
 use crate::error::EngineError;
@@ -45,6 +48,14 @@ pub struct WasmtimeEngine {
 
     /// The configuration used to create this engine.
     config: WasmtimeEngineConfig,
+
+    /// Shared resource manager that owns the buffer pool, ownership
+    /// state machine, and copy ledger. Cloned into every `HostState`
+    /// at instantiation time. For Session 2.2 this is constructed
+    /// internally by [`WasmtimeEngine::new`]; a future host-builder
+    /// integration will pass one in via
+    /// [`WasmtimeEngine::with_resource_manager`].
+    resources: Arc<DefaultResourceManager>,
 }
 
 impl WasmtimeEngine {
@@ -105,7 +116,43 @@ impl WasmtimeEngine {
             reason: format!("Failed to create Wasmtime engine: {e}"),
         })?;
 
-        Ok(Self { engine, config })
+        let resources = Arc::new(DefaultResourceManager::new_for_testing());
+
+        Ok(Self {
+            engine,
+            config,
+            resources,
+        })
+    }
+
+    /// Create a new `WasmtimeEngine` that shares the supplied resource
+    /// manager with the rest of the host.
+    ///
+    /// This constructor is the preferred shape once the host builder is
+    /// updated to construct a single [`DefaultResourceManager`] and share
+    /// it across the engine, reactor, and pipeline crates. Session 2.2
+    /// keeps [`WasmtimeEngine::new`] backward-compatible (internal
+    /// manager) so existing callers don't have to change.
+    ///
+    /// # COLD PATH — called once at host startup.
+    ///
+    /// # Errors
+    /// Returns [`EngineError::Internal`] if the Wasmtime `Config` is invalid.
+    pub fn with_resource_manager(
+        config: WasmtimeEngineConfig,
+        resources: Arc<DefaultResourceManager>,
+    ) -> Result<Self, EngineError> {
+        let mut engine = Self::new(config)?;
+        engine.resources = resources;
+        Ok(engine)
+    }
+
+    /// Returns a clone of the shared resource manager handle.
+    ///
+    /// # COLD PATH — for downstream wiring and diagnostics.
+    #[inline]
+    pub fn resource_manager(&self) -> Arc<DefaultResourceManager> {
+        Arc::clone(&self.resources)
     }
 
     /// Returns a reference to the underlying Wasmtime engine.
@@ -134,7 +181,18 @@ impl WasmtimeEngine {
             .trap_on_grow_failure(true) // Per spike finding 2.5
             .build();
 
-        let host_state = HostState::new(component_id, limits, self.config.default_fuel);
+        // Session 2.2 placeholder: derive the flow identifier from the
+        // component identity. Session 2.3 wires the real reactor-assigned
+        // `FlowId` here.
+        let flow_id = FlowId::new(component_id.as_u64());
+
+        let host_state = HostState::new(
+            component_id,
+            limits,
+            self.config.default_fuel,
+            Arc::clone(&self.resources),
+            flow_id,
+        );
 
         let mut store = Store::new(&self.engine, host_state);
 
@@ -253,7 +311,7 @@ impl WasmEngine for WasmtimeEngine {
             }
         };
 
-        let linker = match imports.inner {
+        let mut linker = match imports.inner {
             ImportBindingsInner::Wasmtime(l) => l,
             _ => {
                 return Err(EngineError::Internal {
@@ -261,6 +319,44 @@ impl WasmEngine for WasmtimeEngine {
                 });
             }
         };
+
+        // Components produced by `cargo component build --target wasm32-wasip2`
+        // pull in WASI Preview-2 imports transitively through `wit-bindgen-rt`,
+        // even when the guest code never touches WASI. Torvyn does not (yet)
+        // grant components WASI capabilities; satisfying these dangling
+        // imports with trap functions keeps instantiation alive while
+        // ensuring any actual attempt to call WASI is a hard runtime
+        // failure. When the security/capability story lands we will switch
+        // to fail-closed by removing this stubbing.
+        //
+        // Workflow for the linker (works around bytecodealliance/wasmtime#9615,
+        // where `define_unknown_imports_as_traps` re-creates partially
+        // populated import instances and clobbers their existing function
+        // bindings even with the per-function skip):
+        //   1. `allow_shadowing(true)` so later host-import additions can
+        //      overwrite the trap stubs.
+        //   2. `define_unknown_imports_as_traps(component)` adds traps for
+        //      every import (including ones we already wired) — clobber
+        //      everything.
+        //   3. Re-apply our Torvyn host imports via the bindgen
+        //      `add_to_linker`; they now shadow the traps for the
+        //      `torvyn:streaming/types` and `torvyn:streaming/buffer-allocator`
+        //      interfaces, leaving traps only for the WASI tail.
+        linker.allow_shadowing(true);
+        if let Err(e) = linker.define_unknown_imports_as_traps(component) {
+            return Err(EngineError::InstantiationFailed {
+                component_id,
+                reason: format!("failed to stub unknown imports: {e}"),
+            });
+        }
+        wit_bindings::data_source::DataSource::add_to_linker::<_, HasSelf<HostState>>(
+            &mut linker,
+            |state| state,
+        )
+        .map_err(|e| EngineError::InstantiationFailed {
+            component_id,
+            reason: format!("failed to re-apply Torvyn host imports: {e}"),
+        })?;
 
         let mut store = self.create_store(component_id);
 
