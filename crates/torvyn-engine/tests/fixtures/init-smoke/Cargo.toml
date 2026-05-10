@@ -1,0 +1,21 @@
+[package]
+name = "torvyn-engine-init-smoke"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Minimal data-sink fixture used by torvyn-engine integration tests to exercise the bindgen-typed instantiation path."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen-rt = { version = "0.41", features = ["bitflags"] }
+
+[package.metadata.component]
+package = "torvyn:streaming"
+
+[package.metadata.component.target]
+path = "../../../../torvyn-contracts/wit/torvyn-streaming"
+world = "data-sink"
+
+[workspace]

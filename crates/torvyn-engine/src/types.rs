@@ -113,53 +113,44 @@ pub(crate) enum ComponentInstanceInner {
 
 /// Wasmtime-specific instance state.
 ///
-/// Holds the `Store` (which contains the instance) and pre-resolved
-/// function handles for hot-path invocation.
+/// Holds the `Store` (which contains the instance), the raw component
+/// `Instance` (retained for diagnostic / introspection use), and the
+/// bindgen-typed world wrapper that pre-resolves every exported function
+/// for hot-path invocation.
 #[cfg(feature = "wasmtime-backend")]
 pub(crate) struct WasmtimeInstanceState {
     /// The Wasmtime store containing the instance.
     pub(crate) store: wasmtime::Store<HostState>,
 
-    /// The component instance. Retained for future use (e.g., dynamic export
-    /// discovery when Wasmtime adds Component Model export enumeration).
+    /// The component instance. Retained for diagnostic introspection.
     #[allow(dead_code)]
     pub(crate) instance: wasmtime::component::Instance,
 
-    /// Pre-resolved function handle for `process` (if exported).
-    pub(crate) func_process: Option<wasmtime::component::Func>,
-
-    /// Pre-resolved function handle for `pull` (if exported).
-    pub(crate) func_pull: Option<wasmtime::component::Func>,
-
-    /// Pre-resolved function handle for `push` (if exported).
-    pub(crate) func_push: Option<wasmtime::component::Func>,
-
-    /// Pre-resolved function handle for `lifecycle.init` (if exported).
-    pub(crate) func_init: Option<wasmtime::component::Func>,
-
-    /// Pre-resolved function handle for `lifecycle.teardown` (if exported).
-    pub(crate) func_teardown: Option<wasmtime::component::Func>,
+    /// Typed bindgen wrapper for whichever world this component implements.
+    /// `None` for components with no recognised exports (e.g., the empty
+    /// `(component)` WAT used by unit tests).
+    pub(crate) bindings: Option<WitBindings>,
 }
 
-/// Host state stored in each Wasmtime `Store`.
+/// Typed bindgen wrapper for one of the four Torvyn streaming worlds.
 ///
-/// This is the `T` in `Store<T>`. It provides Torvyn-specific context
-/// that host-defined functions can access during component execution.
+/// Created by `wasmtime_engine::detect_world` after a generic instantiation.
+/// Each variant pre-resolves the world's exported functions so that
+/// `WasmtimeInvoker` can call them without further name lookups.
 #[cfg(feature = "wasmtime-backend")]
-pub(crate) struct HostState {
-    /// The component ID for this instance. Used by host trait impls
-    /// when Torvyn registers host-defined resources.
-    #[allow(dead_code)]
-    pub(crate) component_id: ComponentId,
-
-    /// Resource limits for this store.
-    pub(crate) limits: wasmtime::StoreLimits,
-
-    /// The fuel budget configured for this component. Tracked for
-    /// observability/diagnostics.
-    #[allow(dead_code)]
-    pub(crate) fuel_budget: u64,
+pub(crate) enum WitBindings {
+    DataSink(crate::wit_bindings::data_sink::DataSink),
+    DataSource(crate::wit_bindings::data_source::DataSource),
+    Transform(crate::wit_bindings::transform::Transform),
+    ManagedTransform(crate::wit_bindings::managed_transform::ManagedTransform),
 }
+
+// `HostState` lives in `crate::host_state` so the Wasmtime bindgen-generated
+// host trait implementations stay co-located with the resource types they
+// operate on. Re-exported below for the rest of the crate that still expects
+// `crate::types::HostState`.
+#[cfg(feature = "wasmtime-backend")]
+pub(crate) use crate::host_state::HostState;
 
 /// Mock instance state for testing.
 #[cfg(feature = "mock")]

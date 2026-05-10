@@ -9,18 +9,20 @@
 //! - `wasmtime::Error` is distinct from `anyhow::Error` in v42
 
 use async_trait::async_trait;
-use wasmtime::component::{Component, Linker};
+use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store, StoreLimitsBuilder};
 
 use torvyn_types::ComponentId;
 
 use crate::config::WasmtimeEngineConfig;
 use crate::error::EngineError;
+use crate::host_state::HostState;
 use crate::traits::WasmEngine;
 use crate::types::{
     CompiledComponent, CompiledComponentInner, ComponentInstance, ComponentInstanceInner,
-    HostState, ImportBindings, ImportBindingsInner, WasmtimeInstanceState,
+    ImportBindings, ImportBindingsInner, WasmtimeInstanceState, WitBindings,
 };
+use crate::wit_bindings;
 
 /// Wasmtime-based Wasm engine implementation.
 ///
@@ -64,7 +66,6 @@ impl WasmtimeEngine {
 
         // LLI DEVIATION: async_support(true) is deprecated (no-op) in Wasmtime 42.
         // Async is always available; no config needed.
-        // wasmtime_config.async_support(true); // removed per spike finding 3.6
 
         // Fuel for CPU budgeting and cooperative preemption.
         if config.fuel_enabled {
@@ -133,11 +134,7 @@ impl WasmtimeEngine {
             .trap_on_grow_failure(true) // Per spike finding 2.5
             .build();
 
-        let host_state = HostState {
-            component_id,
-            limits,
-            fuel_budget: self.config.default_fuel,
-        };
+        let host_state = HostState::new(component_id, limits, self.config.default_fuel);
 
         let mut store = Store::new(&self.engine, host_state);
 
@@ -161,13 +158,23 @@ impl WasmtimeEngine {
         store
     }
 
-    /// Create a new `Linker` for the engine.
+    /// Create a new `Linker` with all Torvyn host imports pre-registered.
+    ///
+    /// The `data-source` world has the broadest import set (`types` plus
+    /// `buffer-allocator`) — wiring its imports is a superset of every other
+    /// archetype's, so a single call covers all four worlds. Unused linker
+    /// entries are permitted by Wasmtime for components that only import
+    /// a subset.
     ///
     /// # COLD PATH — called during pipeline linking.
-    /// Used by downstream crates (torvyn-linker) and tests.
-    #[allow(dead_code)]
     pub(crate) fn create_linker(&self) -> Linker<HostState> {
-        Linker::new(&self.engine)
+        let mut linker: Linker<HostState> = Linker::new(&self.engine);
+        wit_bindings::data_source::DataSource::add_to_linker::<_, HasSelf<HostState>>(
+            &mut linker,
+            |state| state,
+        )
+        .expect("host trait impls cover every imported function declared in the data-source world");
+        linker
     }
 
     /// Wrap a `Linker` into `ImportBindings`.
@@ -266,26 +273,32 @@ impl WasmEngine for WasmtimeEngine {
                 reason: e.to_string(),
             })?;
 
-        // Pre-resolve exported function handles for hot-path invocation.
-        let func_process = instance.get_func(&mut store, "process");
-        let func_pull = instance.get_func(&mut store, "pull");
-        let func_push = instance.get_func(&mut store, "push");
-        let func_init = instance.get_func(&mut store, "init");
-        let func_teardown = instance.get_func(&mut store, "teardown");
+        // Detect which world the component implements by trying each
+        // bindgen-generated wrapper in turn. The four sets of required
+        // exports are mutually exclusive in practice, so at most one
+        // wrapper succeeds. Components with no exports (e.g., minimal
+        // WAT used in unit tests) yield `None`.
+        let bindings = detect_world(&mut store, &instance);
 
-        let has_processor = func_process.is_some();
-        let has_source = func_pull.is_some();
-        let has_sink = func_push.is_some();
-        let has_lifecycle = func_init.is_some();
+        let has_source = matches!(bindings, Some(WitBindings::DataSource(_)));
+        let has_sink = matches!(bindings, Some(WitBindings::DataSink(_)));
+        let has_processor = matches!(
+            bindings,
+            Some(WitBindings::Transform(_) | WitBindings::ManagedTransform(_))
+        );
+        let has_lifecycle = matches!(
+            bindings,
+            Some(
+                WitBindings::DataSource(_)
+                    | WitBindings::DataSink(_)
+                    | WitBindings::ManagedTransform(_)
+            )
+        );
 
         let state = WasmtimeInstanceState {
             store,
             instance,
-            func_process,
-            func_pull,
-            func_push,
-            func_init,
-            func_teardown,
+            bindings,
         };
 
         Ok(ComponentInstance {
@@ -342,6 +355,34 @@ impl WasmEngine for WasmtimeEngine {
     }
 }
 
+/// Try each bindgen-generated world wrapper in turn against `instance`,
+/// returning the first that successfully resolves all its exports.
+///
+/// The four worlds have disjoint required export sets (`pull` vs `push` vs
+/// `process` etc.), so at most one wrapper succeeds for any well-formed
+/// component. Components with no exports (empty `(component)` WAT used by
+/// some unit tests) produce `None`.
+///
+/// # COLD PATH — called once per component instantiation.
+fn detect_world(
+    store: &mut Store<HostState>,
+    instance: &wasmtime::component::Instance,
+) -> Option<WitBindings> {
+    if let Ok(b) = wit_bindings::data_source::DataSource::new(&mut *store, instance) {
+        return Some(WitBindings::DataSource(b));
+    }
+    if let Ok(b) = wit_bindings::managed_transform::ManagedTransform::new(&mut *store, instance) {
+        return Some(WitBindings::ManagedTransform(b));
+    }
+    if let Ok(b) = wit_bindings::data_sink::DataSink::new(&mut *store, instance) {
+        return Some(WitBindings::DataSink(b));
+    }
+    if let Ok(b) = wit_bindings::transform::Transform::new(&mut *store, instance) {
+        return Some(WitBindings::Transform(b));
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -394,10 +435,7 @@ mod tests {
         let engine = WasmtimeEngine::new(config).unwrap();
 
         // A minimal valid component using WAT text format.
-        // Wasmtime can compile WAT directly via Component::new.
         let wat = "(component)";
-        // compile_component takes bytes, WAT may not work through that path.
-        // Use the engine directly for WAT.
         let _result = engine.compile_component(wat.as_bytes());
         let component = Component::new(engine.inner(), wat);
         assert!(component.is_ok(), "engine should compile minimal WAT");
@@ -415,19 +453,16 @@ mod tests {
         let config = WasmtimeEngineConfig::default();
         let engine = WasmtimeEngine::new(config).unwrap();
 
-        // Compile a minimal component.
         let component = Component::new(engine.inner(), "(component)").expect("compile WAT");
         let compiled = CompiledComponent {
             inner: CompiledComponentInner::Wasmtime(component),
         };
 
-        // Serialize.
         let bytes = engine
             .serialize_component(&compiled)
             .expect("serialize should work");
         assert!(!bytes.is_empty());
 
-        // Deserialize.
         // SAFETY: bytes were just produced by serialize_component with same engine.
         let deserialized =
             unsafe { engine.deserialize_component(&bytes) }.expect("deserialize should work");
@@ -444,8 +479,7 @@ mod tests {
             inner: CompiledComponentInner::Wasmtime(component),
         };
 
-        let linker = engine.create_linker();
-        let imports = WasmtimeEngine::import_bindings_from_linker(linker);
+        let imports = WasmtimeEngine::import_bindings_from_linker(engine.create_linker());
         let component_id = ComponentId::new(1);
 
         let instance = engine.instantiate(&compiled, imports, component_id).await;
@@ -453,7 +487,7 @@ mod tests {
 
         let inst = instance.unwrap();
         assert_eq!(inst.component_id(), component_id);
-        // Minimal component has no exports.
+        // Minimal component has no exports — no world matches.
         assert!(!inst.has_processor());
         assert!(!inst.has_source());
         assert!(!inst.has_sink());
@@ -470,18 +504,15 @@ mod tests {
             inner: CompiledComponentInner::Wasmtime(component),
         };
 
-        let linker = engine.create_linker();
-        let imports = WasmtimeEngine::import_bindings_from_linker(linker);
+        let imports = WasmtimeEngine::import_bindings_from_linker(engine.create_linker());
         let mut instance = engine
             .instantiate(&compiled, imports, ComponentId::new(1))
             .await
             .unwrap();
 
-        // Default fuel should be set.
         let remaining = engine.fuel_remaining(&instance);
         assert!(remaining.is_some());
 
-        // Set new fuel.
         engine.set_fuel(&mut instance, 500).unwrap();
         assert_eq!(engine.fuel_remaining(&instance), Some(500));
     }
@@ -490,9 +521,6 @@ mod tests {
     fn test_memory_usage_returns_zero_for_now() {
         let config = WasmtimeEngineConfig::default();
         let engine = WasmtimeEngine::new(config).unwrap();
-
-        // Without an instance, we can't test this directly.
-        // This is tested via the instantiate path above.
         let _ = engine;
     }
 }

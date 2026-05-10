@@ -2,43 +2,47 @@
 //!
 //! **THIS IS THE HOTTEST PATH IN TORVYN.** Every stream element passes
 //! through this code. Design goals:
-//! - Zero heap allocations per invocation (pre-allocated buffers)
-//! - No locks acquired during invocation
-//! - No syscalls beyond the Wasm execution itself
+//! - Zero heap allocations beyond what the bindgen-typed call requires.
+//! - No locks acquired during invocation.
+//! - No syscalls beyond the Wasm execution itself.
+//!
+//! As of Session 2.1 the invoker uses `wasmtime::component::bindgen!`-typed
+//! accessors instead of the flat `Val` array marshaling used in Phase 0. The
+//! bindgen-generated `call_*` functions consume strongly-typed records and
+//! return strongly-typed results; this module is mostly a thin translator
+//! between those types and Torvyn's domain model in `torvyn_types`.
 //!
 //! # LLI DEVIATIONS from LLI-04 (adapted per spike findings)
 //! - `post_return_async()` calls removed: deprecated no-op in Wasmtime 42
-//!   (spike finding 3.7)
-//! - `wasmtime::Error` is distinct from `anyhow::Error` (spike finding 3.5)
+//!   (spike finding 3.7); the bindgen-typed `call_*` functions handle
+//!   post-return automatically.
+//! - `wasmtime::Error` is distinct from `anyhow::Error` (spike finding 3.5).
 //!
 //! This module is gated behind the `wasmtime-backend` feature flag.
 
 use async_trait::async_trait;
-use wasmtime::component::{Func, Val};
+use wasmtime::component::Resource;
 use wasmtime::Trap;
 
 use torvyn_types::{
     BackpressureSignal, BufferHandle, ComponentId, ElementMeta, ProcessError, ResourceId,
 };
 
+use crate::host_state::HostBuffer;
 use crate::traits::ComponentInvoker;
 use crate::types::{
     ComponentInstance, ComponentInstanceInner, OutputElement, ProcessResult, StreamElement,
-    WasmtimeInstanceState,
+    WasmtimeInstanceState, WitBindings,
 };
+use crate::wit_bindings::data_sink::torvyn::streaming::types as wit_types;
 
 /// Wasmtime-based component invoker.
 ///
-/// Handles marshaling between Rust/Torvyn types and Wasm Component Model
-/// `Val` types for dynamic invocation.
-///
-/// # Performance
-/// The invoker uses pre-resolved `Func` handles (cached at instantiation
-/// time) to avoid string lookups on every invocation. Argument and return
-/// value arrays are stack-allocated for the common case.
+/// Dispatches each hot-path call to the bindgen-typed wrapper that was
+/// detected at instantiation time (stored on the private
+/// `WasmtimeInstanceState`). The dispatch enum match is fully
+/// monomorphised; there is no virtual dispatch in the hot path.
 pub struct WasmtimeInvoker {
-    /// Pre-allocated argument buffer placeholder.
-    /// Future optimization: use arena allocator for marshaling buffers.
     _preallocated: (),
 }
 
@@ -50,7 +54,7 @@ impl WasmtimeInvoker {
         Self { _preallocated: () }
     }
 
-    /// Extract the Wasmtime instance state from a ComponentInstance.
+    /// Extract the Wasmtime instance state from a [`ComponentInstance`].
     ///
     /// # HOT PATH — inlined helper.
     #[inline]
@@ -65,23 +69,7 @@ impl WasmtimeInvoker {
         }
     }
 
-    /// Get a pre-resolved function handle, returning an error if missing.
-    ///
-    /// # HOT PATH — inlined.
-    #[inline]
-    fn require_func(
-        func: &Option<Func>,
-        function_name: &str,
-        component_id: ComponentId,
-    ) -> Result<Func, ProcessError> {
-        func.ok_or_else(|| {
-            ProcessError::Internal(format!(
-                "Component {component_id} does not export '{function_name}'"
-            ))
-        })
-    }
-
-    /// Convert a Wasmtime trap or error into a ProcessError.
+    /// Convert a Wasmtime trap or error into a `ProcessError`.
     ///
     /// # WARM PATH — called per error.
     // LLI DEVIATION: wasmtime::Error is distinct from anyhow::Error in v42
@@ -105,101 +93,80 @@ impl WasmtimeInvoker {
         }
     }
 
-    /// Marshal a `StreamElement` into Wasm `Val` arguments.
+    /// Translate the WIT-level `process-error` variant to the Torvyn domain
+    /// type. The two enums share variant names; this is a straight 1:1 map.
     ///
-    /// # HOT PATH — zero alloc, no locks.
-    ///
-    /// The exact marshaling depends on the WIT interface. For Phase 0,
-    /// we pass individual fields as separate arguments.
-    fn marshal_stream_element(element: &StreamElement, args: &mut Vec<Val>) {
-        // HOT PATH — zero alloc, no locks
-        args.push(Val::U64(element.meta.sequence));
-        args.push(Val::U64(element.meta.timestamp_ns));
-        args.push(Val::String(element.meta.content_type.clone()));
-        args.push(Val::U32(element.payload.resource_id().index()));
+    /// # WARM PATH — called per error.
+    fn convert_wit_process_error(err: wit_types::ProcessError) -> ProcessError {
+        match err {
+            wit_types::ProcessError::InvalidInput(s) => ProcessError::InvalidInput(s),
+            wit_types::ProcessError::Unavailable(s) => ProcessError::Unavailable(s),
+            wit_types::ProcessError::Internal(s) => ProcessError::Internal(s),
+            wit_types::ProcessError::DeadlineExceeded => ProcessError::DeadlineExceeded,
+            wit_types::ProcessError::Fatal(s) => ProcessError::Fatal(s),
+        }
     }
 
-    /// Unmarshal output values from a Wasm invocation into an `OutputElement`.
+    /// Translate a WIT `output-element` produced by the guest into Torvyn's
+    /// [`OutputElement`]. The owned buffer resource stays in the host's
+    /// resource table; the table index is encoded as a [`BufferHandle`].
     ///
-    /// # HOT PATH
-    fn unmarshal_output_element(results: &[Val]) -> Result<OutputElement, ProcessError> {
-        if results.len() < 4 {
-            return Err(ProcessError::Internal(format!(
-                "Expected at least 4 return values, got {}",
-                results.len()
-            )));
+    /// # HOT PATH — called per element produced by a source/processor.
+    #[inline]
+    fn convert_output_element(out: wit_types::OutputElement) -> OutputElement {
+        let payload_idx = out.payload.rep();
+        OutputElement {
+            meta: ElementMeta::new(
+                out.meta.sequence,
+                out.meta.timestamp_ns,
+                out.meta.content_type,
+            ),
+            payload: BufferHandle::new(ResourceId::new(payload_idx, 0)),
         }
-
-        let sequence = match &results[0] {
-            Val::U64(v) => *v,
-            other => {
-                return Err(ProcessError::Internal(format!(
-                    "Expected U64 for sequence, got {other:?}"
-                )));
-            }
-        };
-
-        let timestamp_ns = match &results[1] {
-            Val::U64(v) => *v,
-            other => {
-                return Err(ProcessError::Internal(format!(
-                    "Expected U64 for timestamp_ns, got {other:?}"
-                )));
-            }
-        };
-
-        let content_type = match &results[2] {
-            Val::String(s) => s.to_string(),
-            other => {
-                return Err(ProcessError::Internal(format!(
-                    "Expected String for content_type, got {other:?}"
-                )));
-            }
-        };
-
-        let buffer_index = match &results[3] {
-            Val::U32(v) => *v,
-            other => {
-                return Err(ProcessError::Internal(format!(
-                    "Expected U32 for buffer_index, got {other:?}"
-                )));
-            }
-        };
-
-        Ok(OutputElement {
-            meta: ElementMeta::new(sequence, timestamp_ns, content_type),
-            payload: BufferHandle::new(ResourceId::new(buffer_index, 0)),
-        })
     }
 
-    /// Unmarshal a backpressure signal from return values.
-    ///
-    /// # HOT PATH
-    fn unmarshal_backpressure(results: &[Val]) -> Result<BackpressureSignal, ProcessError> {
-        if results.is_empty() {
-            return Err(ProcessError::Internal(
-                "Expected at least 1 return value for backpressure signal".into(),
-            ));
+    /// Translate a WIT `backpressure-signal` to the Torvyn domain enum.
+    #[inline]
+    fn convert_backpressure_signal(s: wit_types::BackpressureSignal) -> BackpressureSignal {
+        match s {
+            wit_types::BackpressureSignal::Ready => BackpressureSignal::Ready,
+            wit_types::BackpressureSignal::Pause => BackpressureSignal::Pause,
         }
+    }
 
-        match &results[0] {
-            Val::Enum(name) => match name.as_str() {
-                "ready" => Ok(BackpressureSignal::Ready),
-                "pause" => Ok(BackpressureSignal::Pause),
-                other => Err(ProcessError::Internal(format!(
-                    "Unknown backpressure signal: {other}"
-                ))),
+    /// Build a borrowed `Resource<HostBuffer>` referring to the table entry
+    /// at `handle.resource_id().index()`. The resource is borrowed (not
+    /// owned), so the host retains responsibility for cleaning the table
+    /// entry up after the call returns.
+    ///
+    /// # HOT PATH — called per element entering a processor/sink.
+    #[inline]
+    fn borrow_buffer(handle: BufferHandle) -> Resource<HostBuffer> {
+        Resource::new_borrow(handle.resource_id().index())
+    }
+
+    /// Build a borrowed flow-context resource. Session 2.1 uses index 0 as
+    /// a placeholder — the real flow context is plumbed through by the
+    /// reactor in Session 2.2.
+    #[inline]
+    fn borrow_flow_context() -> Resource<crate::host_state::HostFlowContext> {
+        Resource::new_borrow(0)
+    }
+
+    /// Build the bindgen `stream-element` record from a Torvyn
+    /// [`StreamElement`]. The payload is passed as a borrowed buffer
+    /// resource; the runtime retains ownership of the underlying host
+    /// buffer.
+    #[inline]
+    fn to_wit_stream_element(element: &StreamElement) -> wit_types::StreamElement {
+        wit_types::StreamElement {
+            meta: wit_types::ElementMeta {
+                sequence: element.meta.sequence,
+                timestamp_ns: element.meta.timestamp_ns,
+                content_type: element.meta.content_type.clone(),
             },
-            Val::U32(v) => match v {
-                0 => Ok(BackpressureSignal::Ready),
-                1 => Ok(BackpressureSignal::Pause),
-                other => Err(ProcessError::Internal(format!(
-                    "Unknown backpressure signal value: {other}"
-                ))),
-            },
-            other => Err(ProcessError::Internal(format!(
-                "Expected Enum or U32 for backpressure, got {other:?}"
-            ))),
+            payload: Self::borrow_buffer(element.payload),
+            context: Self::borrow_flow_context(),
         }
     }
 }
@@ -219,29 +186,25 @@ impl ComponentInvoker for WasmtimeInvoker {
         component_id: ComponentId,
     ) -> Result<Option<OutputElement>, ProcessError> {
         let state = Self::wasmtime_state(instance)?;
-        let func = Self::require_func(&state.func_pull, "pull", component_id)?;
+        let bindings = match &state.bindings {
+            Some(WitBindings::DataSource(b)) => b,
+            _ => {
+                return Err(ProcessError::Internal(format!(
+                    "Component {component_id} is not a data-source — `pull` is not exported"
+                )));
+            }
+        };
 
-        let mut results = vec![Val::Bool(false); 8];
-
-        func.call_async(&mut state.store, &[], &mut results)
+        let outer = bindings
+            .torvyn_streaming_source()
+            .call_pull(&mut state.store)
             .await
             .map_err(|e| Self::convert_wasm_error(e, component_id, "pull"))?;
 
-        // LLI DEVIATION: post_return_async() removed — deprecated no-op in
-        // Wasmtime 42 (spike finding 3.7). Component Model handles
-        // post-return automatically.
-
-        // Check for end-of-stream (None) via option discriminant.
-        match &results[0] {
-            Val::Bool(false) => Ok(None),
-            Val::Bool(true) => {
-                let element = Self::unmarshal_output_element(&results[1..])?;
-                Ok(Some(element))
-            }
-            _ => {
-                let element = Self::unmarshal_output_element(&results)?;
-                Ok(Some(element))
-            }
+        match outer {
+            Ok(Some(out)) => Ok(Some(Self::convert_output_element(out))),
+            Ok(None) => Ok(None),
+            Err(e) => Err(Self::convert_wit_process_error(e)),
         }
     }
 
@@ -253,21 +216,34 @@ impl ComponentInvoker for WasmtimeInvoker {
         element: StreamElement,
     ) -> Result<ProcessResult, ProcessError> {
         let state = Self::wasmtime_state(instance)?;
-        let func = Self::require_func(&state.func_process, "process", component_id)?;
+        let wit_element = Self::to_wit_stream_element(&element);
 
-        let mut args = Vec::with_capacity(4);
-        Self::marshal_stream_element(&element, &mut args);
+        let outer = match &state.bindings {
+            Some(WitBindings::Transform(b)) => {
+                b.torvyn_streaming_processor()
+                    .call_process(&mut state.store, &wit_element)
+                    .await
+            }
+            Some(WitBindings::ManagedTransform(b)) => {
+                b.torvyn_streaming_processor()
+                    .call_process(&mut state.store, &wit_element)
+                    .await
+            }
+            _ => {
+                return Err(ProcessError::Internal(format!(
+                    "Component {component_id} does not export `process`"
+                )));
+            }
+        };
 
-        let mut results = vec![Val::Bool(false); 8];
-
-        func.call_async(&mut state.store, &args, &mut results)
-            .await
-            .map_err(|e| Self::convert_wasm_error(e, component_id, "process"))?;
-
-        // LLI DEVIATION: post_return_async() removed (spike finding 3.7)
-
-        let output = Self::unmarshal_output_element(&results)?;
-        Ok(ProcessResult::Output(output))
+        let inner = outer.map_err(|e| Self::convert_wasm_error(e, component_id, "process"))?;
+        match inner {
+            Ok(wit_types::ProcessResult::Emit(out)) => {
+                Ok(ProcessResult::Output(Self::convert_output_element(out)))
+            }
+            Ok(wit_types::ProcessResult::Drop) => Ok(ProcessResult::Filtered),
+            Err(e) => Err(Self::convert_wit_process_error(e)),
+        }
     }
 
     /// # HOT PATH
@@ -278,20 +254,26 @@ impl ComponentInvoker for WasmtimeInvoker {
         element: StreamElement,
     ) -> Result<BackpressureSignal, ProcessError> {
         let state = Self::wasmtime_state(instance)?;
-        let func = Self::require_func(&state.func_push, "push", component_id)?;
+        let bindings = match &state.bindings {
+            Some(WitBindings::DataSink(b)) => b,
+            _ => {
+                return Err(ProcessError::Internal(format!(
+                    "Component {component_id} is not a data-sink — `push` is not exported"
+                )));
+            }
+        };
+        let wit_element = Self::to_wit_stream_element(&element);
 
-        let mut args = Vec::with_capacity(4);
-        Self::marshal_stream_element(&element, &mut args);
-
-        let mut results = vec![Val::Bool(false); 4];
-
-        func.call_async(&mut state.store, &args, &mut results)
+        let outer = bindings
+            .torvyn_streaming_sink()
+            .call_push(&mut state.store, &wit_element)
             .await
             .map_err(|e| Self::convert_wasm_error(e, component_id, "push"))?;
 
-        // LLI DEVIATION: post_return_async() removed (spike finding 3.7)
-
-        Self::unmarshal_backpressure(&results)
+        match outer {
+            Ok(s) => Ok(Self::convert_backpressure_signal(s)),
+            Err(e) => Err(Self::convert_wit_process_error(e)),
+        }
     }
 
     /// # COLD PATH
@@ -303,21 +285,30 @@ impl ComponentInvoker for WasmtimeInvoker {
     ) -> Result<(), ProcessError> {
         let state = Self::wasmtime_state(instance)?;
 
-        let func = match &state.func_init {
-            Some(f) => *f,
-            None => return Ok(()),
+        let outer = match &state.bindings {
+            Some(WitBindings::DataSink(b)) => {
+                b.torvyn_streaming_lifecycle()
+                    .call_init(&mut state.store, config)
+                    .await
+            }
+            Some(WitBindings::DataSource(b)) => {
+                b.torvyn_streaming_lifecycle()
+                    .call_init(&mut state.store, config)
+                    .await
+            }
+            Some(WitBindings::ManagedTransform(b)) => {
+                b.torvyn_streaming_lifecycle()
+                    .call_init(&mut state.store, config)
+                    .await
+            }
+            // `transform` has no lifecycle export, and a component with no
+            // recognised bindings exports nothing — both cases are silent
+            // success per the trait contract (init is optional).
+            Some(WitBindings::Transform(_)) | None => return Ok(()),
         };
 
-        let args = [Val::String(config.into())];
-        let mut results = vec![Val::Bool(false); 2];
-
-        func.call_async(&mut state.store, &args, &mut results)
-            .await
-            .map_err(|e| Self::convert_wasm_error(e, component_id, "init"))?;
-
-        // LLI DEVIATION: post_return_async() removed (spike finding 3.7)
-
-        Ok(())
+        let inner = outer.map_err(|e| Self::convert_wasm_error(e, component_id, "init"))?;
+        inner.map_err(Self::convert_wit_process_error)
     }
 
     /// # COLD PATH
@@ -329,15 +320,26 @@ impl ComponentInvoker for WasmtimeInvoker {
             Err(_) => return,
         };
 
-        let func = match &state.func_teardown {
-            Some(f) => *f,
-            None => return,
+        let outer = match &state.bindings {
+            Some(WitBindings::DataSink(b)) => {
+                b.torvyn_streaming_lifecycle()
+                    .call_teardown(&mut state.store)
+                    .await
+            }
+            Some(WitBindings::DataSource(b)) => {
+                b.torvyn_streaming_lifecycle()
+                    .call_teardown(&mut state.store)
+                    .await
+            }
+            Some(WitBindings::ManagedTransform(b)) => {
+                b.torvyn_streaming_lifecycle()
+                    .call_teardown(&mut state.store)
+                    .await
+            }
+            Some(WitBindings::Transform(_)) | None => return,
         };
 
-        let mut results = vec![Val::Bool(false); 1];
-
-        if let Err(e) = func.call_async(&mut state.store, &[], &mut results).await {
-            // Best-effort: log errors but don't propagate.
+        if let Err(e) = outer {
             #[cfg(feature = "tracing-support")]
             tracing::warn!(
                 component_id = %component_id,
@@ -346,8 +348,6 @@ impl ComponentInvoker for WasmtimeInvoker {
             );
             let _ = (component_id, e);
         }
-
-        // LLI DEVIATION: post_return_async() removed (spike finding 3.7)
     }
 }
 
@@ -384,75 +384,91 @@ mod tests {
     }
 
     #[test]
-    fn test_unmarshal_backpressure_ready() {
-        let results = vec![Val::U32(0)];
-        let signal = WasmtimeInvoker::unmarshal_backpressure(&results).unwrap();
-        assert_eq!(signal, BackpressureSignal::Ready);
+    fn test_convert_wit_process_error_invalid_input() {
+        let pe = WasmtimeInvoker::convert_wit_process_error(wit_types::ProcessError::InvalidInput(
+            "bad input".into(),
+        ));
+        match pe {
+            ProcessError::InvalidInput(s) => assert_eq!(s, "bad input"),
+            other => panic!("expected InvalidInput, got: {other:?}"),
+        }
     }
 
     #[test]
-    fn test_unmarshal_backpressure_pause() {
-        let results = vec![Val::U32(1)];
-        let signal = WasmtimeInvoker::unmarshal_backpressure(&results).unwrap();
-        assert_eq!(signal, BackpressureSignal::Pause);
+    fn test_convert_wit_process_error_deadline() {
+        let pe =
+            WasmtimeInvoker::convert_wit_process_error(wit_types::ProcessError::DeadlineExceeded);
+        assert!(matches!(pe, ProcessError::DeadlineExceeded));
     }
 
     #[test]
-    fn test_unmarshal_backpressure_invalid() {
-        let results = vec![Val::U32(99)];
-        let result = WasmtimeInvoker::unmarshal_backpressure(&results);
-        assert!(result.is_err());
+    fn test_convert_backpressure_ready() {
+        let bp = WasmtimeInvoker::convert_backpressure_signal(wit_types::BackpressureSignal::Ready);
+        assert_eq!(bp, BackpressureSignal::Ready);
     }
 
     #[test]
-    fn test_unmarshal_backpressure_empty() {
-        let results: Vec<Val> = vec![];
-        let result = WasmtimeInvoker::unmarshal_backpressure(&results);
-        assert!(result.is_err());
+    fn test_convert_backpressure_pause() {
+        let bp = WasmtimeInvoker::convert_backpressure_signal(wit_types::BackpressureSignal::Pause);
+        assert_eq!(bp, BackpressureSignal::Pause);
     }
 
     #[test]
-    fn test_unmarshal_output_element_insufficient_values() {
-        let results = vec![Val::U64(0), Val::U64(0)];
-        let result = WasmtimeInvoker::unmarshal_output_element(&results);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_unmarshal_output_element_valid() {
-        let results = vec![
-            Val::U64(42),
-            Val::U64(1_000_000),
-            Val::String("text/plain".into()),
-            Val::U32(5),
+    fn test_convert_wit_process_error_all_variants() {
+        let cases: [(wit_types::ProcessError, &str); 5] = [
+            (
+                wit_types::ProcessError::InvalidInput("bad".into()),
+                "invalid_input",
+            ),
+            (
+                wit_types::ProcessError::Unavailable("svc".into()),
+                "unavailable",
+            ),
+            (wit_types::ProcessError::Internal("oops".into()), "internal"),
+            (
+                wit_types::ProcessError::DeadlineExceeded,
+                "deadline_exceeded",
+            ),
+            (wit_types::ProcessError::Fatal("done".into()), "fatal"),
         ];
-        let output = WasmtimeInvoker::unmarshal_output_element(&results).unwrap();
-        assert_eq!(output.meta.sequence, 42);
-        assert_eq!(output.meta.timestamp_ns, 1_000_000);
-        assert_eq!(output.meta.content_type, "text/plain");
-        assert_eq!(output.payload.resource_id().index(), 5);
+        for (wit_err, expected_kind) in cases {
+            let pe = WasmtimeInvoker::convert_wit_process_error(wit_err);
+            assert_eq!(
+                pe.kind(),
+                expected_kind,
+                "kind() mismatch for translated variant"
+            );
+        }
     }
 
     #[test]
-    fn test_unmarshal_output_element_wrong_type() {
-        let results = vec![
-            Val::String("not a number".into()),
-            Val::U64(0),
-            Val::String("x".into()),
-            Val::U32(0),
-        ];
-        let result = WasmtimeInvoker::unmarshal_output_element(&results);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_marshal_stream_element() {
-        let element = StreamElement {
-            meta: ElementMeta::new(10, 2000, "application/json".into()),
-            payload: BufferHandle::new(ResourceId::new(7, 0)),
+    fn test_convert_output_element_preserves_fields() {
+        let out = wit_types::OutputElement {
+            meta: wit_types::ElementMeta {
+                sequence: 42,
+                timestamp_ns: 1_234_567,
+                content_type: "application/json".into(),
+            },
+            payload: Resource::new_own(7),
         };
-        let mut args = Vec::new();
-        WasmtimeInvoker::marshal_stream_element(&element, &mut args);
-        assert_eq!(args.len(), 4);
+        let converted = WasmtimeInvoker::convert_output_element(out);
+        assert_eq!(converted.meta.sequence, 42);
+        assert_eq!(converted.meta.timestamp_ns, 1_234_567);
+        assert_eq!(converted.meta.content_type, "application/json");
+        assert_eq!(converted.payload.resource_id().index(), 7);
+    }
+
+    #[test]
+    fn test_to_wit_stream_element_borrows_payload() {
+        let element = StreamElement {
+            meta: ElementMeta::new(10, 2_000, "text/plain".into()),
+            payload: BufferHandle::new(ResourceId::new(11, 0)),
+        };
+        let wit_element = WasmtimeInvoker::to_wit_stream_element(&element);
+        assert_eq!(wit_element.meta.sequence, 10);
+        assert_eq!(wit_element.meta.content_type, "text/plain");
+        // `Resource::rep()` exposes the underlying handle index; a borrowed
+        // resource preserves the index the host passed in.
+        assert_eq!(wit_element.payload.rep(), 11);
     }
 }

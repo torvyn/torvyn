@@ -34,6 +34,14 @@ pub mod traits;
 pub mod types;
 
 #[cfg(feature = "wasmtime-backend")]
+#[doc(hidden)]
+pub mod host_state;
+
+#[cfg(feature = "wasmtime-backend")]
+#[doc(hidden)]
+pub mod wit_bindings;
+
+#[cfg(feature = "wasmtime-backend")]
 pub mod wasmtime_engine;
 
 #[cfg(feature = "wasmtime-backend")]
