@@ -12,6 +12,13 @@ build = "build.rs"
 # does not, keeping the standard test matrix toolchain-free.
 wasm-e2e = []
 
+# Gate the polyglot end-to-end test (`tests/test_polyglot_e2e.rs`),
+# which uses a TinyGo-built source component alongside the Rust
+# processor + sink. Implies `wasm-e2e` because the test reuses the
+# real-Wasm scaffolding (`RecordingInvoker`, helpers in
+# `src/lib.rs::real_wasm`). CI's `wasm-polyglot-e2e` job enables this.
+wasm-polyglot = ["wasm-e2e"]
+
 [dependencies]
 # Internal crates
 torvyn-types = { path = "../../crates/torvyn-types" }
@@ -31,3 +38,7 @@ workspace = true
 [[test]]
 name = "test_real_wasm_e2e"
 required-features = ["wasm-e2e"]
+
+[[test]]
+name = "test_polyglot_e2e"
+required-features = ["wasm-polyglot"]

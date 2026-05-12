@@ -216,17 +216,39 @@ impl WasmtimeEngine {
         store
     }
 
-    /// Create a new `Linker` with all Torvyn host imports pre-registered.
+    /// Create a new `Linker` with all Torvyn host imports pre-registered,
+    /// plus a no-permission WASI Preview-2 sandbox.
     ///
-    /// The `data-source` world has the broadest import set (`types` plus
-    /// `buffer-allocator`) — wiring its imports is a superset of every other
-    /// archetype's, so a single call covers all four worlds. Unused linker
-    /// entries are permitted by Wasmtime for components that only import
-    /// a subset.
+    /// The linker carries two unrelated import groups:
+    ///
+    /// 1. **Torvyn streaming imports** — the `torvyn:streaming/types`
+    ///    and `torvyn:streaming/buffer-allocator` interfaces. We wire
+    ///    them via the `data-source` world's bindgen because its
+    ///    import set is a strict superset of every other archetype's;
+    ///    unused entries are harmless for components that import a
+    ///    subset.
+    /// 2. **WASI Preview-2 imports** — guest components produced by
+    ///    `cargo-component`, TinyGo, and `componentize-py` link to
+    ///    WASI Preview-2 via their language runtimes even when the
+    ///    guest code never performs I/O (allocator setup, panic
+    ///    abort, environment, clocks). `wasmtime_wasi::p2::add_to_linker_async`
+    ///    satisfies those with a real Preview-2 implementation
+    ///    backed by `HostState::wasi`, which is the most restrictive
+    ///    sandbox the WASI builder offers (no stdio inheritance, no
+    ///    filesystem preopens, no env vars, no sockets). A component
+    ///    that actually invokes a WASI function returns the
+    ///    sandbox's failure mode (closed stream, empty env, etc.)
+    ///    rather than trapping or leaking host capability.
+    ///
+    /// Order matters: WASI is added first, then the Torvyn imports.
+    /// If the two ever overlapped (they don't today; the Torvyn WIT
+    /// declares a distinct package), the Torvyn impls would win.
     ///
     /// # COLD PATH — called during pipeline linking.
     pub(crate) fn create_linker(&self) -> Linker<HostState> {
         let mut linker: Linker<HostState> = Linker::new(&self.engine);
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)
+            .expect("wasmtime-wasi p2 add_to_linker_async must succeed for an empty linker");
         wit_bindings::data_source::DataSource::add_to_linker::<_, HasSelf<HostState>>(
             &mut linker,
             |state| state,
@@ -311,7 +333,7 @@ impl WasmEngine for WasmtimeEngine {
             }
         };
 
-        let mut linker = match imports.inner {
+        let linker = match imports.inner {
             ImportBindingsInner::Wasmtime(l) => l,
             _ => {
                 return Err(EngineError::Internal {
@@ -320,43 +342,11 @@ impl WasmEngine for WasmtimeEngine {
             }
         };
 
-        // Components produced by `cargo component build --target wasm32-wasip2`
-        // pull in WASI Preview-2 imports transitively through `wit-bindgen-rt`,
-        // even when the guest code never touches WASI. Torvyn does not (yet)
-        // grant components WASI capabilities; satisfying these dangling
-        // imports with trap functions keeps instantiation alive while
-        // ensuring any actual attempt to call WASI is a hard runtime
-        // failure. When the security/capability story lands we will switch
-        // to fail-closed by removing this stubbing.
-        //
-        // Workflow for the linker (works around bytecodealliance/wasmtime#9615,
-        // where `define_unknown_imports_as_traps` re-creates partially
-        // populated import instances and clobbers their existing function
-        // bindings even with the per-function skip):
-        //   1. `allow_shadowing(true)` so later host-import additions can
-        //      overwrite the trap stubs.
-        //   2. `define_unknown_imports_as_traps(component)` adds traps for
-        //      every import (including ones we already wired) — clobber
-        //      everything.
-        //   3. Re-apply our Torvyn host imports via the bindgen
-        //      `add_to_linker`; they now shadow the traps for the
-        //      `torvyn:streaming/types` and `torvyn:streaming/buffer-allocator`
-        //      interfaces, leaving traps only for the WASI tail.
-        linker.allow_shadowing(true);
-        if let Err(e) = linker.define_unknown_imports_as_traps(component) {
-            return Err(EngineError::InstantiationFailed {
-                component_id,
-                reason: format!("failed to stub unknown imports: {e}"),
-            });
-        }
-        wit_bindings::data_source::DataSource::add_to_linker::<_, HasSelf<HostState>>(
-            &mut linker,
-            |state| state,
-        )
-        .map_err(|e| EngineError::InstantiationFailed {
-            component_id,
-            reason: format!("failed to re-apply Torvyn host imports: {e}"),
-        })?;
+        // The linker arriving here was produced by `create_linker`,
+        // which has already wired both the Torvyn host imports and the
+        // WASI Preview-2 sandbox. No further patching is required —
+        // any guest import outside that union is a real configuration
+        // error and `instantiate_async` will reject it.
 
         let mut store = self.create_store(component_id);
 

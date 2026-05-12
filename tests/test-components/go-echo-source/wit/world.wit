@@ -1,0 +1,43 @@
+// Wrapper WIT used solely by the TinyGo build for `go-echo-source`.
+//
+// TinyGo's `wasip2` target produces a Component Model artefact that
+// imports the WASI Preview-2 interfaces the Go runtime's stdlib touches
+// (panic, stdout/stderr, env, clocks). The canonical
+// `torvyn:streaming` contracts at
+// `torvyn/crates/torvyn-contracts/wit/torvyn-streaming/` do not declare
+// WASI imports (and rightly so — the streaming runtime grants no WASI
+// capabilities to guests), so `wasm-tools component new` rejects the
+// resulting binary when fed the canonical world directly.
+//
+// This wrapper world inherits the canonical `data-source` exports and
+// adds the WASI imports the Go runtime drags in. The host runtime
+// satisfies the WASI tail at link time via
+// `Linker::define_unknown_imports_as_traps` — every actual call into
+// those imports is a hard runtime failure, identical to the Rust
+// path's treatment.
+//
+// This file is consumed by `tinygo build --wit-package wit/ --wit-world
+// data-source-with-wasi`. The contracts under `wit/deps/` are populated
+// by the integration crate's `build.rs` (copying the canonical WIT)
+// and by `wkg wit fetch` (pulling the WASI Preview-2 deps).
+package torvyn:gosource@0.1.0;
+
+world data-source-with-wasi {
+    include torvyn:streaming/data-source@0.1.0;
+
+    // WASI Preview-2 imports pulled in transparently by TinyGo's
+    // standard library and runtime. None of these are called by our
+    // guest code; declaring them keeps the component encoder happy.
+    import wasi:cli/environment@0.2.0;
+    import wasi:cli/exit@0.2.0;
+    import wasi:cli/stdin@0.2.0;
+    import wasi:cli/stdout@0.2.0;
+    import wasi:cli/stderr@0.2.0;
+    import wasi:io/error@0.2.0;
+    import wasi:io/streams@0.2.0;
+    import wasi:clocks/wall-clock@0.2.0;
+    import wasi:clocks/monotonic-clock@0.2.0;
+    import wasi:filesystem/types@0.2.0;
+    import wasi:filesystem/preopens@0.2.0;
+    import wasi:random/random@0.2.0;
+}

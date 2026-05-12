@@ -22,20 +22,15 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use async_trait::async_trait;
-use tokio::sync::mpsc;
-
-use torvyn_engine::{
-    ComponentInstance, ComponentInvoker, OutputElement, ProcessResult, StreamElement,
-    WasmtimeEngine, WasmtimeEngineConfig, WasmtimeInvoker,
+use torvyn_engine::{WasmtimeEngine, WasmtimeEngineConfig};
+use torvyn_integration_tests::real_wasm::{
+    await_flow_terminal, file_uri, spawn_real_coordinator, wait_for_sink_count, RecordingInvoker,
+    SINK_COMPONENT_ID, STAGE_FLOW_IDS,
 };
-use torvyn_pipeline::{instantiate_pipeline, NodeConfig, PipelineTopologyBuilder};
-use torvyn_reactor::coordinator::ReactorCoordinator;
-use torvyn_reactor::events::{ReactorCommand, ReactorEvent};
-use torvyn_reactor::handle::ReactorHandle;
-use torvyn_types::{
-    BackpressureSignal, ComponentId, ComponentRole, FlowId, FlowState, NoopEventSink, ProcessError,
+use torvyn_pipeline::{
+    instantiate_pipeline, NodeConfig, PipelineTopology, PipelineTopologyBuilder,
 };
+use torvyn_types::{ComponentRole, FlowState};
 
 // ===========================================================================
 // Component fixture paths — populated by build.rs at compile time
@@ -45,143 +40,7 @@ const ECHO_SOURCE_WASM: &str = env!("TORVYN_ECHO_SOURCE_WASM");
 const IDENTITY_PROCESSOR_WASM: &str = env!("TORVYN_IDENTITY_PROCESSOR_WASM");
 const ECHO_SINK_WASM: &str = env!("TORVYN_ECHO_SINK_WASM");
 
-fn file_uri(absolute_path: &str) -> String {
-    format!("file://{absolute_path}")
-}
-
-// ===========================================================================
-// RecordingInvoker — wraps WasmtimeInvoker, observes pushed sequences
-// ===========================================================================
-
-/// `ComponentInvoker` wrapper that records the metadata of every
-/// element pushed at the sink, then delegates to the wrapped Wasmtime
-/// invoker. The Wasm component itself can't expose state back to the
-/// host (linear memory is opaque), so the only host-observable signal
-/// of "what the sink received in what order" is the meta on each
-/// `invoke_push` call.
-struct RecordingInvoker {
-    inner: WasmtimeInvoker,
-    sink_component_id: ComponentId,
-    pushed_sequences: Arc<Mutex<Vec<u64>>>,
-}
-
-impl RecordingInvoker {
-    fn new(sink_component_id: ComponentId, pushed_sequences: Arc<Mutex<Vec<u64>>>) -> Self {
-        Self {
-            inner: WasmtimeInvoker::new(),
-            sink_component_id,
-            pushed_sequences,
-        }
-    }
-}
-
-#[async_trait]
-impl ComponentInvoker for RecordingInvoker {
-    async fn invoke_pull(
-        &self,
-        instance: &mut ComponentInstance,
-        component_id: ComponentId,
-    ) -> Result<Option<OutputElement>, ProcessError> {
-        self.inner.invoke_pull(instance, component_id).await
-    }
-
-    async fn invoke_process(
-        &self,
-        instance: &mut ComponentInstance,
-        component_id: ComponentId,
-        element: StreamElement,
-    ) -> Result<ProcessResult, ProcessError> {
-        self.inner
-            .invoke_process(instance, component_id, element)
-            .await
-    }
-
-    async fn invoke_push(
-        &self,
-        instance: &mut ComponentInstance,
-        component_id: ComponentId,
-        element: StreamElement,
-    ) -> Result<BackpressureSignal, ProcessError> {
-        if component_id == self.sink_component_id {
-            self.pushed_sequences
-                .lock()
-                .expect("pushed_sequences mutex")
-                .push(element.meta.sequence);
-        }
-        self.inner
-            .invoke_push(instance, component_id, element)
-            .await
-    }
-
-    async fn invoke_init(
-        &self,
-        instance: &mut ComponentInstance,
-        component_id: ComponentId,
-        config: &str,
-    ) -> Result<(), ProcessError> {
-        self.inner.invoke_init(instance, component_id, config).await
-    }
-
-    async fn invoke_teardown(&self, instance: &mut ComponentInstance, component_id: ComponentId) {
-        self.inner.invoke_teardown(instance, component_id).await
-    }
-}
-
-// ===========================================================================
-// Shared test scaffolding
-// ===========================================================================
-
-// `ComponentId` and `FlowId` assignments are fully determined by the
-// topology's node order:
-//   * `instantiate_pipeline` (`crates/torvyn-pipeline/src/instantiate.rs`)
-//     maps node index `i` to `ComponentId::new((i as u64) + 1)`.
-//   * `WasmtimeEngine::create_store` then derives
-//     `FlowId::new(component_id.as_u64())`.
-// For the 3-stage Source → Processor → Sink topology these are pinned
-// to 1, 2, 3 respectively.
-const SINK_COMPONENT_ID: ComponentId = ComponentId::new(3);
-const STAGE_FLOW_IDS: [FlowId; 3] = [FlowId::new(1), FlowId::new(2), FlowId::new(3)];
-
-fn spawn_real_coordinator<I>(invoker: Arc<I>) -> (ReactorHandle, tokio::task::JoinHandle<()>)
-where
-    I: ComponentInvoker + 'static,
-{
-    let (cmd_tx, cmd_rx) = mpsc::channel::<ReactorCommand>(256);
-    let (event_tx, _event_rx) = mpsc::channel::<ReactorEvent>(256);
-    let coordinator = ReactorCoordinator::new(cmd_rx, event_tx, invoker, Arc::new(NoopEventSink));
-    let join = tokio::spawn(coordinator.run());
-    (ReactorHandle::new(cmd_tx), join)
-}
-
-async fn await_flow_terminal(
-    reactor: &ReactorHandle,
-    flow_id: FlowId,
-    timeout: Duration,
-) -> FlowState {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        match reactor.flow_state(flow_id).await {
-            Ok(state) if state.is_terminal() => return state,
-            Ok(_) => {}
-            // The coordinator may reap a completed flow before we poll
-            // again; mirror the MockEngine integration test and treat
-            // that as "completed".
-            Err(_) => return FlowState::Completed,
-        }
-        if tokio::time::Instant::now() >= deadline {
-            panic!(
-                "flow {flow_id} did not reach a terminal state within {timeout:?}; \
-                 most recent observed state was non-terminal"
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-}
-
-fn build_pipeline_topology(
-    name: &'static str,
-    source_init: Option<String>,
-) -> torvyn_pipeline::PipelineTopology {
+fn build_pipeline_topology(name: &'static str, source_init: Option<String>) -> PipelineTopology {
     let mut source_cfg = NodeConfig::default();
     if let Some(s) = source_init {
         source_cfg.init_config = Some(s);
@@ -217,8 +76,8 @@ fn build_pipeline_topology(
 
 /// **Test A** — Source → Processor → Sink with 100 elements. Asserts
 /// that the flow reaches `Completed`, the sink receives exactly 100
-/// elements, and the per-element sequence numbers it observes are the
-/// reactor-assigned monotonic `0..100`.
+/// elements, and the per-element sequence numbers it observes are
+/// strictly monotonic.
 #[tokio::test]
 async fn test_real_source_to_sink_one_hundred_elements_completes() {
     const ELEMENT_COUNT: u64 = 100;
@@ -250,6 +109,8 @@ async fn test_real_source_to_sink_one_hundred_elements_completes() {
         FlowState::Completed,
         "expected the flow to reach Completed; got {final_state:?}"
     );
+
+    wait_for_sink_count(&pushed, ELEMENT_COUNT, Duration::from_secs(5)).await;
 
     let received = pushed.lock().expect("pushed_sequences mutex");
     assert_eq!(
@@ -317,20 +178,7 @@ async fn test_real_pipeline_records_exactly_four_copies_per_element() {
         await_flow_terminal(&reactor, handle.flow_id(), Duration::from_secs(15)).await;
     assert_eq!(final_state, FlowState::Completed);
 
-    // Wait for the sink to observe every element before we sample the
-    // ledger — the reactor may report the flow Completed before the
-    // last `invoke_push` has actually returned.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        let len = pushed.lock().expect("pushed mutex").len() as u64;
-        if len >= ELEMENT_COUNT {
-            break;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            panic!("sink received only {len} of {ELEMENT_COUNT} elements before deadline");
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    wait_for_sink_count(&pushed, ELEMENT_COUNT, Duration::from_secs(5)).await;
 
     let source_stats = manager.flow_copy_stats(STAGE_FLOW_IDS[0]);
     let processor_stats = manager.flow_copy_stats(STAGE_FLOW_IDS[1]);

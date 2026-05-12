@@ -9,6 +9,7 @@ together (engine + reactor + pipeline + resources).
 |---|---|---|
 | `tests/test_pipeline_instantiation.rs` | `MockEngine` | Rust stable only |
 | `tests/test_real_wasm_e2e.rs` (feature-gated) | `WasmtimeEngine` + real `.wasm` | Rust stable, `wasm32-wasip2` target, `cargo-component` |
+| `tests/test_polyglot_e2e.rs` (feature-gated) | `WasmtimeEngine` + a TinyGo source + Rust processor + Rust sink | All of the above, plus `tinygo` and `wit-bindgen-go` |
 
 ## Running
 
@@ -18,7 +19,7 @@ cargo test -p torvyn-integration-tests
 ```
 This is what the `integration` CI job runs. No Wasm toolchain required.
 
-### Real-Wasm end-to-end
+### Real-Wasm end-to-end (Rust-only pipeline)
 ```bash
 rustup target add wasm32-wasip2
 cargo install cargo-component --locked
@@ -29,6 +30,28 @@ This is what the `wasm-e2e` CI job runs. The `build.rs` invokes
 the three test fixtures under `tests/test-components/` and emits
 `TORVYN_<NAME>_WASM` environment variables that the test file reads via
 `env!()`.
+
+### Polyglot end-to-end (Go source + Rust processor + Rust sink)
+```bash
+rustup target add wasm32-wasip2
+cargo install cargo-component --locked
+# TinyGo via your package manager (Homebrew, apt, the official .deb, …)
+go install go.bytecodealliance.org/cmd/wit-bindgen-go@latest
+cargo test -p torvyn-integration-tests --features wasm-polyglot --test test_polyglot_e2e
+```
+This is what the `wasm-polyglot-e2e` CI job runs. The `build.rs` adds
+two extra steps to the standard pipeline:
+1. Stages a WIT tree under `tests/test-components/go-echo-source/wit/deps/`
+   by copying the canonical `torvyn:streaming` contracts and TinyGo's
+   bundled WASI Preview-2 deps. This avoids requiring a network call
+   to a WIT registry at build time.
+2. Generates Go bindings via `wit-bindgen-go`, then compiles the
+   component with `tinygo build -target=wasip2 -scheduler=none`.
+
+The test asserts the same "exactly 4 measured copies per element"
+invariant as the Rust-only pipeline, proving that the Go-emitted
+buffer is indistinguishable from the Rust-emitted buffer as far as the
+host's `DefaultResourceManager` and `CopyLedger` are concerned.
 
 ## Escape hatch
 

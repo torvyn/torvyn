@@ -23,6 +23,7 @@
 use std::sync::Arc;
 
 use wasmtime::component::{Resource, ResourceTable};
+use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use torvyn_resources::{DefaultResourceManager, OwnerId};
 use torvyn_types::{BufferHandle, ComponentId, FlowId, ResourceId};
@@ -65,9 +66,11 @@ pub(crate) struct HostState {
     #[allow(dead_code)]
     pub(crate) fuel_budget: u64,
 
-    /// Resource table backing the host-defined resource handles
-    /// (`buffer`, `mutable-buffer`, `flow-context`). Per-store: each
-    /// `Resource<HostBuffer>` is meaningful only inside this store.
+    /// Resource table shared by Torvyn host resources
+    /// (`buffer`, `mutable-buffer`, `flow-context`) and the
+    /// `wasmtime-wasi` Preview-2 resource types (`input-stream`,
+    /// `output-stream`, `error`, etc.). Per-store: each
+    /// `Resource<T>` is meaningful only inside this store.
     pub(crate) table: ResourceTable,
 
     /// Shared manager that owns the buffer pool, ownership state machine,
@@ -81,6 +84,27 @@ pub(crate) struct HostState {
     /// from the component ID; Session 2.3 wires real reactor-assigned
     /// flow identifiers.
     pub(crate) flow_id: FlowId,
+
+    /// WASI Preview-2 sandbox context.
+    ///
+    /// Guest components produced by `cargo-component` / TinyGo /
+    /// `componentize-py` pull in WASI imports through their
+    /// language runtimes even when the guest code itself never
+    /// performs I/O. Torvyn satisfies those imports with the most
+    /// restrictive sandbox `wasmtime-wasi` ships:
+    ///
+    /// - stdin is closed.
+    /// - stdout / stderr are discarded.
+    /// - the filesystem has no preopens.
+    /// - the environment is empty.
+    /// - no socket access.
+    /// - random returns deterministic-failure responses, NOT
+    ///   real entropy from the host.
+    ///
+    /// The capability story will harden further when the security
+    /// crate's `CapabilityGuard` work lands in Phase 1; for now,
+    /// every component runs in an empty sandbox by default.
+    pub(crate) wasi: WasiCtx,
 }
 
 impl HostState {
@@ -97,6 +121,10 @@ impl HostState {
     ) -> Self {
         resources.register_flow(flow_id);
         resources.register_component(component_id, None);
+        // An empty `WasiCtxBuilder` produces the most restrictive
+        // Preview-2 sandbox: no stdio, no env, no filesystem, no
+        // sockets. See the `wasi` field docs for the policy story.
+        let wasi = WasiCtxBuilder::new().build();
         Self {
             component_id,
             limits,
@@ -104,6 +132,7 @@ impl HostState {
             table: ResourceTable::new(),
             resources,
             flow_id,
+            wasi,
         }
     }
 
@@ -112,6 +141,15 @@ impl HostState {
     #[inline]
     pub(crate) fn component_owner(&self) -> OwnerId {
         OwnerId::Component(self.component_id)
+    }
+}
+
+impl WasiView for HostState {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
     }
 }
 

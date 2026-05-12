@@ -79,6 +79,44 @@ jobs:
       - name: Run real-Wasm end-to-end tests
         run: cargo test -p torvyn-integration-tests --features wasm-e2e --test test_real_wasm_e2e
 
+  wasm-polyglot-e2e:
+    name: Wasm Polyglot End-to-End
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install wasm32-wasip2 target
+        run: rustup target add wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm-polyglot-e2e
+      - uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: cargo-component@0.21.1
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Install TinyGo
+        run: |
+          # Pin to the same TinyGo minor series the project was developed
+          # against. 0.41+ bundles WASI Preview-2 WIT files matching the
+          # version range `wasmtime-wasi` 42 implements; older 0.3x
+          # series ship a different WASI bundle that desynchronises
+          # the wrapper world's `wasi:*@0.2.0` import resolution from
+          # the host's linker registration.
+          TINYGO_VERSION=0.41.0
+          curl -sSL -o /tmp/tinygo.deb \
+            https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb
+          sudo dpkg -i /tmp/tinygo.deb
+          tinygo version
+      - name: Install wit-bindgen-go
+        run: |
+          go install go.bytecodealliance.org/cmd/wit-bindgen-go@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Run polyglot end-to-end tests
+        run: cargo test -p torvyn-integration-tests --features wasm-polyglot --test test_polyglot_e2e
+
   doc:
     name: Documentation
     runs-on: ubuntu-latest

@@ -3,6 +3,11 @@
 //! Provides a configurable [`TestInvoker`] and topology-building helpers
 //! that mirror the patterns in `torvyn-reactor`'s own integration tests,
 //! extended with richer behavior modes for cross-crate testing.
+//!
+//! When the `wasm-e2e` feature is enabled, the crate additionally
+//! exposes a real-Wasm scaffold (the `real_wasm` module) that builds on
+//! `WasmtimeEngine` + `WasmtimeInvoker` for end-to-end tests against
+//! `cargo component` / TinyGo artefacts.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -418,4 +423,204 @@ pub fn spawn_coordinator_with_arc(
     let handle = ReactorHandle::new(cmd_tx);
 
     (handle, join)
+}
+
+// ===========================================================================
+// Real-Wasm scaffolding (feature: `wasm-e2e`)
+// ===========================================================================
+
+/// Helpers shared by the real-Wasm end-to-end tests
+/// (`tests/test_real_wasm_e2e.rs` and `tests/test_polyglot_e2e.rs`).
+///
+/// Everything here is feature-gated so the integration crate's
+/// MockEngine path stays toolchain-free.
+#[cfg(feature = "wasm-e2e")]
+pub mod real_wasm {
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use tokio::sync::mpsc;
+
+    use torvyn_engine::{
+        ComponentInstance, ComponentInvoker, OutputElement, ProcessResult, StreamElement,
+        WasmtimeInvoker,
+    };
+    use torvyn_reactor::coordinator::ReactorCoordinator;
+    use torvyn_reactor::events::{ReactorCommand, ReactorEvent};
+    use torvyn_reactor::handle::ReactorHandle;
+    use torvyn_types::{
+        BackpressureSignal, ComponentId, FlowId, FlowState, NoopEventSink, ProcessError,
+    };
+
+    /// Spawn a real [`ReactorCoordinator`] with the supplied invoker.
+    ///
+    /// Mirrors [`crate::spawn_coordinator_with_arc`] but is generic over
+    /// the invoker type so a wrapping [`RecordingInvoker`] can be plugged
+    /// in.
+    pub fn spawn_real_coordinator<I>(
+        invoker: Arc<I>,
+    ) -> (ReactorHandle, tokio::task::JoinHandle<()>)
+    where
+        I: ComponentInvoker + 'static,
+    {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<ReactorCommand>(256);
+        let (event_tx, _event_rx) = mpsc::channel::<ReactorEvent>(256);
+        let coordinator =
+            ReactorCoordinator::new(cmd_rx, event_tx, invoker, Arc::new(NoopEventSink));
+        let join = tokio::spawn(coordinator.run());
+        (ReactorHandle::new(cmd_tx), join)
+    }
+
+    /// Poll `reactor.flow_state(flow_id)` until it reaches a terminal
+    /// state or the deadline elapses. Panics with a descriptive message
+    /// on timeout. The coordinator may reap the flow before we observe
+    /// a terminal state; that is treated as `FlowState::Completed`,
+    /// matching the pre-existing MockEngine integration test's stance.
+    pub async fn await_flow_terminal(
+        reactor: &ReactorHandle,
+        flow_id: FlowId,
+        timeout: Duration,
+    ) -> FlowState {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            match reactor.flow_state(flow_id).await {
+                Ok(state) if state.is_terminal() => return state,
+                Ok(_) => {}
+                Err(_) => return FlowState::Completed,
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "flow {flow_id} did not reach a terminal state within {timeout:?}; \
+                     most recent observed state was non-terminal"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// Wait until the sink has observed `expected` pushes, or panic on
+    /// deadline. The reactor reports `FlowState::Completed` before the
+    /// final `invoke_push` returns; tests that rely on the
+    /// sink-side count must drain the queue before sampling.
+    pub async fn wait_for_sink_count(
+        pushed: &Arc<Mutex<Vec<u64>>>,
+        expected: u64,
+        timeout: Duration,
+    ) {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let len = pushed.lock().expect("pushed mutex").len() as u64;
+            if len >= expected {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!("sink received only {len} of {expected} elements before deadline");
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    /// `ComponentInvoker` wrapper that records the metadata of every
+    /// element pushed at the sink before delegating to a wrapped
+    /// [`WasmtimeInvoker`].
+    ///
+    /// Wasm component linear memory is opaque to the host, so the only
+    /// way to learn what the sink received is to intercept
+    /// `invoke_push` at the host boundary. The wrapper is transparent to
+    /// the reactor — every call delegates with no behavioural change.
+    pub struct RecordingInvoker {
+        inner: WasmtimeInvoker,
+        sink_component_id: ComponentId,
+        pushed_sequences: Arc<Mutex<Vec<u64>>>,
+    }
+
+    impl RecordingInvoker {
+        /// Create a [`RecordingInvoker`] that records `invoke_push`
+        /// observations of `sink_component_id` into the supplied
+        /// collector before delegating each call to the wrapped
+        /// [`WasmtimeInvoker`].
+        pub fn new(sink_component_id: ComponentId, pushed_sequences: Arc<Mutex<Vec<u64>>>) -> Self {
+            Self {
+                inner: WasmtimeInvoker::new(),
+                sink_component_id,
+                pushed_sequences,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ComponentInvoker for RecordingInvoker {
+        async fn invoke_pull(
+            &self,
+            instance: &mut ComponentInstance,
+            component_id: ComponentId,
+        ) -> Result<Option<OutputElement>, ProcessError> {
+            self.inner.invoke_pull(instance, component_id).await
+        }
+
+        async fn invoke_process(
+            &self,
+            instance: &mut ComponentInstance,
+            component_id: ComponentId,
+            element: StreamElement,
+        ) -> Result<ProcessResult, ProcessError> {
+            self.inner
+                .invoke_process(instance, component_id, element)
+                .await
+        }
+
+        async fn invoke_push(
+            &self,
+            instance: &mut ComponentInstance,
+            component_id: ComponentId,
+            element: StreamElement,
+        ) -> Result<BackpressureSignal, ProcessError> {
+            if component_id == self.sink_component_id {
+                self.pushed_sequences
+                    .lock()
+                    .expect("pushed_sequences mutex")
+                    .push(element.meta.sequence);
+            }
+            self.inner
+                .invoke_push(instance, component_id, element)
+                .await
+        }
+
+        async fn invoke_init(
+            &self,
+            instance: &mut ComponentInstance,
+            component_id: ComponentId,
+            config: &str,
+        ) -> Result<(), ProcessError> {
+            self.inner.invoke_init(instance, component_id, config).await
+        }
+
+        async fn invoke_teardown(
+            &self,
+            instance: &mut ComponentInstance,
+            component_id: ComponentId,
+        ) {
+            self.inner.invoke_teardown(instance, component_id).await
+        }
+    }
+
+    /// Format an absolute filesystem path as a `file://` URI consumable
+    /// by the pipeline's `component_ref` resolver.
+    pub fn file_uri(absolute_path: &str) -> String {
+        format!("file://{absolute_path}")
+    }
+
+    /// `ComponentId` of the sink stage in the three-stage
+    /// Source → Processor → Sink topology used by the real-Wasm
+    /// integration tests. `instantiate_pipeline` maps node index `i`
+    /// to `ComponentId::new((i as u64) + 1)`, so the sink at index 2
+    /// becomes [`ComponentId::new(3)`].
+    pub const SINK_COMPONENT_ID: ComponentId = ComponentId::new(3);
+
+    /// Per-stage [`FlowId`] assignment used by the real-Wasm
+    /// integration tests. `WasmtimeEngine::create_store` derives
+    /// `FlowId::new(component_id.as_u64())`, so the source/processor/
+    /// sink flows are `1`, `2`, `3` respectively.
+    pub const STAGE_FLOW_IDS: [FlowId; 3] = [FlowId::new(1), FlowId::new(2), FlowId::new(3)];
 }
