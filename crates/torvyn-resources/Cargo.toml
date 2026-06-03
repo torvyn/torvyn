@@ -12,5 +12,12 @@ readme = "README.md"
 torvyn-types.workspace = true
 parking_lot = "0.12"
 
+# Loom is pulled in only under `--cfg loom`, where the Treiber stack's
+# synchronisation atomics resolve to loom's instrumented versions so the model
+# checker in `tests/loom_treiber.rs` can explore every interleaving. Normal
+# builds and `cargo test` never reference or fetch it.
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
 [lints]
 workspace = true

@@ -38,6 +38,11 @@ all = "deny"
 
 [workspace.lints.rust]
 missing_docs = "warn"
+# `loom` is a real, supported build configuration: under `--cfg loom` the
+# torvyn-resources Treiber stack swaps in loom-instrumented atomics for the
+# model-checked concurrency tests. Register it so check-cfg stays quiet here
+# while still flagging genuinely-unknown cfg names elsewhere.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
 
 [profile.release]
 lto = true
