@@ -12,9 +12,10 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 
-use torvyn_types::{EventSink, FlowId, FlowState, StreamId};
+use torvyn_types::{ComponentId, EventSink, FlowId, FlowState, StreamId};
 
 use torvyn_engine::{ComponentInstance, ComponentInvoker};
+use torvyn_resources::DefaultResourceManager;
 
 use crate::cancellation::{CancellationReason, FlowCancellation};
 use crate::config::FlowConfig;
@@ -28,6 +29,10 @@ use crate::stream::StreamState;
 struct FlowEntry {
     handle: FlowDriverHandle,
     join_handle: JoinHandle<(FlowId, FlowState, FlowCompletionStats)>,
+    /// Component identities of this flow's stages, captured from the topology
+    /// at spawn time. Used to reclaim each component's host-managed resources
+    /// when the flow reaches a terminal state.
+    component_ids: Vec<ComponentId>,
 }
 
 /// The reactor coordinator.
@@ -51,6 +56,12 @@ pub struct ReactorCoordinator<I: ComponentInvoker, E: EventSink> {
     invoker: Arc<I>,
     /// The event sink for observability. Cloned into each flow driver.
     event_sink: Arc<E>,
+    /// Shared resource manager. When a flow reaches a terminal state the
+    /// coordinator returns the flow's buffers, budget, and resource bookkeeping
+    /// here (retaining its copy-ledger stats for post-mortem observability), so
+    /// completed flows do not accumulate host-managed resources for the
+    /// engine's lifetime.
+    resources: Arc<DefaultResourceManager>,
     /// Whether the coordinator is shutting down.
     shutting_down: bool,
 }
@@ -64,6 +75,7 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
         event_tx: mpsc::Sender<ReactorEvent>,
         invoker: Arc<I>,
         event_sink: Arc<E>,
+        resources: Arc<DefaultResourceManager>,
     ) -> Self {
         Self {
             command_rx,
@@ -72,6 +84,7 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
             next_flow_id: AtomicU64::new(1),
             invoker,
             event_sink,
+            resources,
             shutting_down: false,
         }
     }
@@ -191,6 +204,16 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
         // 3. Assign flow ID.
         let flow_id = FlowId::new(self.next_flow_id.fetch_add(1, Ordering::Relaxed));
 
+        // Capture the stage component identities before `config` is moved into
+        // the driver task, so the flow's host-managed resources can be
+        // reclaimed by component when it reaches a terminal state.
+        let component_ids: Vec<ComponentId> = config
+            .topology
+            .stages
+            .iter()
+            .map(|stage| stage.component_id)
+            .collect();
+
         // 4. Build streams from connections.
         let streams: Vec<StreamState> = config
             .topology
@@ -262,6 +285,7 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
             FlowEntry {
                 handle,
                 join_handle,
+                component_ids,
             },
         );
 
@@ -363,11 +387,19 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
             )
         });
 
+        let component_ids: Vec<ComponentId> = config
+            .topology
+            .stages
+            .iter()
+            .map(|stage| stage.component_id)
+            .collect();
+
         self.flows.insert(
             flow_id,
             FlowEntry {
                 handle,
                 join_handle,
+                component_ids,
             },
         );
 
@@ -400,7 +432,12 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
         }
         for flow_id in completed_ids {
             if let Some(entry) = self.flows.remove(&flow_id) {
-                match entry.join_handle.await {
+                let FlowEntry {
+                    join_handle,
+                    component_ids,
+                    ..
+                } = entry;
+                match join_handle.await {
                     Ok((_, state, _stats)) => {
                         debug!(flow_id = %flow_id, state = %state, "flow reaped");
                     }
@@ -408,7 +445,45 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
                         error!(flow_id = %flow_id, error = %e, "flow task panicked");
                     }
                 }
+                // The driver task has fully terminated (and already emitted its
+                // `FlowCompleted` event with stats), so any buffers the flow's
+                // components still held are now orphaned in the resource
+                // manager. Reclaim them and release the components' budget; the
+                // copy-ledger entries are retained for post-terminal
+                // observability.
+                self.reclaim_flow_resources(flow_id, &component_ids);
             }
+        }
+    }
+
+    /// Reclaim a terminal flow's host-managed resources from the shared
+    /// resource manager by reclaiming each of its components' outstanding
+    /// buffers and releasing their budget, while leaving the copy-ledger stats
+    /// in place for post-terminal observability.
+    ///
+    /// Keyed by component identity, which is stable regardless of how flow
+    /// identifiers are derived, so this stays correct as the resource/flow-id
+    /// wiring evolves. Reclaiming a component whose buffers were already
+    /// returned during normal operation is a no-op, so this is safe to call for
+    /// every reaped flow.
+    ///
+    /// # COLD PATH — called once per flow when it reaches a terminal state.
+    fn reclaim_flow_resources(&self, flow_id: FlowId, component_ids: &[ComponentId]) {
+        let mut buffers = 0usize;
+        let mut bytes = 0u64;
+        for &component_id in component_ids {
+            for reclaimed in self.resources.force_reclaim(component_id) {
+                buffers += 1;
+                bytes += u64::from(reclaimed.payload_capacity);
+            }
+        }
+        if buffers > 0 {
+            debug!(
+                flow_id = %flow_id,
+                buffers,
+                bytes,
+                "reclaimed orphaned component buffers at flow terminal",
+            );
         }
     }
 

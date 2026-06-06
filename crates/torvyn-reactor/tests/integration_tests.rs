@@ -18,6 +18,7 @@ use torvyn_types::{
 use torvyn_engine::{
     ComponentInstance, ComponentInvoker, OutputElement, ProcessResult, StreamElement,
 };
+use torvyn_resources::{DefaultResourceManager, OwnerId};
 
 use torvyn_reactor::cancellation::CancellationReason;
 use torvyn_reactor::config::{FlowConfig, StreamConfig};
@@ -385,7 +386,13 @@ async fn test_coordinator_shutdown_drains_flows() {
     let invoker = Arc::new(TestInvoker::new(0));
     let event_sink = Arc::new(NoopEventSink);
 
-    let coordinator = ReactorCoordinator::new(cmd_rx, event_tx, invoker, event_sink);
+    let coordinator = ReactorCoordinator::new(
+        cmd_rx,
+        event_tx,
+        invoker,
+        event_sink,
+        Arc::new(DefaultResourceManager::new_for_testing()),
+    );
     let coord_handle = tokio::spawn(coordinator.run());
 
     let handle = ReactorHandle::new(cmd_tx);
@@ -407,6 +414,65 @@ async fn test_coordinator_shutdown_drains_flows() {
     assert_eq!(result.timed_out, 0, "expected no timed-out flows");
 
     // Coordinator should stop after shutdown + handle drop.
+    drop(handle);
+    let _ = tokio::time::timeout(Duration::from_secs(2), coord_handle).await;
+}
+
+/// The coordinator reclaims a terminal flow's component resources on reap.
+///
+/// Simulates a component that still held a host-managed buffer when its flow
+/// ended — the leak this wiring guards against — then drives a flow that uses
+/// that component to completion through the real coordinator and asserts the
+/// buffer is returned to the shared resource manager.
+#[tokio::test]
+async fn test_coordinator_reclaims_component_resources_on_flow_terminal() {
+    // Shared resource manager standing in for the engine's. Seed it with a
+    // buffer "leaked" by component 1.
+    let manager = Arc::new(DefaultResourceManager::new_for_testing());
+    let leaky = ComponentId::new(1);
+    // The engine keys a component's resources under `FlowId(component_id)`;
+    // mirror that here so the seeded buffer is owned by component 1.
+    let resource_flow = FlowId::new(leaky.as_u64());
+    manager.register_flow(resource_flow);
+    manager.register_component(leaky, None);
+    let _leaked = manager
+        .allocate(OwnerId::Component(leaky), 256, resource_flow)
+        .expect("seed allocation must succeed");
+    assert_eq!(manager.live_resource_count(), 1);
+
+    // Coordinator wired to that same manager.
+    let (cmd_tx, cmd_rx) = mpsc::channel::<ReactorCommand>(64);
+    let (event_tx, _event_rx) = mpsc::channel::<ReactorEvent>(64);
+    let coordinator = ReactorCoordinator::new(
+        cmd_rx,
+        event_tx,
+        Arc::new(TestInvoker::new(0)),
+        Arc::new(NoopEventSink),
+        Arc::clone(&manager),
+    );
+    let coord_handle = tokio::spawn(coordinator.run());
+    let handle = ReactorHandle::new(cmd_tx);
+
+    // A flow whose source stage is the leaky component (id 1).
+    let topo = FlowTopology {
+        stages: vec![source(1), sink(2)],
+        connections: vec![conn(0, 1)],
+    };
+    let _flow = handle
+        .create_flow(FlowConfig::default_with_topology(topo))
+        .await
+        .expect("create_flow must succeed");
+
+    // Draining on shutdown reaps the completed flow, which triggers
+    // component-keyed reclamation.
+    let result = handle.shutdown(Duration::from_secs(5)).await;
+    assert_eq!(result.timed_out, 0, "stub flow should complete promptly");
+    assert_eq!(
+        manager.live_resource_count(),
+        0,
+        "coordinator must reclaim the terminal flow's component buffer on reap",
+    );
+
     drop(handle);
     let _ = tokio::time::timeout(Duration::from_secs(2), coord_handle).await;
 }
@@ -497,7 +563,13 @@ async fn test_handle_create_flow_returns_id() {
     let invoker = Arc::new(TestInvoker::new(0));
     let event_sink = Arc::new(NoopEventSink);
 
-    let coordinator = ReactorCoordinator::new(cmd_rx, event_tx, invoker, event_sink);
+    let coordinator = ReactorCoordinator::new(
+        cmd_rx,
+        event_tx,
+        invoker,
+        event_sink,
+        Arc::new(DefaultResourceManager::new_for_testing()),
+    );
     let _coord = tokio::spawn(coordinator.run());
 
     let handle = ReactorHandle::new(cmd_tx);
@@ -520,7 +592,13 @@ async fn test_handle_create_flow_invalid_topology_rejected() {
     let invoker = Arc::new(TestInvoker::new(0));
     let event_sink = Arc::new(NoopEventSink);
 
-    let coordinator = ReactorCoordinator::new(cmd_rx, event_tx, invoker, event_sink);
+    let coordinator = ReactorCoordinator::new(
+        cmd_rx,
+        event_tx,
+        invoker,
+        event_sink,
+        Arc::new(DefaultResourceManager::new_for_testing()),
+    );
     let _coord = tokio::spawn(coordinator.run());
 
     let handle = ReactorHandle::new(cmd_tx);
@@ -538,7 +616,13 @@ async fn test_handle_list_flows() {
     let invoker = Arc::new(TestInvoker::new(0));
     let event_sink = Arc::new(NoopEventSink);
 
-    let coordinator = ReactorCoordinator::new(cmd_rx, event_tx, invoker, event_sink);
+    let coordinator = ReactorCoordinator::new(
+        cmd_rx,
+        event_tx,
+        invoker,
+        event_sink,
+        Arc::new(DefaultResourceManager::new_for_testing()),
+    );
     let _coord = tokio::spawn(coordinator.run());
 
     let handle = ReactorHandle::new(cmd_tx);
@@ -563,7 +647,13 @@ async fn test_handle_query_flow_state() {
     let invoker = Arc::new(TestInvoker::new(0));
     let event_sink = Arc::new(NoopEventSink);
 
-    let coordinator = ReactorCoordinator::new(cmd_rx, event_tx, invoker, event_sink);
+    let coordinator = ReactorCoordinator::new(
+        cmd_rx,
+        event_tx,
+        invoker,
+        event_sink,
+        Arc::new(DefaultResourceManager::new_for_testing()),
+    );
     let _coord = tokio::spawn(coordinator.run());
 
     let handle = ReactorHandle::new(cmd_tx);
@@ -587,7 +677,13 @@ async fn test_handle_cancel_nonexistent_flow() {
     let invoker = Arc::new(TestInvoker::new(0));
     let event_sink = Arc::new(NoopEventSink);
 
-    let coordinator = ReactorCoordinator::new(cmd_rx, event_tx, invoker, event_sink);
+    let coordinator = ReactorCoordinator::new(
+        cmd_rx,
+        event_tx,
+        invoker,
+        event_sink,
+        Arc::new(DefaultResourceManager::new_for_testing()),
+    );
     let _coord = tokio::spawn(coordinator.run());
 
     let handle = ReactorHandle::new(cmd_tx);
@@ -605,7 +701,13 @@ async fn test_handle_shutdown_while_shutting_down_rejects_new_flows() {
     let invoker = Arc::new(TestInvoker::new(0));
     let event_sink = Arc::new(NoopEventSink);
 
-    let coordinator = ReactorCoordinator::new(cmd_rx, event_tx, invoker, event_sink);
+    let coordinator = ReactorCoordinator::new(
+        cmd_rx,
+        event_tx,
+        invoker,
+        event_sink,
+        Arc::new(DefaultResourceManager::new_for_testing()),
+    );
     let _coord = tokio::spawn(coordinator.run());
 
     let handle = ReactorHandle::new(cmd_tx);

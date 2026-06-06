@@ -82,7 +82,8 @@ async fn test_polyglot_go_source_to_rust_sink_records_four_copies_per_element() 
         .build()
         .expect("polyglot 3-stage topology must build");
 
-    let (reactor, _coordinator_join) = spawn_real_coordinator(Arc::clone(&invoker));
+    let (reactor, _coordinator_join) =
+        spawn_real_coordinator(Arc::clone(&invoker), engine.resource_manager());
 
     let handle = instantiate_pipeline(&topology, &engine, &invoker, &reactor)
         .await

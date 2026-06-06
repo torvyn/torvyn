@@ -15,6 +15,8 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
+use torvyn_resources::DefaultResourceManager;
+
 pub use torvyn_types::{
     BackpressurePolicy, BackpressureSignal, BufferHandle, ComponentId, ComponentRole, ElementMeta,
     FlowId, FlowState, NoopEventSink, ProcessError, ResourceId, StreamId,
@@ -417,7 +419,13 @@ pub fn spawn_coordinator_with_arc(
     let (cmd_tx, cmd_rx) = mpsc::channel::<ReactorCommand>(256);
     let (event_tx, _event_rx) = mpsc::channel::<ReactorEvent>(256);
 
-    let coordinator = ReactorCoordinator::new(cmd_rx, event_tx, invoker, Arc::new(NoopEventSink));
+    let coordinator = ReactorCoordinator::new(
+        cmd_rx,
+        event_tx,
+        invoker,
+        Arc::new(NoopEventSink),
+        Arc::new(DefaultResourceManager::new_for_testing()),
+    );
 
     let join = tokio::spawn(coordinator.run());
     let handle = ReactorHandle::new(cmd_tx);
@@ -449,25 +457,36 @@ pub mod real_wasm {
     use torvyn_reactor::coordinator::ReactorCoordinator;
     use torvyn_reactor::events::{ReactorCommand, ReactorEvent};
     use torvyn_reactor::handle::ReactorHandle;
+    use torvyn_resources::DefaultResourceManager;
     use torvyn_types::{
         BackpressureSignal, ComponentId, FlowId, FlowState, NoopEventSink, ProcessError,
     };
 
-    /// Spawn a real [`ReactorCoordinator`] with the supplied invoker.
+    /// Spawn a real [`ReactorCoordinator`] with the supplied invoker and
+    /// resource manager.
     ///
     /// Mirrors [`crate::spawn_coordinator_with_arc`] but is generic over
     /// the invoker type so a wrapping [`RecordingInvoker`] can be plugged
-    /// in.
+    /// in. The `resources` handle must be the same
+    /// [`DefaultResourceManager`] the engine instantiates components with,
+    /// so that on flow terminal the coordinator reclaims the very buffers
+    /// those components allocated.
     pub fn spawn_real_coordinator<I>(
         invoker: Arc<I>,
+        resources: Arc<DefaultResourceManager>,
     ) -> (ReactorHandle, tokio::task::JoinHandle<()>)
     where
         I: ComponentInvoker + 'static,
     {
         let (cmd_tx, cmd_rx) = mpsc::channel::<ReactorCommand>(256);
         let (event_tx, _event_rx) = mpsc::channel::<ReactorEvent>(256);
-        let coordinator =
-            ReactorCoordinator::new(cmd_rx, event_tx, invoker, Arc::new(NoopEventSink));
+        let coordinator = ReactorCoordinator::new(
+            cmd_rx,
+            event_tx,
+            invoker,
+            Arc::new(NoopEventSink),
+            resources,
+        );
         let join = tokio::spawn(coordinator.run());
         (ReactorHandle::new(cmd_tx), join)
     }

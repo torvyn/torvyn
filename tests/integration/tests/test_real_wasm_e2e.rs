@@ -96,7 +96,8 @@ async fn test_real_source_to_sink_one_hundred_elements_completes() {
         Some(format!("{{\"count\":{ELEMENT_COUNT}}}")),
     );
 
-    let (reactor, _coordinator_join) = spawn_real_coordinator(Arc::clone(&invoker));
+    let (reactor, _coordinator_join) =
+        spawn_real_coordinator(Arc::clone(&invoker), engine.resource_manager());
 
     let handle = instantiate_pipeline(&topology, &engine, &invoker, &reactor)
         .await
@@ -168,7 +169,8 @@ async fn test_real_pipeline_records_exactly_four_copies_per_element() {
         Some(format!("{{\"count\":{ELEMENT_COUNT}}}")),
     );
 
-    let (reactor, _coordinator_join) = spawn_real_coordinator(Arc::clone(&invoker));
+    let (reactor, _coordinator_join) =
+        spawn_real_coordinator(Arc::clone(&invoker), engine.resource_manager());
 
     let handle = instantiate_pipeline(&topology, &engine, &invoker, &reactor)
         .await
@@ -262,7 +264,8 @@ async fn test_real_pipeline_handles_source_completion_gracefully() {
     let topology =
         build_pipeline_topology("e2e-source-exhausted", Some("{\"count\":0}".to_owned()));
 
-    let (reactor, _coordinator_join) = spawn_real_coordinator(Arc::clone(&invoker));
+    let (reactor, _coordinator_join) =
+        spawn_real_coordinator(Arc::clone(&invoker), engine.resource_manager());
 
     let handle = instantiate_pipeline(&topology, &engine, &invoker, &reactor)
         .await

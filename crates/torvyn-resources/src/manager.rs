@@ -934,6 +934,58 @@ mod tests {
         assert_eq!(mgr.live_resource_count(), 0);
     }
 
+    #[test]
+    fn test_force_reclaim_retains_copy_ledger_and_frees_budget() {
+        // The reactor calls `force_reclaim` per component when a flow reaches a
+        // terminal state, relying on two properties: the component's
+        // outstanding buffers and reserved budget are reclaimed, while the
+        // flow's copy-ledger entry is *retained* for post-terminal
+        // observability (the real-Wasm end-to-end tests read those stats after
+        // the flow is reaped). Lock both in.
+        let mgr = test_manager();
+        let flow = FlowId::new(1);
+        let component = ComponentId::new(1);
+        mgr.register_flow(flow);
+        mgr.register_component(component, Some(512));
+
+        let owner = OwnerId::Component(component);
+        let h1 = mgr.allocate(owner, 100, flow).unwrap();
+        let _h2 = mgr.allocate(owner, 100, flow).unwrap();
+        // Record a copy so the flow's ledger entry holds observable data.
+        mgr.write_payload(h1, owner, 0, &[7u8; 64], flow).unwrap();
+        assert_eq!(mgr.live_resource_count(), 2);
+        assert_eq!(mgr.flow_copy_stats(flow).total_copy_ops, 1);
+
+        // Budget is now fully reserved (256 + 256 == 512); a third allocation
+        // must fail until the component's resources are reclaimed.
+        assert!(mgr.allocate(owner, 100, flow).is_err());
+
+        // Terminal reclamation: returns the two outstanding buffers to the pool
+        // and unregisters the component's budget.
+        let reclaimed = mgr.force_reclaim(component);
+        assert_eq!(reclaimed.len(), 2);
+        assert_eq!(
+            mgr.live_resource_count(),
+            0,
+            "outstanding buffers must return to the pool"
+        );
+
+        // Copy stats survive — the property the reactor depends on when it
+        // reclaims a terminal flow's components.
+        assert_eq!(
+            mgr.flow_copy_stats(flow).total_copy_ops,
+            1,
+            "force_reclaim must retain the copy-ledger entry"
+        );
+
+        // Budget was reclaimed, so a re-registered component can allocate again
+        // — proving the per-component budget leak is fixed, not just buffers.
+        mgr.register_component(component, Some(512));
+        let _h3 = mgr
+            .allocate(owner, 100, flow)
+            .expect("budget must be free after reclamation");
+    }
+
     // --- Content Type ---
 
     #[test]

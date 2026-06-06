@@ -315,6 +315,7 @@ impl HostBuilder {
             event_tx,
             Arc::clone(&invoker),
             Arc::clone(&event_sink),
+            engine.resource_manager(),
         );
         let coordinator_join = tokio::spawn(coordinator.run());
         let reactor = ReactorHandle::new(cmd_tx);
