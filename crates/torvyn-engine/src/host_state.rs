@@ -23,9 +23,10 @@
 use std::sync::Arc;
 
 use wasmtime::component::{Resource, ResourceTable};
-use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use torvyn_resources::{DefaultResourceManager, OwnerId};
+use torvyn_security::WasiConfiguration;
 use torvyn_types::{BufferHandle, ComponentId, FlowId, ResourceId};
 
 /// Sentinel value that the `mutable-buffer.freeze` impl writes into the
@@ -85,31 +86,104 @@ pub(crate) struct HostState {
     /// flow identifiers.
     pub(crate) flow_id: FlowId,
 
-    /// WASI Preview-2 sandbox context.
+    /// WASI Preview-2 sandbox context, built from the component's resolved
+    /// [`WasiConfiguration`] by [`build_wasi_ctx`].
     ///
     /// Guest components produced by `cargo-component` / TinyGo /
-    /// `componentize-py` pull in WASI imports through their
-    /// language runtimes even when the guest code itself never
-    /// performs I/O. Torvyn satisfies those imports with the most
-    /// restrictive sandbox `wasmtime-wasi` ships:
+    /// `componentize-py` pull in WASI imports through their language runtimes
+    /// even when the guest code itself never performs I/O. The host satisfies
+    /// those imports through this context, which grants only what the
+    /// component's capabilities allow — a deny-all configuration yields no
+    /// filesystem preopens, no environment, discarded stdio, and no sockets.
     ///
-    /// - stdin is closed.
-    /// - stdout / stderr are discarded.
-    /// - the filesystem has no preopens.
-    /// - the environment is empty.
-    /// - no socket access.
-    /// - random returns deterministic-failure responses, NOT
-    ///   real entropy from the host.
-    ///
-    /// The capability story will harden further when the security
-    /// crate's `CapabilityGuard` work lands in Phase 1; for now,
-    /// every component runs in an empty sandbox by default.
+    /// The engine links the full WASI Preview-2 surface into the linker
+    /// ([`crate::wasmtime_engine`]), so access is gated here, by the context.
+    /// Filesystem, environment, stdio, and network are gated precisely.
+    /// `wasi:clocks` and `wasi:random` are always provided by `wasmtime-wasi`
+    /// once linked and therefore cannot be denied at the context level; gating
+    /// them would require selectively omitting their interfaces from the
+    /// linker. `wasi:http` is not wired (it needs the `wasmtime-wasi-http`
+    /// integration).
     pub(crate) wasi: WasiCtx,
+}
+
+/// Build a WASI Preview-2 context from a resolved [`WasiConfiguration`].
+///
+/// Applies the capabilities `wasmtime-wasi` can gate at the context level:
+/// filesystem preopens, environment, stdout/stderr, and TCP/UDP sockets. A
+/// deny-all configuration produces the most restrictive context
+/// `wasmtime-wasi` ships (an empty [`WasiCtxBuilder`]).
+///
+/// See the [`HostState::wasi`] field docs for the capabilities that cannot be
+/// gated here (clocks, random, http).
+///
+/// # COLD PATH — called once per `Store<HostState>` creation.
+///
+/// # Errors
+/// Returns a human-readable reason if a granted directory cannot be preopened
+/// (e.g. it does not exist or is not accessible). The caller wraps this in
+/// [`EngineError::WasiConfigError`](crate::error::EngineError::WasiConfigError).
+pub(crate) fn build_wasi_ctx(wasi: &WasiConfiguration) -> Result<WasiCtx, String> {
+    let mut builder = WasiCtxBuilder::new();
+
+    if wasi.allow_stdout {
+        builder.inherit_stdout();
+    }
+    if wasi.allow_stderr {
+        builder.inherit_stderr();
+    }
+    if wasi.allow_environment {
+        builder.inherit_env();
+    }
+
+    for dir in &wasi.preopened_dirs {
+        let mut dir_perms = DirPerms::empty();
+        let mut file_perms = FilePerms::empty();
+        if dir.read {
+            dir_perms |= DirPerms::READ;
+            file_perms |= FilePerms::READ;
+        }
+        if dir.write {
+            dir_perms |= DirPerms::MUTATE;
+            file_perms |= FilePerms::WRITE;
+        }
+        builder
+            .preopened_dir(&dir.host_path, &dir.guest_path, dir_perms, file_perms)
+            .map_err(|e| {
+                format!(
+                    "failed to preopen granted directory '{}': {e}",
+                    dir.host_path
+                )
+            })?;
+    }
+
+    // Network: `wasmtime-wasi` denies all socket addresses unless a check is
+    // installed, so granting any network capability opens the address space
+    // (`inherit_network`) and enables the requested socket families. Per-host
+    // address restriction from the grant is a future refinement.
+    let tcp = wasi.allow_tcp_connect || wasi.allow_tcp_listen;
+    if tcp || wasi.allow_udp {
+        builder.inherit_network();
+        builder.allow_tcp(tcp);
+        builder.allow_udp(wasi.allow_udp);
+    }
+
+    Ok(builder.build())
+}
+
+/// A fully-sandboxed (deny-all) WASI context, for tests that construct a
+/// [`HostState`] directly without going through the engine.
+#[cfg(test)]
+pub(crate) fn deny_all_wasi_ctx() -> WasiCtx {
+    build_wasi_ctx(&WasiConfiguration::deny_all()).expect("deny-all WASI context is infallible")
 }
 
 impl HostState {
     /// Construct a new host state, register the flow and the component
     /// with the manager, and return the populated state.
+    ///
+    /// The `wasi` context is built by [`build_wasi_ctx`] from the component's
+    /// resolved [`WasiConfiguration`] and passed in by the caller.
     ///
     /// # COLD PATH — called once per `Store<HostState>` creation.
     pub(crate) fn new(
@@ -118,13 +192,10 @@ impl HostState {
         fuel_budget: u64,
         resources: Arc<DefaultResourceManager>,
         flow_id: FlowId,
+        wasi: WasiCtx,
     ) -> Self {
         resources.register_flow(flow_id);
         resources.register_component(component_id, None);
-        // An empty `WasiCtxBuilder` produces the most restrictive
-        // Preview-2 sandbox: no stdio, no env, no filesystem, no
-        // sockets. See the `wasi` field docs for the policy story.
-        let wasi = WasiCtxBuilder::new().build();
         Self {
             component_id,
             limits,
@@ -532,8 +603,70 @@ fn buffer_error_from(err: torvyn_types::ResourceError) -> wit_types::BufferError
 #[cfg(test)]
 mod tests {
     use super::*;
+    use torvyn_security::PreopenedDir;
     use torvyn_types::ResourceState;
     use wit_alloc::Host as _;
+
+    #[test]
+    fn build_wasi_ctx_deny_all_is_infallible() {
+        // The most restrictive configuration must always build.
+        assert!(build_wasi_ctx(&WasiConfiguration::deny_all()).is_ok());
+    }
+
+    #[test]
+    fn build_wasi_ctx_applies_non_filesystem_grants() {
+        // Environment, stdio, and socket grants are applied with no I/O and
+        // therefore never fail to build.
+        let mut wasi = WasiConfiguration::deny_all();
+        wasi.allow_environment = true;
+        wasi.allow_stdout = true;
+        wasi.allow_stderr = true;
+        wasi.allow_tcp_connect = true;
+        wasi.allow_tcp_listen = true;
+        wasi.allow_udp = true;
+        assert!(build_wasi_ctx(&wasi).is_ok());
+    }
+
+    #[test]
+    fn build_wasi_ctx_preopens_existing_directory() {
+        // A granted directory that exists is preopened successfully — the
+        // positive half of filesystem capability enforcement.
+        let tmp = std::env::temp_dir();
+        let mut wasi = WasiConfiguration::deny_all();
+        wasi.preopened_dirs.push(PreopenedDir {
+            host_path: tmp.to_string_lossy().into_owned(),
+            guest_path: "/sandbox".to_owned(),
+            read: true,
+            write: false,
+        });
+        assert!(
+            build_wasi_ctx(&wasi).is_ok(),
+            "preopen of an existing directory must succeed"
+        );
+    }
+
+    #[test]
+    fn build_wasi_ctx_missing_preopen_directory_errors() {
+        // A granted directory that does not exist surfaces a descriptive
+        // error (which `create_store` maps to `EngineError::WasiConfigError`),
+        // rather than silently dropping the grant.
+        let mut wasi = WasiConfiguration::deny_all();
+        wasi.preopened_dirs.push(PreopenedDir {
+            host_path: "/torvyn-nonexistent/never/exists".to_owned(),
+            guest_path: "/data".to_owned(),
+            read: true,
+            write: false,
+        });
+        // `WasiCtx` is not `Debug`, so match rather than `expect_err`.
+        let err = match build_wasi_ctx(&wasi) {
+            Ok(_) => panic!("a missing preopen directory must error"),
+            Err(e) => e,
+        };
+        assert!(
+            err.contains("preopen"),
+            "error should describe the failed preopen, got: {err}"
+        );
+    }
 
     fn test_state(component_id: u64, flow_id: u64) -> HostState {
         let resources = Arc::new(DefaultResourceManager::new_for_testing());
@@ -543,6 +676,7 @@ mod tests {
             1_000_000,
             resources,
             FlowId::new(flow_id),
+            deny_all_wasi_ctx(),
         )
     }
 
@@ -714,6 +848,7 @@ mod tests {
                 1_000_000,
                 Arc::clone(&resources),
                 flow,
+                deny_all_wasi_ctx(),
             );
             let _ = state.allocate(256).await.expect("trap-free").expect("ok");
             let _ = state.allocate(256).await.expect("trap-free").expect("ok");

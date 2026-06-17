@@ -14,6 +14,7 @@
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use torvyn_security::WasiConfiguration;
 use torvyn_types::{
     BackpressureSignal, BufferHandle, ComponentId, ElementMeta, ProcessError, ResourceId,
 };
@@ -86,6 +87,7 @@ impl WasmEngine for MockEngine {
         _compiled: &CompiledComponent,
         _imports: ImportBindings,
         component_id: ComponentId,
+        _wasi: &WasiConfiguration,
     ) -> Result<ComponentInstance, EngineError> {
         Ok(ComponentInstance {
             component_id,
@@ -310,7 +312,12 @@ mod tests {
         let compiled = engine.compile_component(b"test").unwrap();
         let imports = MockEngine::mock_imports();
         let instance = engine
-            .instantiate(&compiled, imports, ComponentId::new(1))
+            .instantiate(
+                &compiled,
+                imports,
+                ComponentId::new(1),
+                &WasiConfiguration::deny_all(),
+            )
             .await;
         assert!(instance.is_ok());
         let inst = instance.unwrap();
@@ -327,7 +334,12 @@ mod tests {
         let compiled = engine.compile_component(b"test").unwrap();
         let imports = MockEngine::mock_imports();
         let mut instance = engine
-            .instantiate(&compiled, imports, ComponentId::new(1))
+            .instantiate(
+                &compiled,
+                imports,
+                ComponentId::new(1),
+                &WasiConfiguration::deny_all(),
+            )
             .await
             .unwrap();
 
@@ -343,7 +355,12 @@ mod tests {
         let compiled = engine.compile_component(b"test").unwrap();
         let imports = MockEngine::mock_imports();
         let instance = engine
-            .instantiate(&compiled, imports, ComponentId::new(1))
+            .instantiate(
+                &compiled,
+                imports,
+                ComponentId::new(1),
+                &WasiConfiguration::deny_all(),
+            )
             .await
             .unwrap();
 
@@ -358,7 +375,12 @@ mod tests {
         let compiled = engine.compile_component(b"test").unwrap();
         let imports = MockEngine::mock_imports();
         let mut instance = engine
-            .instantiate(&compiled, imports, ComponentId::new(1))
+            .instantiate(
+                &compiled,
+                imports,
+                ComponentId::new(1),
+                &WasiConfiguration::deny_all(),
+            )
             .await
             .unwrap();
 
@@ -385,7 +407,12 @@ mod tests {
         let compiled = engine.compile_component(b"test").unwrap();
         let imports = MockEngine::mock_imports();
         let mut instance = engine
-            .instantiate(&compiled, imports, ComponentId::new(1))
+            .instantiate(
+                &compiled,
+                imports,
+                ComponentId::new(1),
+                &WasiConfiguration::deny_all(),
+            )
             .await
             .unwrap();
 
@@ -407,7 +434,12 @@ mod tests {
         let compiled = engine.compile_component(b"test").unwrap();
         let imports = MockEngine::mock_imports();
         let mut instance = engine
-            .instantiate(&compiled, imports, ComponentId::new(1))
+            .instantiate(
+                &compiled,
+                imports,
+                ComponentId::new(1),
+                &WasiConfiguration::deny_all(),
+            )
             .await
             .unwrap();
 
@@ -432,7 +464,12 @@ mod tests {
         let compiled = engine.compile_component(b"test").unwrap();
         let imports = MockEngine::mock_imports();
         let mut instance = engine
-            .instantiate(&compiled, imports, ComponentId::new(1))
+            .instantiate(
+                &compiled,
+                imports,
+                ComponentId::new(1),
+                &WasiConfiguration::deny_all(),
+            )
             .await
             .unwrap();
 
@@ -462,7 +499,12 @@ mod tests {
         let compiled = engine.compile_component(b"test").unwrap();
         let imports = MockEngine::mock_imports();
         let mut instance = engine
-            .instantiate(&compiled, imports, ComponentId::new(1))
+            .instantiate(
+                &compiled,
+                imports,
+                ComponentId::new(1),
+                &WasiConfiguration::deny_all(),
+            )
             .await
             .unwrap();
 
@@ -486,7 +528,12 @@ mod tests {
         let compiled = engine.compile_component(b"test").unwrap();
         let imports = MockEngine::mock_imports();
         let mut instance = engine
-            .instantiate(&compiled, imports, ComponentId::new(1))
+            .instantiate(
+                &compiled,
+                imports,
+                ComponentId::new(1),
+                &WasiConfiguration::deny_all(),
+            )
             .await
             .unwrap();
 
@@ -508,7 +555,12 @@ mod tests {
         let compiled = engine.compile_component(b"test").unwrap();
         let imports = MockEngine::mock_imports();
         let mut instance = engine
-            .instantiate(&compiled, imports, ComponentId::new(1))
+            .instantiate(
+                &compiled,
+                imports,
+                ComponentId::new(1),
+                &WasiConfiguration::deny_all(),
+            )
             .await
             .unwrap();
 
@@ -530,7 +582,12 @@ mod tests {
         let compiled = engine.compile_component(b"test").unwrap();
         let imports = MockEngine::mock_imports();
         let mut instance = engine
-            .instantiate(&compiled, imports, ComponentId::new(1))
+            .instantiate(
+                &compiled,
+                imports,
+                ComponentId::new(1),
+                &WasiConfiguration::deny_all(),
+            )
             .await
             .unwrap();
 

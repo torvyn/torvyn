@@ -9,7 +9,8 @@
 #![cfg(feature = "wasmtime-backend")]
 
 use torvyn_engine::{
-    ComponentInvoker, WasmEngine, WasmtimeEngine, WasmtimeEngineConfig, WasmtimeInvoker,
+    ComponentInvoker, WasiConfiguration, WasmEngine, WasmtimeEngine, WasmtimeEngineConfig,
+    WasmtimeInvoker,
 };
 use torvyn_types::ComponentId;
 
@@ -27,7 +28,12 @@ async fn data_sink_fixture_instantiates_and_runs_init() {
     let component_id = ComponentId::new(1);
 
     let mut instance = engine
-        .instantiate(&compiled, imports, component_id)
+        .instantiate(
+            &compiled,
+            imports,
+            component_id,
+            &WasiConfiguration::deny_all(),
+        )
         .await
         .expect("instantiate data-sink component");
 

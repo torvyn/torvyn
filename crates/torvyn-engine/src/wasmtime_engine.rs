@@ -15,11 +15,12 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Config, Engine, Store, StoreLimitsBuilder};
 
 use torvyn_resources::DefaultResourceManager;
+use torvyn_security::WasiConfiguration;
 use torvyn_types::{ComponentId, FlowId};
 
 use crate::config::WasmtimeEngineConfig;
 use crate::error::EngineError;
-use crate::host_state::HostState;
+use crate::host_state::{self, HostState};
 use crate::traits::WasmEngine;
 use crate::types::{
     CompiledComponent, CompiledComponentInner, ComponentInstance, ComponentInstanceInner,
@@ -173,7 +174,11 @@ impl WasmtimeEngine {
     /// Create a new `Store` configured for a specific component instance.
     ///
     /// # COLD PATH — called once per component instantiation.
-    fn create_store(&self, component_id: ComponentId) -> Store<HostState> {
+    fn create_store(
+        &self,
+        component_id: ComponentId,
+        wasi: &WasiConfiguration,
+    ) -> Result<Store<HostState>, EngineError> {
         let limits = StoreLimitsBuilder::new()
             .memory_size(self.config.max_memory_bytes)
             .table_elements(self.config.max_table_elements as usize)
@@ -186,12 +191,21 @@ impl WasmtimeEngine {
         // `FlowId` here.
         let flow_id = FlowId::new(component_id.as_u64());
 
+        // Build the component's WASI sandbox from its resolved capabilities.
+        // A deny-all configuration yields the most restrictive context.
+        let wasi_ctx =
+            host_state::build_wasi_ctx(wasi).map_err(|reason| EngineError::WasiConfigError {
+                component_id,
+                reason,
+            })?;
+
         let host_state = HostState::new(
             component_id,
             limits,
             self.config.default_fuel,
             Arc::clone(&self.resources),
             flow_id,
+            wasi_ctx,
         );
 
         let mut store = Store::new(&self.engine, host_state);
@@ -213,7 +227,7 @@ impl WasmtimeEngine {
             }
         }
 
-        store
+        Ok(store)
     }
 
     /// Create a new `Linker` with all Torvyn host imports pre-registered,
@@ -323,6 +337,7 @@ impl WasmEngine for WasmtimeEngine {
         compiled: &CompiledComponent,
         imports: ImportBindings,
         component_id: ComponentId,
+        wasi: &WasiConfiguration,
     ) -> Result<ComponentInstance, EngineError> {
         let component = match &compiled.inner {
             CompiledComponentInner::Wasmtime(c) => c,
@@ -348,7 +363,7 @@ impl WasmEngine for WasmtimeEngine {
         // any guest import outside that union is a real configuration
         // error and `instantiate_async` will reject it.
 
-        let mut store = self.create_store(component_id);
+        let mut store = self.create_store(component_id, wasi)?;
 
         // Instantiate the component asynchronously.
         let instance = linker
@@ -568,7 +583,14 @@ mod tests {
         let imports = WasmtimeEngine::import_bindings_from_linker(engine.create_linker());
         let component_id = ComponentId::new(1);
 
-        let instance = engine.instantiate(&compiled, imports, component_id).await;
+        let instance = engine
+            .instantiate(
+                &compiled,
+                imports,
+                component_id,
+                &WasiConfiguration::deny_all(),
+            )
+            .await;
         assert!(instance.is_ok());
 
         let inst = instance.unwrap();
@@ -592,7 +614,12 @@ mod tests {
 
         let imports = WasmtimeEngine::import_bindings_from_linker(engine.create_linker());
         let mut instance = engine
-            .instantiate(&compiled, imports, ComponentId::new(1))
+            .instantiate(
+                &compiled,
+                imports,
+                ComponentId::new(1),
+                &WasiConfiguration::deny_all(),
+            )
             .await
             .unwrap();
 

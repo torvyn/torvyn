@@ -60,6 +60,9 @@ pub use cache::CompiledComponentCache;
 pub use config::{CompilationStrategy, WasmtimeEngineConfig};
 pub use error::EngineError;
 pub use traits::{ComponentInvoker, WasmEngine};
+// Re-exported so callers of `WasmEngine::instantiate` can name the WASI
+// sandbox configuration without depending on `torvyn-security` directly.
+pub use torvyn_security::WasiConfiguration;
 pub use types::{
     CompiledComponent, ComponentInstance, ImportBindings, InvocationResult, OutputElement,
     ProcessResult, StreamElement,

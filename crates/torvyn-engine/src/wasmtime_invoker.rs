@@ -503,6 +503,7 @@ mod tests {
             1_000_000,
             Arc::clone(&resources),
             flow,
+            crate::host_state::deny_all_wasi_ctx(),
         );
         let component_owner = OwnerId::Component(cid);
 
@@ -556,6 +557,7 @@ mod tests {
             1_000_000,
             Arc::clone(&resources),
             FlowId::new(7),
+            crate::host_state::deny_all_wasi_ctx(),
         );
 
         let handle = BufferHandle::new(ResourceId::new(99, 1));

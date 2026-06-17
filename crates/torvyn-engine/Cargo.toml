@@ -18,6 +18,10 @@ tracing-support = ["dep:tracing"]
 # Internal
 torvyn-types.workspace = true
 torvyn-resources.workspace = true
+# Sandbox/capability spec applied to each component's WASI context at
+# instantiation. `torvyn-security` depends on neither engine nor resources, so
+# this edge is acyclic (consistent with the existing engine -> resources edge).
+torvyn-security.workspace = true
 
 # Wasmtime (feature-gated)
 # LLI DEVIATION: pinned to v42 per spike findings (LLI assumed v29)

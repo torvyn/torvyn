@@ -8,6 +8,7 @@
 //! virtual call overhead in the hot path.
 
 use async_trait::async_trait;
+use torvyn_security::WasiConfiguration;
 use torvyn_types::{BackpressureSignal, ComponentId, ProcessError};
 
 use crate::error::EngineError;
@@ -80,18 +81,28 @@ pub trait WasmEngine: Send + Sync + 'static {
         bytes: &[u8],
     ) -> Result<Option<CompiledComponent>, EngineError>;
 
-    /// Instantiate a compiled component with the given import bindings.
+    /// Instantiate a compiled component with the given import bindings and
+    /// WASI sandbox configuration.
+    ///
+    /// `wasi` is the component's resolved [`WasiConfiguration`]: the host
+    /// builds the component's WASI Preview-2 context from it, granting only the
+    /// filesystem, environment, stdio, and network access its capabilities
+    /// allow. Pass [`WasiConfiguration::deny_all`] for a fully sandboxed
+    /// component.
     ///
     /// # COLD PATH — called once per component instance during pipeline setup.
     ///
     /// # Errors
     /// - [`EngineError::InstantiationFailed`] on instantiation failure.
     /// - [`EngineError::UnresolvedImport`] if imports cannot be satisfied.
+    /// - [`EngineError::WasiConfigError`] if the WASI sandbox cannot be built
+    ///   (e.g. a granted directory cannot be preopened).
     async fn instantiate(
         &self,
         compiled: &CompiledComponent,
         imports: ImportBindings,
         component_id: ComponentId,
+        wasi: &WasiConfiguration,
     ) -> Result<ComponentInstance, EngineError>;
 
     /// Set the fuel budget for a component instance.
@@ -383,7 +394,12 @@ mod tests {
         let compiled = engine.compile_component(b"test").unwrap();
         let imports = MockEngine::mock_imports();
         let mut instance = engine
-            .instantiate(&compiled, imports, ComponentId::new(1))
+            .instantiate(
+                &compiled,
+                imports,
+                ComponentId::new(1),
+                &WasiConfiguration::deny_all(),
+            )
             .await
             .unwrap();
 

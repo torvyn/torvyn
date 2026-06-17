@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use tracing::{info, instrument, warn};
 
-use torvyn_engine::{ComponentInstance, ComponentInvoker, WasmEngine};
+use torvyn_engine::{ComponentInstance, ComponentInvoker, WasiConfiguration, WasmEngine};
 use torvyn_reactor::{
     config::{FlowConfig, StreamConfig},
     handle::ReactorHandle,
@@ -262,10 +262,15 @@ where
                 reason: e.to_string(),
             })?;
 
-    // Step 3: instantiate with default imports.
+    // Step 3: instantiate with default imports and the component's WASI
+    // sandbox. Until per-component capability grants are resolved here, every
+    // component is instantiated fully sandboxed (deny-all) — the same posture
+    // as before, now enforced through the engine's WASI configuration path
+    // rather than a hardcoded empty context.
     let imports = engine.default_imports();
+    let wasi = WasiConfiguration::deny_all();
     let mut instance = engine
-        .instantiate(&compiled, imports, component_id)
+        .instantiate(&compiled, imports, component_id, &wasi)
         .await
         .map_err(|e| PipelineError::InstantiationFailed {
             flow_name: flow_name.to_owned(),

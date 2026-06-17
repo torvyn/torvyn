@@ -902,7 +902,12 @@ mod tests {
             let compiled = engine.compile_component(b"test").unwrap();
             let imports = MockEngine::mock_imports();
             let instance = engine
-                .instantiate(&compiled, imports, stage.component_id)
+                .instantiate(
+                    &compiled,
+                    imports,
+                    stage.component_id,
+                    &torvyn_engine::WasiConfiguration::deny_all(),
+                )
                 .await
                 .unwrap();
             instances.push(instance);
