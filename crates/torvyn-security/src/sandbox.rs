@@ -8,7 +8,7 @@
 //! The `SandboxConfigurator` trait is the public API consumed by the host runtime.
 
 use crate::audit::{AuditEvent, AuditEventKind, AuditSeverity, AuditSinkHandle};
-use crate::capability::Capability;
+use crate::capability::{Capability, CapabilityParseError};
 use crate::resolver::ResolvedCapabilitySet;
 use crate::tenant::TenantId;
 use std::sync::Arc;
@@ -283,6 +283,31 @@ impl WasiConfiguration {
         config.preopened_dirs = preopened_dirs;
         config
     }
+
+    /// Build a WASI configuration from a list of capability grant strings —
+    /// the form used in `Torvyn.toml` (e.g. `"filesystem:read:/data"`,
+    /// `"network:tcp-connect"`, `"environment:read"`).
+    ///
+    /// Each string is parsed into a [`Capability`] and combined into a
+    /// [`ResolvedCapabilitySet`], then translated by [`Self::from_resolved`].
+    /// An empty list yields [`Self::deny_all`], so a component with no grants
+    /// is fully sandboxed.
+    ///
+    /// # COLD PATH — called once per component during topology construction.
+    ///
+    /// # Errors
+    /// Returns [`CapabilityParseError`] for the first grant string that is not
+    /// a valid capability. Capabilities use the canonical
+    /// `<domain>:<action>[:<scope>]` form (see [`Capability`]'s `FromStr`).
+    pub fn from_grant_strings<S: AsRef<str>>(grants: &[S]) -> Result<Self, CapabilityParseError> {
+        let capabilities = grants
+            .iter()
+            .map(|grant| grant.as_ref().parse::<Capability>())
+            .collect::<Result<Vec<Capability>, _>>()?;
+        Ok(Self::from_resolved(&ResolvedCapabilitySet::new(
+            capabilities,
+        )))
+    }
 }
 
 impl Default for WasiConfiguration {
@@ -445,7 +470,7 @@ impl SandboxConfigurator for DefaultSandboxConfigurator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::{Capability, NetScope, PathScope};
+    use crate::capability::{Capability, CapabilityParseError, NetScope, PathScope};
     use crate::manifest::{ComponentCapabilities, OperatorGrants};
 
     #[test]
@@ -465,6 +490,49 @@ mod tests {
         assert!(config.allow_monotonic_clock);
         assert!(!config.allow_stdout);
         assert!(config.preopened_dirs.is_empty());
+    }
+
+    #[test]
+    fn test_from_grant_strings_empty_is_deny_all() {
+        let config = WasiConfiguration::from_grant_strings::<&str>(&[]).unwrap();
+        assert_eq!(config, WasiConfiguration::deny_all());
+    }
+
+    #[test]
+    fn test_from_grant_strings_resolves_canonical_capabilities() {
+        let config = WasiConfiguration::from_grant_strings(&[
+            "filesystem:read:/data/input",
+            "filesystem:write:/data/output",
+            "network:tcp-connect",
+            "environment:read",
+            "stdio:stdout",
+        ])
+        .expect("canonical grant strings must parse");
+
+        assert!(config.allow_tcp_connect);
+        assert!(config.allow_environment);
+        assert!(config.allow_stdout);
+        assert!(!config.allow_udp);
+        // The read and write paths collapse onto the matching preopens.
+        assert!(config
+            .preopened_dirs
+            .iter()
+            .any(|d| d.host_path == "/data/input" && d.read && !d.write));
+        assert!(config
+            .preopened_dirs
+            .iter()
+            .any(|d| d.host_path == "/data/output" && d.write));
+    }
+
+    #[test]
+    fn test_from_grant_strings_rejects_invalid_capability() {
+        // `network:egress` is not a canonical capability action.
+        let err = WasiConfiguration::from_grant_strings(&["network:egress:*"]).unwrap_err();
+        assert!(matches!(
+            err,
+            CapabilityParseError::UnknownCapability { .. }
+                | CapabilityParseError::InvalidFormat { .. }
+        ));
     }
 
     #[test]

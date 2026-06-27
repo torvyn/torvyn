@@ -15,6 +15,9 @@ torvyn-reactor.workspace = true
 torvyn-engine.workspace = true
 torvyn-resources.workspace = true
 torvyn-config.workspace = true
+# Resolves per-component capability grants into the WASI sandbox applied at
+# instantiation (`WasiConfiguration::from_grant_strings`).
+torvyn-security.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

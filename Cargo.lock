@@ -3184,6 +3184,7 @@ dependencies = [
  "torvyn-linker",
  "torvyn-reactor",
  "torvyn-resources",
+ "torvyn-security",
  "torvyn-types",
  "tracing",
 ]

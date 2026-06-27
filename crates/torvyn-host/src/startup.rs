@@ -75,7 +75,9 @@ pub async fn execute_flow_startup(
 
     // CROSS-CRATE DEPENDENCY: torvyn_pipeline::flow_def_to_topology()
     // Converts the parsed FlowDef from torvyn-config into a
-    // PipelineTopology. Verify against lli_10_torvyn_pipeline.md.
+    // PipelineTopology, resolving each component's capability grants from the
+    // security configuration into its WASI sandbox. Verify against
+    // lli_10_torvyn_pipeline.md.
     //
     // let flow_def = config.get_flow(flow_name)
     //     .ok_or_else(|| StartupError::FlowStartup {
@@ -84,11 +86,12 @@ pub async fn execute_flow_startup(
     //         reason: format!("No flow named '{flow_name}' in configuration"),
     //     })?;
     //
-    // let topology = torvyn_pipeline::flow_def_to_topology(flow_def)
+    // let topology =
+    //     torvyn_pipeline::flow_def_to_topology(flow_name, flow_def, &config.security)
     //     .map_err(|e| StartupError::FlowStartup {
     //         flow_name: flow_name.to_owned(),
     //         stage: StartupStage::TopologyConstruction,
-    //         reason: e.to_string(),
+    //         reason: e.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "),
     //     })?;
 
     info!(

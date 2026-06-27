@@ -3,7 +3,8 @@
 //! Converts a [`torvyn_config::FlowDef`] (parsed from TOML) into a
 //! [`PipelineTopology`] (the validated in-memory topology model).
 
-use torvyn_config::{EdgeDef, FlowDef, NodeDef};
+use torvyn_config::{EdgeDef, FlowDef, NodeDef, SecurityConfig};
+use torvyn_security::WasiConfiguration;
 use torvyn_types::ComponentRole;
 
 use crate::builder::PipelineTopologyBuilder;
@@ -25,6 +26,7 @@ use crate::topology::{EdgeConfig, NodeConfig, PipelineTopology};
 pub fn flow_def_to_topology(
     flow_name: &str,
     flow_def: &FlowDef,
+    security: &SecurityConfig,
 ) -> Result<PipelineTopology, Vec<PipelineError>> {
     let mut builder = PipelineTopologyBuilder::new(flow_name).description(&flow_def.description);
 
@@ -33,7 +35,20 @@ pub fn flow_def_to_topology(
         let role =
             infer_role_from_interface(&node_def.interface).unwrap_or(ComponentRole::Processor);
 
-        let config = node_def_to_config(node_def);
+        let mut config = node_def_to_config(node_def);
+
+        // Resolve this component's capability grants into its WASI sandbox.
+        // A component with no grants stays deny-all (fully sandboxed).
+        if let Some(grant) = security.grants.get(node_name) {
+            config.wasi =
+                WasiConfiguration::from_grant_strings(&grant.capabilities).map_err(|e| {
+                    vec![PipelineError::SandboxConfigFailed {
+                        flow_name: flow_name.to_owned(),
+                        node_name: node_name.clone(),
+                        reason: e.to_string(),
+                    }]
+                })?;
+        }
 
         builder = builder.add_node_with_interface(
             node_name,
@@ -92,6 +107,9 @@ fn node_def_to_config(node_def: &NodeDef) -> NodeConfig {
         priority: node_def.priority.map(|p| p.min(10) as u8),
         error_policy: None, // Not exposed in NodeDef at config level
         init_config: node_def.config.clone(),
+        // Deny-all by default; `flow_def_to_topology` overrides this from the
+        // security configuration's per-component grants.
+        wasi: WasiConfiguration::deny_all(),
     }
 }
 
@@ -185,10 +203,84 @@ mod tests {
     #[test]
     fn test_flow_def_to_topology_basic() {
         let flow = make_flow_def();
-        let topo = flow_def_to_topology("test", &flow).unwrap();
+        let topo = flow_def_to_topology("test", &flow, &SecurityConfig::default()).unwrap();
 
         assert_eq!(topo.node_count(), 2);
         assert_eq!(topo.edge_count(), 1);
+        // No grants declared -> every node is deny-all.
+        for node in topo.nodes() {
+            assert_eq!(node.config().wasi, WasiConfiguration::deny_all());
+        }
+    }
+
+    #[test]
+    fn test_flow_def_to_topology_resolves_capability_grants() {
+        use std::collections::BTreeMap;
+        use torvyn_config::CapabilityGrant;
+
+        let flow = make_flow_def();
+        // `make_flow_def` defines nodes "source" and "sink"; grant the source
+        // filesystem read and environment access.
+        let mut grants = BTreeMap::new();
+        grants.insert(
+            "source".to_owned(),
+            CapabilityGrant {
+                capabilities: vec![
+                    "filesystem:read:/data".to_owned(),
+                    "environment:read".to_owned(),
+                ],
+            },
+        );
+        let security = SecurityConfig {
+            grants,
+            ..SecurityConfig::default()
+        };
+
+        let topo = flow_def_to_topology("test", &flow, &security).unwrap();
+        let source = topo
+            .nodes()
+            .iter()
+            .find(|n| n.name() == "source")
+            .expect("source node exists");
+        assert!(source.config().wasi.allow_environment);
+        assert!(source
+            .config()
+            .wasi
+            .preopened_dirs
+            .iter()
+            .any(|d| d.host_path == "/data" && d.read));
+
+        // The sink declared no grants -> deny-all.
+        let sink = topo
+            .nodes()
+            .iter()
+            .find(|n| n.name() == "sink")
+            .expect("sink node exists");
+        assert_eq!(sink.config().wasi, WasiConfiguration::deny_all());
+    }
+
+    #[test]
+    fn test_flow_def_to_topology_rejects_invalid_grant() {
+        use std::collections::BTreeMap;
+        use torvyn_config::CapabilityGrant;
+
+        let flow = make_flow_def();
+        let mut grants = BTreeMap::new();
+        grants.insert(
+            "source".to_owned(),
+            CapabilityGrant {
+                capabilities: vec!["network:egress:*".to_owned()],
+            },
+        );
+        let security = SecurityConfig {
+            grants,
+            ..SecurityConfig::default()
+        };
+
+        let errors = flow_def_to_topology("test", &flow, &security).unwrap_err();
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, PipelineError::SandboxConfigFailed { .. })));
     }
 
     #[test]

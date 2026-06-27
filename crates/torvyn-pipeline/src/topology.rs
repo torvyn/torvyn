@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use torvyn_security::WasiConfiguration;
 use torvyn_types::{BackpressurePolicy, ComponentRole};
 
 // ---------------------------------------------------------------------------
@@ -461,6 +462,12 @@ pub struct NodeConfig {
     /// Per-component init configuration string (JSON).
     /// Passed to `lifecycle.init()`.
     pub init_config: Option<String>,
+
+    /// WASI sandbox resolved from this component's capability grants. Defaults
+    /// to deny-all (a fully sandboxed component); populated by
+    /// [`crate::convert::flow_def_to_topology`] from the security
+    /// configuration, and applied by the engine at instantiation.
+    pub wasi: WasiConfiguration,
 }
 
 // ---------------------------------------------------------------------------

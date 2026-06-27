@@ -332,9 +332,12 @@ fn default_capability_policy() -> String {
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapabilityGrant {
-    /// List of capability strings granted to this component.
-    /// Format: `"<category>:<action>:<scope>"`.
-    /// E.g., `"filesystem:read:/data/*"`, `"network:egress:*"`.
+    /// List of capability strings granted to this component, in the canonical
+    /// `"<domain>:<action>[:<scope>]"` form parsed by
+    /// `torvyn_security::Capability` (and resolved into a WASI sandbox by
+    /// `WasiConfiguration::from_grant_strings`).
+    /// E.g., `"filesystem:read:/data/*"`, `"network:tcp-connect:*"`,
+    /// `"environment:read"`.
     #[serde(default)]
     pub capabilities: Vec<String>,
 }
@@ -474,7 +477,7 @@ default_capability_policy = "deny-all"
 capabilities = ["filesystem:read:/data/*"]
 
 [grants.sink-1]
-capabilities = ["network:egress:*"]
+capabilities = ["network:tcp-connect:*"]
 "#;
         let cfg: SecurityConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.grants.len(), 2);
