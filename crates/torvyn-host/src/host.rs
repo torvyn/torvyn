@@ -6,19 +6,21 @@
 //! **This is a thin orchestration shell.** All complex logic lives in
 //! the subsystem crates (reactor, pipeline, engine, resources, etc.).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
+use torvyn_config::FlowDef;
 use torvyn_engine::{WasmtimeEngine, WasmtimeInvoker};
-use torvyn_reactor::ReactorHandle;
+use torvyn_pipeline::{flow_def_to_topology, instantiate_pipeline};
+use torvyn_reactor::{cancellation::CancellationReason, ReactorHandle};
 use torvyn_types::{FlowId, FlowState};
 
 use crate::builder::HostConfig;
-use crate::error::HostError;
+use crate::error::{HostError, StartupError, StartupStage};
 use crate::inspection::InspectionHandle;
 use crate::shutdown::ShutdownOutcome;
 
@@ -124,8 +126,10 @@ pub struct TorvynHost {
     /// Host lifecycle status.
     status: HostStatus,
 
-    /// Monotonically increasing flow ID counter.
-    next_flow_id: u64,
+    /// Flow definitions available to start, keyed by name. Loaded from the
+    /// pipeline configuration and/or registered programmatically via the
+    /// builder.
+    flow_defs: BTreeMap<String, FlowDef>,
 }
 
 // LLI DEVIATION: Manual Debug impl because WasmtimeEngine does not derive Debug.
@@ -134,7 +138,7 @@ impl std::fmt::Debug for TorvynHost {
         f.debug_struct("TorvynHost")
             .field("config", &self.config)
             .field("status", &self.status)
-            .field("next_flow_id", &self.next_flow_id)
+            .field("flow_defs", &self.flow_defs.keys().collect::<Vec<_>>())
             .field("reactor", &self.reactor)
             .finish_non_exhaustive()
     }
@@ -156,6 +160,7 @@ impl TorvynHost {
         invoker: Arc<WasmtimeInvoker>,
         reactor: ReactorHandle,
         coordinator_join: Option<JoinHandle<()>>,
+        flow_defs: BTreeMap<String, FlowDef>,
     ) -> Self {
         Self {
             config,
@@ -165,7 +170,7 @@ impl TorvynHost {
             _coordinator_join: coordinator_join,
             flows: Arc::new(RwLock::new(HashMap::new())),
             status: HostStatus::Ready,
-            next_flow_id: 1,
+            flow_defs,
         }
     }
 
@@ -220,28 +225,41 @@ impl TorvynHost {
             ));
         }
 
-        let flow_id = FlowId::new(self.next_flow_id);
-        self.next_flow_id += 1;
+        // Look up the flow definition by name.
+        let flow_def = self.flow_defs.get(flow_name).ok_or_else(|| {
+            HostError::config(format!(
+                "No flow named '{flow_name}' is defined in the configuration"
+            ))
+        })?;
 
-        info!(flow_id = %flow_id, flow_name = flow_name, "Starting flow");
+        info!(flow_name = flow_name, "Starting flow");
 
-        // Delegate to the startup module for the full sequence.
-        // CROSS-CRATE DEPENDENCY: startup::execute_flow_startup
-        // uses torvyn-config, torvyn-contracts, torvyn-linker,
-        // torvyn-engine, torvyn-pipeline, torvyn-reactor, torvyn-security.
-        //
-        // crate::startup::execute_flow_startup(
-        //     flow_name,
-        //     flow_id,
-        //     &self.config,
-        //     &self.engine,
-        //     &self.invoker,
-        //     &self.reactor,
-        //     &self.resources,
-        //     &self.security,
-        // ).await?;
+        // Build the validated topology, resolving each component's capability
+        // grants into its WASI sandbox.
+        let topology =
+            flow_def_to_topology(flow_name, flow_def, &self.config.security).map_err(|errors| {
+                StartupError::FlowStartup {
+                    flow_name: flow_name.to_owned(),
+                    stage: StartupStage::TopologyConstruction,
+                    reason: errors
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                }
+            })?;
 
-        // Record the flow
+        // Compile, instantiate, run `lifecycle.init`, and register the flow
+        // with the reactor. The reactor assigns the canonical flow identifier.
+        let handle = instantiate_pipeline(&topology, &*self.engine, &self.invoker, &self.reactor)
+            .await
+            .map_err(|e| StartupError::FlowStartup {
+                flow_name: flow_name.to_owned(),
+                stage: StartupStage::Instantiation,
+                reason: e.to_string(),
+            })?;
+
+        let flow_id = handle.flow_id();
         let record = FlowRecord {
             flow_id,
             name: flow_name.to_owned(),
@@ -251,7 +269,7 @@ impl TorvynHost {
         self.flows.write().await.insert(flow_id, record);
         self.status = HostStatus::Running;
 
-        info!(flow_id = %flow_id, "Flow started successfully");
+        info!(flow_id = %flow_id, flow_name = flow_name, "Flow started successfully");
 
         Ok(flow_id)
     }
@@ -274,15 +292,18 @@ impl TorvynHost {
 
         info!(flow_id = %flow_id, "Cancelling flow");
 
-        // CROSS-CRATE DEPENDENCY: ReactorHandle::cancel_flow()
-        // self.reactor.cancel_flow(
-        //     flow_id,
-        //     CancellationReason::OperatorRequested,
-        // ).await.map_err(|e| FlowError::Reactor {
-        //     detail: e.to_string(),
-        // })?;
+        // Request cancellation from the reactor, which drives the flow's
+        // cooperative drain and termination.
+        self.reactor
+            .cancel_flow(flow_id, CancellationReason::OperatorRequest)
+            .await
+            .map_err(|e| {
+                HostError::Flow(crate::error::FlowError::Reactor {
+                    detail: e.to_string(),
+                })
+            })?;
 
-        // Update local record
+        // Update the local record.
         let mut flows = self.flows.write().await;
         if let Some(record) = flows.get_mut(&flow_id) {
             record.state = FlowState::Cancelled;
@@ -298,11 +319,21 @@ impl TorvynHost {
     /// # Errors
     /// Returns [`HostError::Flow`] if the flow is not found.
     pub async fn flow_state(&self, flow_id: FlowId) -> Result<FlowState, HostError> {
-        let flows = self.flows.read().await;
-        flows
-            .get(&flow_id)
-            .map(|r| r.state)
-            .ok_or_else(|| HostError::flow_not_found(flow_id))
+        // The flow must be known to the host.
+        let cached = {
+            let flows = self.flows.read().await;
+            flows.get(&flow_id).map(|r| r.state)
+        }
+        .ok_or_else(|| HostError::flow_not_found(flow_id))?;
+
+        // Prefer the reactor's live state. If the reactor no longer tracks the
+        // flow, it reached a terminal state and was reaped: report the cached
+        // state if it is already terminal, otherwise treat it as completed.
+        match self.reactor.flow_state(flow_id).await {
+            Ok(state) => Ok(state),
+            Err(_) if cached.is_terminal() => Ok(cached),
+            Err(_) => Ok(FlowState::Completed),
+        }
     }
 
     /// List all active flows.
@@ -328,23 +359,12 @@ impl TorvynHost {
     pub async fn run(&mut self) -> Result<(), HostError> {
         info!("Torvyn host starting");
 
-        // Step 1: Start all flows from configuration
-        if let Some(ref pipeline_path) = self.config.pipeline_config_path {
-            // CROSS-CRATE DEPENDENCY: Parse flow definitions from config.
-            // let flow_defs = torvyn_config::parse_flow_definitions(pipeline_path)
-            //     .map_err(|e| HostError::config(format!(
-            //         "Failed to parse pipeline config '{}': {e}",
-            //         pipeline_path.display()
-            //     )))?;
-            //
-            // for flow_def in &flow_defs {
-            //     self.start_flow(&flow_def.name).await?;
-            // }
-
-            info!(
-                pipeline_config = %pipeline_path.display(),
-                "Pipeline configuration loaded"
-            );
+        // Step 1: Start every flow defined in the configuration. Names are
+        // collected first so the mutable `start_flow` borrow does not overlap
+        // the `flow_defs` borrow.
+        let flow_names: Vec<String> = self.flow_defs.keys().cloned().collect();
+        for flow_name in &flow_names {
+            self.start_flow(flow_name).await?;
         }
 
         let flow_count = self.flows.read().await.len();
@@ -405,13 +425,25 @@ impl TorvynHost {
 
         let timeout = self.config.shutdown_timeout;
 
-        let outcome = crate::shutdown::graceful_shutdown(
-            &self.flows,
-            // &self.reactor,
-            // &self.observability,
-            timeout,
-        )
-        .await;
+        // Drain the reactor: cancel and await all active flow drivers within
+        // the timeout. The reactor is the source of truth for how flows
+        // terminated.
+        let reactor_result = self.reactor.shutdown(timeout).await;
+        let outcome = ShutdownOutcome {
+            completed: reactor_result.completed,
+            cancelled: reactor_result.cancelled,
+            timed_out: reactor_result.timed_out,
+        };
+
+        // Reflect the terminal disposition in the local flow records.
+        {
+            let mut flows = self.flows.write().await;
+            for record in flows.values_mut() {
+                if !record.state.is_terminal() {
+                    record.state = FlowState::Cancelled;
+                }
+            }
+        }
 
         self.status = HostStatus::Stopped;
 
@@ -453,89 +485,102 @@ impl TorvynHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::mpsc;
-    use torvyn_engine::WasmtimeEngineConfig;
-    use torvyn_reactor::events::ReactorCommand;
+    use crate::builder::HostBuilder;
+    use torvyn_config::NodeDef;
 
-    fn make_test_host() -> TorvynHost {
-        // Build a host with a "dead" reactor handle: the receiver is
-        // dropped immediately, so any subsequent send fails. Host tests
-        // exercise the host's bookkeeping (FlowRecord state, status
-        // transitions) and do not send commands through the reactor —
-        // this keeps the test setup synchronous and avoids spinning up
-        // a full coordinator task per test.
-        let config = HostConfig::default();
-        let engine = Arc::new(WasmtimeEngine::new(WasmtimeEngineConfig::default()).unwrap());
-        let invoker = Arc::new(WasmtimeInvoker::new());
-        let (cmd_tx, _cmd_rx) = mpsc::channel::<ReactorCommand>(1);
-        let reactor = ReactorHandle::new(cmd_tx);
-        TorvynHost::new(config, engine, invoker, reactor, None)
+    /// A host with a live reactor coordinator and no flow definitions.
+    ///
+    /// Unlike a hand-constructed host, this uses the real builder so the
+    /// reactor commands issued by `start_flow`, `cancel_flow`, `flow_state`,
+    /// and `shutdown` reach a running coordinator.
+    async fn make_test_host() -> TorvynHost {
+        HostBuilder::new()
+            .build()
+            .await
+            .expect("host with default configuration must build")
     }
 
-    #[test]
-    fn test_host_initial_status() {
-        let host = make_test_host();
+    /// A host pre-loaded with a single sink-only flow named `flow_name`.
+    ///
+    /// The topology is intentionally invalid (a sink with no source), so
+    /// `start_flow` exercises the host → pipeline wiring and surfaces a
+    /// startup error without requiring real Wasm components.
+    async fn host_with_invalid_flow(flow_name: &str) -> TorvynHost {
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            "sink".to_owned(),
+            NodeDef {
+                component: "file:///nonexistent/sink.wasm".to_owned(),
+                interface: "torvyn:streaming/sink".to_owned(),
+                ..NodeDef::default()
+            },
+        );
+        let flow = FlowDef {
+            nodes,
+            ..FlowDef::default()
+        };
+        HostBuilder::new()
+            .with_flow_definition(flow_name, flow)
+            .build()
+            .await
+            .expect("host must build")
+    }
+
+    #[tokio::test]
+    async fn test_host_initial_status() {
+        let host = make_test_host().await;
         assert_eq!(host.status(), HostStatus::Ready);
     }
 
     #[tokio::test]
     async fn test_host_list_flows_empty() {
-        let host = make_test_host();
-        let flows = host.list_flows().await;
-        assert!(flows.is_empty());
+        let host = make_test_host().await;
+        assert!(host.list_flows().await.is_empty());
     }
 
     #[tokio::test]
     async fn test_host_flow_state_not_found() {
-        let host = make_test_host();
-        let result = host.flow_state(FlowId::new(999)).await;
-        assert!(result.is_err());
-        let msg = format!("{}", result.unwrap_err());
-        assert!(msg.contains("E0920"));
+        let host = make_test_host().await;
+        let err = host.flow_state(FlowId::new(999)).await.unwrap_err();
+        assert!(format!("{err}").contains("E0920"));
     }
 
     #[tokio::test]
     async fn test_host_cancel_flow_not_found() {
-        let host = make_test_host();
-        let result = host.cancel_flow(FlowId::new(999)).await;
-        assert!(result.is_err());
+        let host = make_test_host().await;
+        assert!(host.cancel_flow(FlowId::new(999)).await.is_err());
     }
 
     #[tokio::test]
-    async fn test_host_start_flow() {
-        let mut host = make_test_host();
-        let flow_id = host.start_flow("test-pipeline").await.unwrap();
-        assert_eq!(flow_id, FlowId::new(1));
-        assert_eq!(host.status(), HostStatus::Running);
-
-        let state = host.flow_state(flow_id).await.unwrap();
-        assert_eq!(state, FlowState::Running);
+    async fn test_host_start_unknown_flow_rejected() {
+        let mut host = make_test_host().await;
+        let err = host.start_flow("does-not-exist").await.unwrap_err();
+        assert!(format!("{err}").contains("No flow named"));
+        // A failed start leaves no flow record behind.
+        assert!(host.list_flows().await.is_empty());
     }
 
     #[tokio::test]
-    async fn test_host_start_multiple_flows() {
-        let mut host = make_test_host();
-        let id1 = host.start_flow("flow-1").await.unwrap();
-        let id2 = host.start_flow("flow-2").await.unwrap();
-        assert_ne!(id1, id2);
-
-        let flows = host.list_flows().await;
-        assert_eq!(flows.len(), 2);
+    async fn test_host_start_invalid_flow_surfaces_startup_error() {
+        let mut host = host_with_invalid_flow("sink-only").await;
+        // The flow is defined, so the host proceeds into the pipeline, where
+        // topology construction fails (no source). The error propagates and no
+        // flow record is created.
+        assert!(host.start_flow("sink-only").await.is_err());
+        assert!(host.list_flows().await.is_empty());
     }
 
     #[tokio::test]
-    async fn test_host_cancel_flow() {
-        let mut host = make_test_host();
-        let flow_id = host.start_flow("cancel-me").await.unwrap();
-
-        host.cancel_flow(flow_id).await.unwrap();
-        let state = host.flow_state(flow_id).await.unwrap();
-        assert_eq!(state, FlowState::Cancelled);
+    async fn test_host_start_flow_after_shutdown_rejected() {
+        let mut host = make_test_host().await;
+        let _ = host.shutdown().await.unwrap();
+        let err = host.start_flow("anything").await.unwrap_err();
+        assert!(format!("{err}").contains("shutting down"));
     }
 
     #[tokio::test]
     async fn test_host_shutdown_when_no_flows() {
-        let mut host = make_test_host();
+        let mut host = make_test_host().await;
         let outcome = host.shutdown().await.unwrap();
         assert_eq!(outcome.completed, 0);
         assert_eq!(outcome.cancelled, 0);
@@ -545,29 +590,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_host_shutdown_idempotent() {
-        let mut host = make_test_host();
+        let mut host = make_test_host().await;
         let _ = host.shutdown().await.unwrap();
         let outcome = host.shutdown().await.unwrap();
         assert_eq!(outcome, ShutdownOutcome::already_stopped());
     }
 
     #[tokio::test]
-    async fn test_host_start_flow_after_shutdown_fails() {
-        let mut host = make_test_host();
-        let _ = host.shutdown().await.unwrap();
-        let result = host.start_flow("test").await;
-        assert!(result.is_err());
-        assert!(format!("{}", result.unwrap_err()).contains("shutting down"));
-    }
-
-    #[tokio::test]
-    async fn test_host_inspection_handle() {
-        let mut host = make_test_host();
-        let _ = host.start_flow("inspectable").await.unwrap();
-
+    async fn test_host_inspection_handle_empty() {
+        let host = make_test_host().await;
         let handle = host.inspection_handle();
-        let flows = handle.list_flows().await;
-        assert_eq!(flows.len(), 1);
-        assert_eq!(flows[0].name, "inspectable");
+        assert!(handle.list_flows().await.is_empty());
     }
 }

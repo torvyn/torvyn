@@ -12,6 +12,7 @@
 //! 6. Create reactor coordinator
 //! 7. Return configured host
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,7 +20,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::info;
 
-use torvyn_config::{load_pipeline, ObservabilityConfig, RuntimeConfig, SecurityConfig};
+use torvyn_config::{load_pipeline, FlowDef, ObservabilityConfig, RuntimeConfig, SecurityConfig};
 use torvyn_engine::{WasmtimeEngine, WasmtimeEngineConfig, WasmtimeInvoker};
 use torvyn_reactor::{
     coordinator::ReactorCoordinator,
@@ -148,6 +149,10 @@ impl HostConfig {
 pub struct HostBuilder {
     config: HostConfig,
     config_path: Option<PathBuf>,
+    /// Flow definitions registered programmatically. Merged with any flows
+    /// loaded from the configuration file during [`build()`](Self::build);
+    /// programmatic definitions take precedence on name conflicts.
+    flow_definitions: BTreeMap<String, FlowDef>,
 }
 
 impl HostBuilder {
@@ -159,7 +164,21 @@ impl HostBuilder {
         Self {
             config: HostConfig::default(),
             config_path: None,
+            flow_definitions: BTreeMap::new(),
         }
+    }
+
+    /// Register a flow definition programmatically, keyed by name.
+    ///
+    /// This is the programmatic equivalent of declaring a `[flow.*]` table in
+    /// the configuration file: the host can later start it by name via
+    /// [`TorvynHost::start_flow`](crate::TorvynHost::start_flow).
+    ///
+    /// # COLD PATH
+    #[must_use]
+    pub fn with_flow_definition(mut self, name: impl Into<String>, flow: FlowDef) -> Self {
+        self.flow_definitions.insert(name.into(), flow);
+        self
     }
 
     /// Load configuration from a TOML file path.
@@ -271,6 +290,11 @@ impl HostBuilder {
             if let Some(security) = parsed.security {
                 self.config.security = security;
             }
+            // Flows from the file are the base; programmatic definitions
+            // registered via `with_flow_definition` override on conflict.
+            for (name, flow) in parsed.flows {
+                self.flow_definitions.entry(name).or_insert(flow);
+            }
         }
 
         // Step 2: Validate
@@ -328,6 +352,7 @@ impl HostBuilder {
             invoker,
             reactor,
             Some(coordinator_join),
+            self.flow_definitions,
         ))
     }
 }
@@ -422,6 +447,7 @@ mod tests {
         let builder = HostBuilder {
             config,
             config_path: None,
+            flow_definitions: BTreeMap::new(),
         };
 
         let result = builder.build().await;

@@ -1,7 +1,7 @@
 //! Integration tests for the full host lifecycle.
 
 use torvyn_host::{HostBuilder, HostStatus, ShutdownOutcome};
-use torvyn_types::{FlowId, FlowState};
+use torvyn_types::FlowId;
 
 #[tokio::test]
 async fn test_full_lifecycle_no_flows() {
@@ -48,18 +48,13 @@ async fn test_double_shutdown_is_safe() {
 }
 
 #[tokio::test]
-async fn test_start_flow_then_cancel() {
+async fn test_start_unknown_flow_rejected() {
     let mut host = HostBuilder::new().build().await.unwrap();
-    let flow_id = host.start_flow("test-pipeline").await.unwrap();
-
-    assert_eq!(host.status(), HostStatus::Running);
-    assert_eq!(host.flow_state(flow_id).await.unwrap(), FlowState::Running);
-
-    host.cancel_flow(flow_id).await.unwrap();
-    assert_eq!(
-        host.flow_state(flow_id).await.unwrap(),
-        FlowState::Cancelled
-    );
+    // No flow named "test-pipeline" is defined, so the start is rejected and
+    // no flow record is created.
+    let err = host.start_flow("test-pipeline").await.unwrap_err();
+    assert!(format!("{err}").contains("No flow named"));
+    assert!(host.list_flows().await.is_empty());
 }
 
 #[tokio::test]
@@ -72,37 +67,33 @@ async fn test_start_flow_after_shutdown_rejected() {
 }
 
 #[tokio::test]
-async fn test_multiple_flows_listed() {
-    let mut host = HostBuilder::new().build().await.unwrap();
+async fn test_start_invalid_flow_surfaces_startup_error() {
+    use std::collections::BTreeMap;
+    use torvyn_config::{FlowDef, NodeDef};
 
-    let id1 = host.start_flow("flow-alpha").await.unwrap();
-    let id2 = host.start_flow("flow-beta").await.unwrap();
-    let id3 = host.start_flow("flow-gamma").await.unwrap();
+    // A flow with only a sink (no source) is a defined-but-invalid topology.
+    let mut nodes = BTreeMap::new();
+    nodes.insert(
+        "sink".to_owned(),
+        NodeDef {
+            component: "file:///nonexistent/sink.wasm".to_owned(),
+            interface: "torvyn:streaming/sink".to_owned(),
+            ..NodeDef::default()
+        },
+    );
+    let flow = FlowDef {
+        nodes,
+        ..FlowDef::default()
+    };
 
-    let flows = host.list_flows().await;
-    assert_eq!(flows.len(), 3);
+    let mut host = HostBuilder::new()
+        .with_flow_definition("invalid", flow)
+        .build()
+        .await
+        .unwrap();
 
-    let ids: Vec<FlowId> = flows.iter().map(|f| f.flow_id).collect();
-    assert!(ids.contains(&id1));
-    assert!(ids.contains(&id2));
-    assert!(ids.contains(&id3));
-}
-
-#[tokio::test]
-async fn test_inspection_handle_reflects_flow_state() {
-    let mut host = HostBuilder::new().build().await.unwrap();
-    let flow_id = host.start_flow("observable").await.unwrap();
-
-    let handle = host.inspection_handle();
-
-    // From another task: query state
-    let task = tokio::spawn(async move {
-        let summary = handle.get_flow(flow_id).await;
-        assert!(summary.is_some());
-        let s = summary.unwrap();
-        assert_eq!(s.name, "observable");
-        assert_eq!(s.state, FlowState::Running);
-    });
-
-    task.await.unwrap();
+    // The host reaches the pipeline, where topology construction fails; the
+    // error propagates and no flow record is created.
+    assert!(host.start_flow("invalid").await.is_err());
+    assert!(host.list_flows().await.is_empty());
 }

@@ -3119,7 +3119,9 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "tokio",
+ "torvyn-config",
  "torvyn-engine",
+ "torvyn-host",
  "torvyn-pipeline",
  "torvyn-reactor",
  "torvyn-resources",

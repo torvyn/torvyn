@@ -294,3 +294,105 @@ async fn test_real_pipeline_handles_source_completion_gracefully() {
         );
     }
 }
+
+// ===========================================================================
+// Host-driven end-to-end: start a real pipeline through `TorvynHost`
+// ===========================================================================
+
+/// The host runtime starts a real source → processor → sink pipeline from a
+/// flow definition — the same path `torvyn run` uses — and drives it to
+/// completion. Unlike the tests above (which call `instantiate_pipeline`
+/// directly), this exercises `TorvynHost::start_flow`, which resolves the flow
+/// definition, builds the topology, and instantiates it through the reactor.
+#[tokio::test]
+async fn test_host_start_flow_runs_real_pipeline_to_completion() {
+    use std::collections::BTreeMap;
+    use torvyn_config::{EdgeDef, EdgeEndpoint, FlowDef, NodeDef};
+    use torvyn_host::HostBuilder;
+
+    const ELEMENT_COUNT: u64 = 50;
+
+    fn node(component: String, interface: &str, init: Option<String>) -> NodeDef {
+        NodeDef {
+            component,
+            interface: interface.to_owned(),
+            config: init,
+            ..NodeDef::default()
+        }
+    }
+    fn edge(from_node: &str, to_node: &str) -> EdgeDef {
+        EdgeDef {
+            from: EdgeEndpoint {
+                node: from_node.to_owned(),
+                port: "output".to_owned(),
+            },
+            to: EdgeEndpoint {
+                node: to_node.to_owned(),
+                port: "input".to_owned(),
+            },
+            queue_depth: None,
+            backpressure: None,
+        }
+    }
+
+    let mut nodes = BTreeMap::new();
+    nodes.insert(
+        "source".to_owned(),
+        node(
+            file_uri(ECHO_SOURCE_WASM),
+            "torvyn:streaming/source",
+            Some(format!("{{\"count\":{ELEMENT_COUNT}}}")),
+        ),
+    );
+    nodes.insert(
+        "processor".to_owned(),
+        node(
+            file_uri(IDENTITY_PROCESSOR_WASM),
+            "torvyn:streaming/processor",
+            None,
+        ),
+    );
+    nodes.insert(
+        "sink".to_owned(),
+        node(file_uri(ECHO_SINK_WASM), "torvyn:streaming/sink", None),
+    );
+
+    let flow = FlowDef {
+        nodes,
+        edges: vec![edge("source", "processor"), edge("processor", "sink")],
+        ..FlowDef::default()
+    };
+
+    let mut host = HostBuilder::new()
+        .with_flow_definition("e2e", flow)
+        .build()
+        .await
+        .expect("host must build");
+
+    let flow_id = host.start_flow("e2e").await.expect("flow must start");
+
+    // Poll the host until the flow reaches a terminal state.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let final_state = loop {
+        let state = host
+            .flow_state(flow_id)
+            .await
+            .expect("the started flow must be known to the host");
+        if state.is_terminal() {
+            break state;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "flow did not reach a terminal state within 30s (last: {state:?})",
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
+
+    assert_eq!(
+        final_state,
+        FlowState::Completed,
+        "the host-driven pipeline must complete cleanly",
+    );
+
+    let _ = host.shutdown().await;
+}

@@ -27,6 +27,8 @@ torvyn-reactor = { path = "../../crates/torvyn-reactor" }
 torvyn-resources = { path = "../../crates/torvyn-resources" }
 torvyn-security = { path = "../../crates/torvyn-security" }
 torvyn-pipeline = { path = "../../crates/torvyn-pipeline" }
+torvyn-config = { path = "../../crates/torvyn-config" }
+torvyn-host = { path = "../../crates/torvyn-host" }
 
 # External
 tokio = { version = "1.41.0", features = ["full"] }
