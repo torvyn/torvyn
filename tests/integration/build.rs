@@ -226,7 +226,7 @@ fn build_go_component(
         );
         return;
     }
-    let bindings_status = Command::new("wit-bindgen-go")
+    let bindings_output = Command::new("wit-bindgen-go")
         .args(["generate", "--world", "data-source", "--out"])
         .arg(&bindings_dir)
         .args([
@@ -234,12 +234,20 @@ fn build_go_component(
             "torvyn.dev/test-components/go-echo-source/internal",
         ])
         .arg(contracts_wit)
-        .status();
-    match bindings_status {
-        Ok(s) if s.success() => {}
-        _ => {
+        .output();
+    match bindings_output {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            emit_tool_diagnostics("wit-bindgen-go", &o.stderr);
             println!(
                 "cargo:warning=wit-bindgen-go failed; \
+                 the `--features wasm-polyglot` target will not be runnable."
+            );
+            return;
+        }
+        Err(e) => {
+            println!(
+                "cargo:warning=could not run wit-bindgen-go ({e}); \
                  the `--features wasm-polyglot` target will not be runnable."
             );
             return;
@@ -257,19 +265,27 @@ fn build_go_component(
     // "single-shot guest function call" semantics the Component Model
     // already enforces and shrinks startup memory to a few hundred
     // KB.
-    let tinygo_status = Command::new("tinygo")
+    let tinygo_output = Command::new("tinygo")
         .args(["build", "-target=wasip2", "-scheduler=none", "-o"])
         .arg(&output_wasm)
         .arg("--wit-package")
         .arg(&staged_wit)
         .args(["--wit-world", GO_WRAPPER_WORLD, "."])
         .current_dir(&src_dir)
-        .status();
-    match tinygo_status {
-        Ok(s) if s.success() => {}
-        _ => {
+        .output();
+    match tinygo_output {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            emit_tool_diagnostics("tinygo", &o.stderr);
             println!(
                 "cargo:warning=tinygo build failed for the Go component; \
+                 the `--features wasm-polyglot` target will not be runnable."
+            );
+            return;
+        }
+        Err(e) => {
+            println!(
+                "cargo:warning=could not run tinygo ({e}); \
                  the `--features wasm-polyglot` target will not be runnable."
             );
             return;
@@ -280,6 +296,17 @@ fn build_go_component(
         "cargo:rustc-env=TORVYN_GO_ECHO_SOURCE_WASM={}",
         output_wasm.display()
     );
+}
+
+/// Emit a failed tool's captured `stderr` as individual `cargo:warning` lines
+/// so a CI failure shows the underlying error (a TinyGo/wit-bindgen-go message)
+/// rather than only a generic "<tool> failed" line.
+fn emit_tool_diagnostics(tool: &str, stderr: &[u8]) {
+    for line in String::from_utf8_lossy(stderr).lines() {
+        if !line.trim().is_empty() {
+            println!("cargo:warning={tool}: {line}");
+        }
+    }
 }
 
 /// Mirror the canonical Torvyn WIT and TinyGo's WASI Preview-2 WIT into
