@@ -94,6 +94,14 @@ jobs:
       - uses: taiki-e/cache-cargo-install-action@v2
         with:
           tool: cargo-component@0.21.1
+      # TinyGo's `wasip2` target shells out to the `wasm-tools` CLI
+      # (`wasm-tools component embed`) to wrap the core module as a component,
+      # so the binary must be on PATH. cargo-component (used by the wasm-e2e
+      # job) embeds components in-process and does not need it.
+      - name: Install wasm-tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-tools@1.248.0
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
