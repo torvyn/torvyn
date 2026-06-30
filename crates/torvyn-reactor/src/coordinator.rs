@@ -214,6 +214,17 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
             .map(|stage| stage.component_id)
             .collect();
 
+        // Pre-register the flow with the observability sink *before* the driver
+        // is spawned, so no `record_*` call emitted by the driver can race ahead
+        // of its metric allocation. The stream ids mirror the indices assigned
+        // to connections below (and in `FlowDriver::make_streams`). The sink is
+        // a no-op when observability is disabled.
+        let stream_ids: Vec<StreamId> = (0..config.topology.connections.len() as u64)
+            .map(StreamId::new)
+            .collect();
+        self.event_sink
+            .on_flow_start(flow_id, &component_ids, &stream_ids);
+
         // 4. Build streams from connections.
         let streams: Vec<StreamState> = config
             .topology

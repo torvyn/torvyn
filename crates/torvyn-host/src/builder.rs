@@ -22,12 +22,13 @@ use tracing::info;
 
 use torvyn_config::{load_pipeline, FlowDef, ObservabilityConfig, RuntimeConfig, SecurityConfig};
 use torvyn_engine::{WasmtimeEngine, WasmtimeEngineConfig, WasmtimeInvoker};
+use torvyn_observability::ObservabilityCollector;
 use torvyn_reactor::{
     coordinator::ReactorCoordinator,
     events::{ReactorCommand, ReactorEvent},
     handle::ReactorHandle,
 };
-use torvyn_types::NoopEventSink;
+use torvyn_types::ObservabilityLevel;
 
 use crate::error::{HostError, StartupError};
 use crate::host::TorvynHost;
@@ -325,20 +326,38 @@ impl HostBuilder {
         let invoker = Arc::new(WasmtimeInvoker::new());
         info!("Component invoker initialized");
 
-        // 3c: Spawn the reactor coordinator and obtain its handle.
+        // 3c: Build the observability collector. It is the reactor's event
+        // sink, so every flow's invocations, latencies, and errors are
+        // recorded as the pipeline runs. The collector owns `Arc`-backed
+        // registries (and a background event recorder), so it is shared by
+        // reference; the `Arc` provides the cheap `Clone` the coordinator's
+        // `E: EventSink + Clone + 'static` bound requires.
+        let observability = Arc::new(
+            ObservabilityCollector::new(observability_collector_config(&self.config.observability))
+                .map_err(|errors| StartupError::ObservabilityInit {
+                    reason: errors
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                })?,
+        );
+        info!("Observability collector initialized");
+
+        // 3d: Spawn the reactor coordinator and obtain its handle.
         let (cmd_tx, cmd_rx) = mpsc::channel::<ReactorCommand>(REACTOR_COMMAND_CHANNEL_CAPACITY);
         let (event_tx, _event_rx) = mpsc::channel::<ReactorEvent>(REACTOR_EVENT_CHANNEL_CAPACITY);
 
-        // Phase 0 uses the no-op event sink; observability wiring will
-        // replace this in a later phase. NoopEventSink is `Clone`, which
-        // satisfies the coordinator's `E: EventSink + Clone + 'static`
-        // bound and lets each spawned flow driver receive its own copy.
-        let event_sink = Arc::new(NoopEventSink);
+        // The coordinator stores `Arc<E>` and clones the inner `E` per flow
+        // driver; with `E = Arc<ObservabilityCollector>` every driver shares
+        // the single collector via a reference-counted clone (see the blanket
+        // `impl EventSink for Arc<E>` in `torvyn-types`).
+        let event_sink = Arc::new(Arc::clone(&observability));
         let coordinator = ReactorCoordinator::new(
             cmd_rx,
             event_tx,
             Arc::clone(&invoker),
-            Arc::clone(&event_sink),
+            event_sink,
             engine.resource_manager(),
         );
         let coordinator_join = tokio::spawn(coordinator.run());
@@ -353,6 +372,7 @@ impl HostBuilder {
             reactor,
             Some(coordinator_join),
             self.flow_definitions,
+            observability,
         ))
     }
 }
@@ -360,6 +380,31 @@ impl HostBuilder {
 impl Default for HostBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Translate the host's user-facing observability configuration into the
+/// collector's internal configuration.
+///
+/// The collector's behaviour is governed by its [`ObservabilityLevel`]:
+/// recording is active at `Production` (and `Diagnostic`) and a zero-cost
+/// no-op at `Off`. The user-facing config expresses intent through the
+/// `tracing_enabled` / `metrics_enabled` flags, so observability collapses to
+/// `Off` only when both are disabled; otherwise the collector runs at
+/// `Production`. Finer tracing settings keep the collector's defaults until
+/// trace export is wired end to end.
+fn observability_collector_config(
+    cfg: &ObservabilityConfig,
+) -> torvyn_observability::ObservabilityConfig {
+    let level = if cfg.tracing_enabled || cfg.metrics_enabled {
+        ObservabilityLevel::Production
+    } else {
+        ObservabilityLevel::Off
+    };
+
+    torvyn_observability::ObservabilityConfig {
+        level,
+        ..Default::default()
     }
 }
 
@@ -379,6 +424,45 @@ mod tests {
             problems.is_empty(),
             "default config should be valid: {problems:?}",
         );
+    }
+
+    #[test]
+    fn test_observability_config_default_enabled_is_production() {
+        // The default host config enables tracing and metrics, so the collector
+        // runs at Production (recording active).
+        let mapped = observability_collector_config(&ObservabilityConfig::default());
+        assert_eq!(mapped.level, ObservabilityLevel::Production);
+    }
+
+    #[test]
+    fn test_observability_config_both_disabled_is_off() {
+        let cfg = ObservabilityConfig {
+            tracing_enabled: false,
+            metrics_enabled: false,
+            ..ObservabilityConfig::default()
+        };
+        let mapped = observability_collector_config(&cfg);
+        assert_eq!(mapped.level, ObservabilityLevel::Off);
+    }
+
+    #[test]
+    fn test_observability_config_metrics_only_is_production() {
+        // Either signal being enabled keeps the collector recording.
+        let cfg = ObservabilityConfig {
+            tracing_enabled: false,
+            metrics_enabled: true,
+            ..ObservabilityConfig::default()
+        };
+        let mapped = observability_collector_config(&cfg);
+        assert_eq!(mapped.level, ObservabilityLevel::Production);
+    }
+
+    #[test]
+    fn test_mapped_observability_config_is_valid() {
+        // The mapped config must pass the collector's own validation so
+        // `ObservabilityCollector::new` cannot fail during host startup.
+        let mapped = observability_collector_config(&ObservabilityConfig::default());
+        assert!(mapped.validate().is_ok());
     }
 
     #[test]

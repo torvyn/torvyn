@@ -323,6 +323,35 @@ impl EventSink for ObservabilityCollector {
     fn level(&self) -> ObservabilityLevel {
         self.current_level()
     }
+
+    /// Pre-allocate this flow's metric slots so that subsequent
+    /// `record_invocation` / `record_element_transfer` calls — which look the
+    /// flow up by id and silently skip unregistered flows — actually record.
+    ///
+    /// The returned [`FlowObserver`] is intentionally dropped: registration
+    /// also stores the flow's `Arc<FlowMetrics>` in the registry, which is the
+    /// handle the hot-path recorders consult. Trace-context bookkeeping carried
+    /// by the observer is not needed for metric recording.
+    ///
+    /// # COLD PATH — once per flow, before the flow driver starts.
+    fn on_flow_start(
+        &self,
+        flow_id: FlowId,
+        component_ids: &[ComponentId],
+        stream_ids: &[StreamId],
+    ) {
+        if let Err(error) = self.register_flow(flow_id, component_ids, stream_ids) {
+            // Registration only fails on a duplicate flow id or a registry
+            // capacity limit; neither should stall the flow. Log and continue —
+            // the flow runs with metrics recording degraded to a no-op rather
+            // than failing to start.
+            tracing::warn!(
+                flow_id = %flow_id,
+                %error,
+                "observability: flow metrics registration failed; metrics disabled for this flow"
+            );
+        }
+    }
 }
 
 /// Per-flow handle with pre-allocated metric structures.
@@ -493,6 +522,77 @@ mod tests {
         assert_eq!(snap.elements_total, 1);
         assert_eq!(snap.copies_total, 1);
         assert_eq!(snap.copy_bytes_total, 1024);
+    }
+
+    #[test]
+    fn test_on_flow_start_registers_flow_for_recording() {
+        let collector = ObservabilityCollector::new_for_testing(test_config());
+
+        // Drive registration through the `EventSink::on_flow_start` hook (the
+        // path the reactor uses) rather than the inherent `register_flow`.
+        EventSink::on_flow_start(
+            &collector,
+            FlowId::new(1),
+            &[ComponentId::new(1), ComponentId::new(2)],
+            &[StreamId::new(0)],
+        );
+
+        collector.record_invocation(
+            FlowId::new(1),
+            ComponentId::new(1),
+            1000,
+            2000,
+            InvocationStatus::Ok,
+        );
+        collector.record_invocation(
+            FlowId::new(1),
+            ComponentId::new(2),
+            2000,
+            2500,
+            InvocationStatus::Ok,
+        );
+
+        let snap = collector.snapshot(FlowId::new(1)).unwrap();
+        assert_eq!(
+            snap.elements_total, 2,
+            "on_flow_start must pre-allocate metrics so invocations record"
+        );
+    }
+
+    #[test]
+    fn test_record_without_on_flow_start_is_silently_skipped() {
+        // A flow that was never registered has no metric slots; recording must
+        // be a no-op (and must not panic), which is exactly why the reactor
+        // calls `on_flow_start` before the driver emits.
+        let collector = ObservabilityCollector::new_for_testing(test_config());
+
+        collector.record_invocation(
+            FlowId::new(42),
+            ComponentId::new(1),
+            0,
+            100,
+            InvocationStatus::Ok,
+        );
+
+        assert!(collector.snapshot(FlowId::new(42)).is_none());
+    }
+
+    #[test]
+    fn test_on_flow_start_duplicate_does_not_panic() {
+        // A duplicate registration is logged and ignored, never panics.
+        let collector = ObservabilityCollector::new_for_testing(test_config());
+        EventSink::on_flow_start(&collector, FlowId::new(1), &[ComponentId::new(1)], &[]);
+        EventSink::on_flow_start(&collector, FlowId::new(1), &[ComponentId::new(1)], &[]);
+
+        collector.record_invocation(
+            FlowId::new(1),
+            ComponentId::new(1),
+            0,
+            100,
+            InvocationStatus::Ok,
+        );
+        let snap = collector.snapshot(FlowId::new(1)).unwrap();
+        assert_eq!(snap.elements_total, 1);
     }
 
     #[test]

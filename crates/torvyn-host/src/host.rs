@@ -15,6 +15,7 @@ use tracing::{info, warn};
 
 use torvyn_config::FlowDef;
 use torvyn_engine::{WasmtimeEngine, WasmtimeInvoker};
+use torvyn_observability::ObservabilityCollector;
 use torvyn_pipeline::{flow_def_to_topology, instantiate_pipeline};
 use torvyn_reactor::{cancellation::CancellationReason, ReactorHandle};
 use torvyn_types::{FlowId, FlowState};
@@ -130,6 +131,12 @@ pub struct TorvynHost {
     /// pipeline configuration and/or registered programmatically via the
     /// builder.
     flow_defs: BTreeMap<String, FlowDef>,
+
+    /// Observability collector wired into the reactor as its event sink.
+    /// Records per-flow invocations, latencies, throughput, and errors as
+    /// flows run, and is the handle through which metrics are inspected.
+    /// Shared (`Arc`) with the reactor coordinator and every flow driver.
+    observability: Arc<ObservabilityCollector>,
 }
 
 // LLI DEVIATION: Manual Debug impl because WasmtimeEngine does not derive Debug.
@@ -161,6 +168,7 @@ impl TorvynHost {
         reactor: ReactorHandle,
         coordinator_join: Option<JoinHandle<()>>,
         flow_defs: BTreeMap<String, FlowDef>,
+        observability: Arc<ObservabilityCollector>,
     ) -> Self {
         Self {
             config,
@@ -171,6 +179,7 @@ impl TorvynHost {
             flows: Arc::new(RwLock::new(HashMap::new())),
             status: HostStatus::Ready,
             flow_defs,
+            observability,
         }
     }
 
@@ -200,6 +209,18 @@ impl TorvynHost {
     #[must_use]
     pub fn reactor(&self) -> &ReactorHandle {
         &self.reactor
+    }
+
+    /// Returns a reference to the observability collector wired into the
+    /// reactor. Use it to read per-flow metrics (invocations, latency
+    /// histograms, throughput, errors) recorded as flows run, or to take a
+    /// metrics snapshot for a flow.
+    ///
+    /// # COLD PATH — inspection and reporting.
+    #[inline]
+    #[must_use]
+    pub fn observability(&self) -> &Arc<ObservabilityCollector> {
+        &self.observability
     }
 
     /// Start a flow from a pipeline definition.
@@ -601,5 +622,36 @@ mod tests {
         let host = make_test_host().await;
         let handle = host.inspection_handle();
         assert!(handle.list_flows().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_host_observability_collector_wired_at_production() {
+        // The default configuration enables observability, so the host exposes
+        // a collector recording at Production level.
+        let host = make_test_host().await;
+        assert_eq!(
+            host.observability().current_level(),
+            torvyn_types::ObservabilityLevel::Production,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_host_observability_collector_off_when_disabled() {
+        // Disabling both tracing and metrics collapses the collector to Off,
+        // making recording a zero-cost no-op.
+        let observability = torvyn_config::ObservabilityConfig {
+            tracing_enabled: false,
+            metrics_enabled: false,
+            ..torvyn_config::ObservabilityConfig::default()
+        };
+        let host = HostBuilder::new()
+            .with_observability_config(observability)
+            .build()
+            .await
+            .expect("host must build with observability disabled");
+        assert_eq!(
+            host.observability().current_level(),
+            torvyn_types::ObservabilityLevel::Off,
+        );
     }
 }

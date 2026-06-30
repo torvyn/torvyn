@@ -4,6 +4,8 @@
 //! recording observability events. All methods must be non-blocking and
 //! allocation-free on the hot path.
 
+use std::sync::Arc;
+
 use crate::{
     enums::{CopyReason, ObservabilityLevel},
     error::ProcessErrorKind,
@@ -90,6 +92,110 @@ pub trait EventSink: Send + Sync + 'static {
     ///
     /// # HOT PATH — checked per element to skip recording.
     fn level(&self) -> ObservabilityLevel;
+
+    /// Pre-register a flow's per-flow metric state before its driver starts.
+    ///
+    /// Called by the reactor exactly once per flow — after the flow id is
+    /// assigned and before the flow driver is spawned — so that no later
+    /// `record_*` call can observe a flow whose metrics have not yet been
+    /// allocated. `component_ids` and `stream_ids` enumerate the flow's
+    /// stages and stream connections in the same order the reactor records
+    /// them, letting the sink allocate matching metric slots up front.
+    ///
+    /// The default is a no-op: sinks that hold no per-flow state (such as
+    /// [`NoopEventSink`]) need not implement it.
+    ///
+    /// # COLD PATH — called once per flow, off the element hot path.
+    fn on_flow_start(
+        &self,
+        flow_id: FlowId,
+        component_ids: &[ComponentId],
+        stream_ids: &[StreamId],
+    ) {
+        let _ = (flow_id, component_ids, stream_ids);
+    }
+}
+
+/// Forwarding implementation so any `Arc`-shared sink satisfies the reactor's
+/// `E: EventSink + Clone + 'static` bound without the sink itself being
+/// `Clone`: the `Arc` provides the cheap clone (one shared sink, reference
+/// counted), and every call forwards to the single instance behind it.
+///
+/// This lets the host install a shared [`ObservabilityCollector`] (which owns
+/// `Arc`-backed registries and a background event recorder, and so is not
+/// `Clone`) by wrapping it in an `Arc`.
+///
+/// [`ObservabilityCollector`]: https://docs.rs/torvyn-observability
+impl<E: EventSink> EventSink for Arc<E> {
+    #[inline]
+    fn record_invocation(
+        &self,
+        flow_id: FlowId,
+        component_id: ComponentId,
+        start_ns: u64,
+        end_ns: u64,
+        status: InvocationStatus,
+    ) {
+        (**self).record_invocation(flow_id, component_id, start_ns, end_ns, status);
+    }
+
+    #[inline]
+    fn record_element_transfer(
+        &self,
+        flow_id: FlowId,
+        stream_id: StreamId,
+        element_sequence: u64,
+        queue_depth_after: u32,
+    ) {
+        (**self).record_element_transfer(flow_id, stream_id, element_sequence, queue_depth_after);
+    }
+
+    #[inline]
+    fn record_backpressure(
+        &self,
+        flow_id: FlowId,
+        stream_id: StreamId,
+        activated: bool,
+        queue_depth: u32,
+        timestamp_ns: u64,
+    ) {
+        (**self).record_backpressure(flow_id, stream_id, activated, queue_depth, timestamp_ns);
+    }
+
+    #[inline]
+    fn record_copy(
+        &self,
+        flow_id: FlowId,
+        resource_id: ResourceId,
+        from_component: ComponentId,
+        to_component: ComponentId,
+        copy_bytes: u64,
+        reason: CopyReason,
+    ) {
+        (**self).record_copy(
+            flow_id,
+            resource_id,
+            from_component,
+            to_component,
+            copy_bytes,
+            reason,
+        );
+    }
+
+    #[inline]
+    fn level(&self) -> ObservabilityLevel {
+        (**self).level()
+    }
+
+    #[inline]
+    fn on_flow_start(
+        &self,
+        flow_id: FlowId,
+        component_ids: &[ComponentId],
+        stream_ids: &[StreamId],
+    ) {
+        (**self).on_flow_start(flow_id, component_ids, stream_ids);
+    }
 }
 
 /// Status of a component invocation, for observability recording.
@@ -239,5 +345,162 @@ mod tests {
     fn test_noop_event_sink_is_send_sync() {
         fn assert_send_sync<T: Send + Sync + 'static>() {}
         assert_send_sync::<NoopEventSink>();
+    }
+
+    #[test]
+    fn test_noop_event_sink_on_flow_start_default_does_not_panic() {
+        let sink = NoopEventSink;
+        sink.on_flow_start(
+            FlowId::new(1),
+            &[ComponentId::new(1), ComponentId::new(2)],
+            &[StreamId::new(0)],
+        );
+    }
+
+    /// A recording sink that counts invocations and the components/streams it
+    /// was asked to register, used to prove the `Arc<E>` forwarding impl reaches
+    /// the inner sink.
+    #[derive(Default)]
+    struct CountingSink {
+        invocations: std::sync::atomic::AtomicU64,
+        registered_components: std::sync::atomic::AtomicU64,
+        registered_streams: std::sync::atomic::AtomicU64,
+    }
+
+    impl EventSink for CountingSink {
+        fn record_invocation(
+            &self,
+            _flow_id: FlowId,
+            _component_id: ComponentId,
+            _start_ns: u64,
+            _end_ns: u64,
+            _status: InvocationStatus,
+        ) {
+            self.invocations
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        fn record_element_transfer(
+            &self,
+            _flow_id: FlowId,
+            _stream_id: StreamId,
+            _element_sequence: u64,
+            _queue_depth_after: u32,
+        ) {
+        }
+
+        fn record_backpressure(
+            &self,
+            _flow_id: FlowId,
+            _stream_id: StreamId,
+            _activated: bool,
+            _queue_depth: u32,
+            _timestamp_ns: u64,
+        ) {
+        }
+
+        fn record_copy(
+            &self,
+            _flow_id: FlowId,
+            _resource_id: ResourceId,
+            _from_component: ComponentId,
+            _to_component: ComponentId,
+            _copy_bytes: u64,
+            _reason: CopyReason,
+        ) {
+        }
+
+        fn level(&self) -> ObservabilityLevel {
+            ObservabilityLevel::Production
+        }
+
+        fn on_flow_start(
+            &self,
+            _flow_id: FlowId,
+            component_ids: &[ComponentId],
+            stream_ids: &[StreamId],
+        ) {
+            self.registered_components.fetch_add(
+                component_ids.len() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            self.registered_streams.fetch_add(
+                stream_ids.len() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+    }
+
+    #[test]
+    fn test_arc_event_sink_forwards_to_inner() {
+        use std::sync::atomic::Ordering;
+
+        let sink: Arc<CountingSink> = Arc::new(CountingSink::default());
+
+        // Every method must forward through the `Arc` to the inner sink.
+        EventSink::on_flow_start(
+            &sink,
+            FlowId::new(7),
+            &[
+                ComponentId::new(1),
+                ComponentId::new(2),
+                ComponentId::new(3),
+            ],
+            &[StreamId::new(0), StreamId::new(1)],
+        );
+        sink.record_invocation(
+            FlowId::new(7),
+            ComponentId::new(1),
+            0,
+            100,
+            InvocationStatus::Ok,
+        );
+        sink.record_invocation(
+            FlowId::new(7),
+            ComponentId::new(2),
+            100,
+            250,
+            InvocationStatus::Ok,
+        );
+
+        assert_eq!(sink.invocations.load(Ordering::Relaxed), 2);
+        assert_eq!(sink.registered_components.load(Ordering::Relaxed), 3);
+        assert_eq!(sink.registered_streams.load(Ordering::Relaxed), 2);
+        assert_eq!(EventSink::level(&sink), ObservabilityLevel::Production);
+    }
+
+    #[test]
+    fn test_arc_event_sink_clone_shares_state() {
+        use std::sync::atomic::Ordering;
+
+        // The reactor clones the sink once per flow driver; an `Arc` clone must
+        // share the single underlying sink so all drivers record into one place.
+        let sink: Arc<CountingSink> = Arc::new(CountingSink::default());
+        let clone = Arc::clone(&sink);
+
+        clone.record_invocation(
+            FlowId::new(1),
+            ComponentId::new(1),
+            0,
+            1,
+            InvocationStatus::Ok,
+        );
+        sink.record_invocation(
+            FlowId::new(1),
+            ComponentId::new(1),
+            0,
+            1,
+            InvocationStatus::Ok,
+        );
+
+        assert_eq!(sink.invocations.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn test_arc_event_sink_satisfies_clone_bound() {
+        // The coordinator requires `E: EventSink + Clone + 'static`; assert the
+        // `Arc<E>` wrapper meets exactly that bound.
+        fn assert_event_sink_clone<T: EventSink + Clone + 'static>() {}
+        assert_event_sink_clone::<Arc<CountingSink>>();
     }
 }

@@ -394,5 +394,41 @@ async fn test_host_start_flow_runs_real_pipeline_to_completion() {
         "the host-driven pipeline must complete cleanly",
     );
 
+    // Observability: the run must have recorded metrics for this flow through
+    // the collector the host wires into the reactor as its event sink. Before
+    // this wiring the host installed a `NoopEventSink` and recorded nothing.
+    // Metrics are retained post-terminal, so the snapshot is available after
+    // completion.
+    let snapshot = host
+        .observability()
+        .snapshot(flow_id)
+        .expect("a completed flow must have recorded metrics");
+
+    // `on_flow_start` registered all three stages (source, processor, sink).
+    assert_eq!(
+        snapshot.components.len(),
+        3,
+        "all three pipeline stages must be registered for observation",
+    );
+    // Every stage was actually invoked and observed.
+    assert!(
+        snapshot.components.iter().all(|c| c.invocations > 0),
+        "every stage must record at least one invocation: {:?}",
+        snapshot
+            .components
+            .iter()
+            .map(|c| c.invocations)
+            .collect::<Vec<_>>(),
+    );
+    // Element-level recording happened, with no invocation errors on a clean run.
+    assert!(
+        snapshot.elements_total > 0,
+        "the pipeline processed {ELEMENT_COUNT} elements but recorded zero invocations",
+    );
+    assert_eq!(
+        snapshot.errors_total, 0,
+        "a clean run must record no invocation errors",
+    );
+
     let _ = host.shutdown().await;
 }
