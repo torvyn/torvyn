@@ -6,7 +6,7 @@
 
 #[cfg(feature = "mock")]
 use torvyn_types::BackpressureSignal;
-use torvyn_types::{BufferHandle, ComponentId, ElementMeta};
+use torvyn_types::{BufferHandle, ComponentId, ElementMeta, FlowId};
 
 // ---------------------------------------------------------------------------
 // CompiledComponent
@@ -181,6 +181,29 @@ impl ComponentInstance {
     #[inline]
     pub fn component_id(&self) -> ComponentId {
         self.component_id
+    }
+
+    /// Stamp the reactor-assigned flow identifier onto this instance's store.
+    ///
+    /// Called by the reactor once per instance at flow spawn — after the flow's
+    /// `FlowId` is assigned and before the driver runs — so that every
+    /// host-side resource operation (copy accounting, allocation) performed by
+    /// the component is attributed to the correct flow rather than the
+    /// unassigned sentinel set at instantiation time. Mock and placeholder
+    /// instances carry no host-side resource state and are left unchanged.
+    ///
+    /// # COLD PATH — called once per instance at spawn.
+    #[inline]
+    pub fn set_flow_id(&mut self, flow_id: FlowId) {
+        match &mut self.inner {
+            #[cfg(feature = "wasmtime-backend")]
+            ComponentInstanceInner::Wasmtime(state) => {
+                state.store.data_mut().set_flow_id(flow_id);
+            }
+            _ => {
+                let _ = flow_id;
+            }
+        }
     }
 
     /// Returns whether this component exports the lifecycle interface.

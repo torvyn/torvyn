@@ -186,10 +186,15 @@ impl WasmtimeEngine {
             .trap_on_grow_failure(true) // Per spike finding 2.5
             .build();
 
-        // Session 2.2 placeholder: derive the flow identifier from the
-        // component identity. Session 2.3 wires the real reactor-assigned
-        // `FlowId` here.
-        let flow_id = FlowId::new(component_id.as_u64());
+        // The real flow identifier is assigned by the reactor at spawn time,
+        // which happens *after* instantiation. Start each store with the
+        // unassigned sentinel (`FlowId::new(0)`; the reactor's `next_flow_id`
+        // begins at 1, so it is never a live flow). The reactor stamps the
+        // real `FlowId` onto every store via `ComponentInstance::set_flow_id`
+        // before the flow driver runs, so all resource operations — copies,
+        // allocations — are attributed to the correct flow rather than a
+        // per-component placeholder.
+        let flow_id = FlowId::new(0);
 
         // Build the component's WASI sandbox from its resolved capabilities.
         // A deny-all configuration yields the most restrictive context.

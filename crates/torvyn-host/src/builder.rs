@@ -28,7 +28,8 @@ use torvyn_reactor::{
     events::{ReactorCommand, ReactorEvent},
     handle::ReactorHandle,
 };
-use torvyn_types::ObservabilityLevel;
+use torvyn_resources::{DefaultResourceManager, ResourceManagerConfig};
+use torvyn_types::{EventSink, ObservabilityLevel};
 
 use crate::error::{HostError, StartupError};
 use crate::host::TorvynHost;
@@ -312,23 +313,9 @@ impl HostBuilder {
         // Step 3: Initialize subsystems in dependency order
         // (Per Doc 02, Section 8.1 / Doc 10, Section 3.4)
 
-        // 3a: Initialize Wasm engine
-        let engine = Arc::new(
-            WasmtimeEngine::new(self.config.engine.clone()).map_err(|e| {
-                StartupError::EngineInit {
-                    reason: e.to_string(),
-                }
-            })?,
-        );
-        info!("Wasm engine initialized");
-
-        // 3b: Initialize the component invoker (Wasmtime backend).
-        let invoker = Arc::new(WasmtimeInvoker::new());
-        info!("Component invoker initialized");
-
-        // 3c: Build the observability collector. It is the reactor's event
-        // sink, so every flow's invocations, latencies, and errors are
-        // recorded as the pipeline runs. The collector owns `Arc`-backed
+        // 3a: Build the observability collector first, because it is the event
+        // sink for *both* the reactor (invocations, latencies, errors) and the
+        // resource manager (data copies). The collector owns `Arc`-backed
         // registries (and a background event recorder), so it is shared by
         // reference; the `Arc` provides the cheap `Clone` the coordinator's
         // `E: EventSink + Clone + 'static` bound requires.
@@ -343,6 +330,29 @@ impl HostBuilder {
                 })?,
         );
         info!("Observability collector initialized");
+
+        // 3b: Build the shared resource manager with the collector as its event
+        // sink so every data copy is recorded, then build the engine sharing
+        // that manager. The host is the composition root that owns the single
+        // `DefaultResourceManager` and hands it to the engine (and, through
+        // `engine.resource_manager()`, to the reactor), rather than letting the
+        // engine construct an isolated no-op-instrumented manager.
+        let resources = Arc::new(DefaultResourceManager::new(
+            ResourceManagerConfig::default(),
+            Arc::clone(&observability) as Arc<dyn EventSink>,
+        ));
+        let engine = Arc::new(
+            WasmtimeEngine::with_resource_manager(self.config.engine.clone(), resources).map_err(
+                |e| StartupError::EngineInit {
+                    reason: e.to_string(),
+                },
+            )?,
+        );
+        info!("Wasm engine initialized");
+
+        // 3c: Initialize the component invoker (Wasmtime backend).
+        let invoker = Arc::new(WasmtimeInvoker::new());
+        info!("Component invoker initialized");
 
         // 3d: Spawn the reactor coordinator and obtain its handle.
         let (cmd_tx, cmd_rx) = mpsc::channel::<ReactorCommand>(REACTOR_COMMAND_CHANNEL_CAPACITY);

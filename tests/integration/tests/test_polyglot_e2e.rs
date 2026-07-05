@@ -20,7 +20,7 @@ use std::time::Duration;
 use torvyn_engine::{WasmtimeEngine, WasmtimeEngineConfig};
 use torvyn_integration_tests::real_wasm::{
     await_flow_terminal, file_uri, spawn_real_coordinator, wait_for_sink_count, RecordingInvoker,
-    SINK_COMPONENT_ID, STAGE_FLOW_IDS,
+    SINK_COMPONENT_ID,
 };
 use torvyn_pipeline::{instantiate_pipeline, NodeConfig, PipelineTopologyBuilder};
 use torvyn_types::{ComponentRole, FlowState};
@@ -117,62 +117,44 @@ async fn test_polyglot_go_source_to_rust_sink_records_four_copies_per_element() 
     }
     drop(received);
 
-    let source_stats = manager.flow_copy_stats(STAGE_FLOW_IDS[0]);
-    let processor_stats = manager.flow_copy_stats(STAGE_FLOW_IDS[1]);
-    let sink_stats = manager.flow_copy_stats(STAGE_FLOW_IDS[2]);
-
-    // The headline polyglot guarantee: a Go-emitted buffer is
-    // indistinguishable from a Rust-emitted buffer as far as the
-    // host's copy accounting is concerned.
-    assert_eq!(
-        source_stats.total_copy_ops, ELEMENT_COUNT,
-        "Go source flow expected {ELEMENT_COUNT} ComponentToHost writes; got {}",
-        source_stats.total_copy_ops,
-    );
-    assert_eq!(
-        source_stats.copies_by_reason[1], ELEMENT_COUNT,
-        "Go source's writes must be tagged as ComponentToHost, identical to the Rust pipeline",
-    );
-    assert_eq!(
-        source_stats.total_payload_bytes,
-        SEQ_BYTES * ELEMENT_COUNT,
-        "Go source's payload byte total expected {} (= {SEQ_BYTES} × {}); got {}",
-        SEQ_BYTES * ELEMENT_COUNT,
-        ELEMENT_COUNT,
-        source_stats.total_payload_bytes,
-    );
+    // The headline polyglot guarantee: a Go-emitted buffer is indistinguishable
+    // from a Rust-emitted buffer as far as the host's copy accounting is
+    // concerned. Every copy is attributed to the flow's single reactor-assigned
+    // id, exactly as in the all-Rust pipeline.
+    let stats = manager.flow_copy_stats(handle.flow_id());
 
     assert_eq!(
-        processor_stats.total_copy_ops,
-        2 * ELEMENT_COUNT,
-        "processor flow expected {} copy ops (read + write per element); got {}",
-        2 * ELEMENT_COUNT,
-        processor_stats.total_copy_ops,
-    );
-    assert_eq!(
-        sink_stats.total_copy_ops, ELEMENT_COUNT,
-        "sink flow expected {ELEMENT_COUNT} HostToComponent reads; got {}",
-        sink_stats.total_copy_ops,
-    );
-
-    let total_ops =
-        source_stats.total_copy_ops + processor_stats.total_copy_ops + sink_stats.total_copy_ops;
-    assert_eq!(
-        total_ops,
+        stats.total_copy_ops,
         4 * ELEMENT_COUNT,
-        "polyglot pipeline total copy ops expected {} (= 4 per element × {}); got {total_ops}",
+        "polyglot pipeline must record exactly 4 copies per element (= {}); got {}",
         4 * ELEMENT_COUNT,
-        ELEMENT_COUNT,
+        stats.total_copy_ops,
     );
-
-    let total_bytes = source_stats.total_payload_bytes
-        + processor_stats.total_payload_bytes
-        + sink_stats.total_payload_bytes;
     assert_eq!(
-        total_bytes,
+        stats.total_payload_bytes,
         4 * SEQ_BYTES * ELEMENT_COUNT,
-        "polyglot pipeline byte total expected {} (= 4 × {SEQ_BYTES} × {}); got {total_bytes}",
+        "polyglot pipeline byte total expected {} (= 4 × {SEQ_BYTES} × {}); got {}",
         4 * SEQ_BYTES * ELEMENT_COUNT,
         ELEMENT_COUNT,
+        stats.total_payload_bytes,
+    );
+
+    // CopyReason index 0 = HostToComponent, 1 = ComponentToHost. Two writes
+    // (Go source output, Rust processor output) and two reads (processor input,
+    // sink input) per element — the Go-emitted buffer is tagged identically to
+    // a Rust-emitted one.
+    assert_eq!(
+        stats.copies_by_reason[1],
+        2 * ELEMENT_COUNT,
+        "expected {} ComponentToHost writes (Go source + Rust processor output); got {}",
+        2 * ELEMENT_COUNT,
+        stats.copies_by_reason[1],
+    );
+    assert_eq!(
+        stats.copies_by_reason[0],
+        2 * ELEMENT_COUNT,
+        "expected {} HostToComponent reads (processor + sink input); got {}",
+        2 * ELEMENT_COUNT,
+        stats.copies_by_reason[0],
     );
 }

@@ -194,7 +194,11 @@ impl HostState {
         flow_id: FlowId,
         wasi: WasiCtx,
     ) -> Self {
-        resources.register_flow(flow_id);
+        // The flow is registered with the resource manager by the reactor,
+        // once, under the reactor-assigned `FlowId` (see
+        // `ReactorCoordinator::spawn_flow_with_instances`). At store-creation
+        // time `flow_id` is still the unassigned sentinel, so registering here
+        // would only create a stale per-component entry.
         resources.register_component(component_id, None);
         Self {
             component_id,
@@ -205,6 +209,19 @@ impl HostState {
             flow_id,
             wasi,
         }
+    }
+
+    /// Stamp the reactor-assigned flow identifier onto this store.
+    ///
+    /// Called once by the reactor after it assigns the flow's `FlowId` and
+    /// before the flow driver runs, replacing the unassigned sentinel set at
+    /// store creation. Every subsequent resource operation (copy accounting,
+    /// allocation) is then attributed to the correct flow.
+    ///
+    /// # COLD PATH — called once per component instance at flow spawn.
+    #[inline]
+    pub(crate) fn set_flow_id(&mut self, flow_id: FlowId) {
+        self.flow_id = flow_id;
     }
 
     /// The [`OwnerId`] used when this instance is the principal of a
@@ -670,6 +687,10 @@ mod tests {
 
     fn test_state(component_id: u64, flow_id: u64) -> HostState {
         let resources = Arc::new(DefaultResourceManager::new_for_testing());
+        // In production the reactor registers the flow under its assigned
+        // `FlowId` before the driver runs; do the same here so the
+        // copy-accounting assertions below see a live ledger entry.
+        resources.register_flow(FlowId::new(flow_id));
         HostState::new(
             ComponentId::new(component_id),
             wasmtime::StoreLimitsBuilder::new().build(),

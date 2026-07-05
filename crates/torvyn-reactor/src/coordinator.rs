@@ -186,7 +186,7 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
     fn spawn_flow_with_instances(
         &mut self,
         config: FlowConfig,
-        instances: Vec<ComponentInstance>,
+        mut instances: Vec<ComponentInstance>,
     ) -> Result<FlowId, FlowCreationError> {
         // 1. Validate topology.
         config.topology.validate()?;
@@ -213,6 +213,17 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
             .iter()
             .map(|stage| stage.component_id)
             .collect();
+
+        // Stamp the reactor-assigned flow id onto every component's store and
+        // register the flow with the resource manager's copy ledger, both
+        // *before* the driver is spawned. At instantiation each store carries
+        // the unassigned sentinel; without this, host-side copy accounting
+        // would be attributed to the wrong flow (or dropped). Registration must
+        // precede any resource operation so the ledger has a live entry.
+        for instance in &mut instances {
+            instance.set_flow_id(flow_id);
+        }
+        self.resources.register_flow(flow_id);
 
         // Pre-register the flow with the observability sink *before* the driver
         // is spawned, so no `record_*` call emitted by the driver can race ahead

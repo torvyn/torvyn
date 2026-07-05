@@ -25,7 +25,7 @@ use std::time::Duration;
 use torvyn_engine::{WasmtimeEngine, WasmtimeEngineConfig};
 use torvyn_integration_tests::real_wasm::{
     await_flow_terminal, file_uri, spawn_real_coordinator, wait_for_sink_count, RecordingInvoker,
-    SINK_COMPONENT_ID, STAGE_FLOW_IDS,
+    SINK_COMPONENT_ID,
 };
 use torvyn_pipeline::{
     instantiate_pipeline, NodeConfig, PipelineTopology, PipelineTopologyBuilder,
@@ -142,13 +142,13 @@ async fn test_real_source_to_sink_one_hundred_elements_completes() {
 }
 
 /// **Test B** — The headline invariant: with a real Source → Processor
-/// → Sink flow, the `CopyLedger` must show **exactly four** measured
-/// copy events per element. Verifies the precise per-stage breakdown
-/// as well:
-///   - source flow: N writes  (`ComponentToHost`)
-///   - processor flow: N reads + N writes  (`HostToComponent` + `ComponentToHost`)
-///   - sink flow: N reads  (`HostToComponent`)
-/// Total = 4N. Byte total = 4 × 8 × N = 32 × N.
+/// → Sink flow, the `CopyLedger` must record **exactly four** measured
+/// copy events per element, all attributed to the flow's single
+/// reactor-assigned `FlowId` (the reactor stamps it onto every component's
+/// store before the driver runs). The per-reason breakdown pins the model:
+///   - 2 `ComponentToHost` writes per element (source output, processor output)
+///   - 2 `HostToComponent` reads  per element (processor input, sink input)
+/// Total = 4N ops, 4 × 8 × N = 32N payload bytes.
 #[tokio::test]
 async fn test_real_pipeline_records_exactly_four_copies_per_element() {
     const ELEMENT_COUNT: u64 = 10;
@@ -182,67 +182,44 @@ async fn test_real_pipeline_records_exactly_four_copies_per_element() {
 
     wait_for_sink_count(&pushed, ELEMENT_COUNT, Duration::from_secs(5)).await;
 
-    let source_stats = manager.flow_copy_stats(STAGE_FLOW_IDS[0]);
-    let processor_stats = manager.flow_copy_stats(STAGE_FLOW_IDS[1]);
-    let sink_stats = manager.flow_copy_stats(STAGE_FLOW_IDS[2]);
+    // Every copy is attributed to the flow's single reactor-assigned id (the
+    // reactor stamps it onto each component's store before the driver runs),
+    // so the whole pipeline's copy accounting lives under one ledger entry.
+    let stats = manager.flow_copy_stats(handle.flow_id());
 
-    // Per-stage breakdown — diagnose any drift precisely.
     assert_eq!(
-        source_stats.total_copy_ops, ELEMENT_COUNT,
-        "source flow expected {ELEMENT_COUNT} ComponentToHost writes; got {}",
-        source_stats.total_copy_ops,
-    );
-    assert_eq!(
-        processor_stats.total_copy_ops,
-        2 * ELEMENT_COUNT,
-        "processor flow expected {} copy ops (read + write per element); got {}",
-        2 * ELEMENT_COUNT,
-        processor_stats.total_copy_ops,
-    );
-    assert_eq!(
-        sink_stats.total_copy_ops, ELEMENT_COUNT,
-        "sink flow expected {ELEMENT_COUNT} HostToComponent reads; got {}",
-        sink_stats.total_copy_ops,
-    );
-
-    let total_ops =
-        source_stats.total_copy_ops + processor_stats.total_copy_ops + sink_stats.total_copy_ops;
-    assert_eq!(
-        total_ops,
+        stats.total_copy_ops,
         4 * ELEMENT_COUNT,
-        "pipeline total copy ops expected {} (= 4 per element × {}); got {total_ops}",
+        "pipeline must record exactly 4 copies per element (= {}); got {}",
         4 * ELEMENT_COUNT,
-        ELEMENT_COUNT,
+        stats.total_copy_ops,
     );
-
-    let total_bytes = source_stats.total_payload_bytes
-        + processor_stats.total_payload_bytes
-        + sink_stats.total_payload_bytes;
     assert_eq!(
-        total_bytes,
+        stats.total_payload_bytes,
         4 * SEQ_BYTES * ELEMENT_COUNT,
-        "pipeline byte total expected {} (= 4 × {SEQ_BYTES} × {}); got {total_bytes}",
+        "pipeline byte total expected {} (= 4 × {SEQ_BYTES} × {}); got {}",
         4 * SEQ_BYTES * ELEMENT_COUNT,
         ELEMENT_COUNT,
+        stats.total_payload_bytes,
     );
 
-    // CopyReason index 0 = HostToComponent, 1 = ComponentToHost. Verify
-    // the directional accounting matches the design doc.
+    // CopyReason index 0 = HostToComponent, 1 = ComponentToHost. The four
+    // copies per element are two reads (processor input, sink input) and two
+    // writes (source output, processor output). Together with the total above,
+    // this also pins CrossComponent and PoolReturn copies to zero.
     assert_eq!(
-        source_stats.copies_by_reason[1], ELEMENT_COUNT,
-        "source's writes must be ComponentToHost",
+        stats.copies_by_reason[0],
+        2 * ELEMENT_COUNT,
+        "expected {} HostToComponent reads (processor + sink input); got {}",
+        2 * ELEMENT_COUNT,
+        stats.copies_by_reason[0],
     );
     assert_eq!(
-        processor_stats.copies_by_reason[0], ELEMENT_COUNT,
-        "processor reads must be HostToComponent",
-    );
-    assert_eq!(
-        processor_stats.copies_by_reason[1], ELEMENT_COUNT,
-        "processor writes must be ComponentToHost",
-    );
-    assert_eq!(
-        sink_stats.copies_by_reason[0], ELEMENT_COUNT,
-        "sink's reads must be HostToComponent",
+        stats.copies_by_reason[1],
+        2 * ELEMENT_COUNT,
+        "expected {} ComponentToHost writes (source + processor output); got {}",
+        2 * ELEMENT_COUNT,
+        stats.copies_by_reason[1],
     );
 }
 
@@ -284,15 +261,12 @@ async fn test_real_pipeline_handles_source_completion_gracefully() {
         "sink must not receive any element when the source returns None immediately",
     );
 
-    for flow in STAGE_FLOW_IDS {
-        let stats = manager.flow_copy_stats(flow);
-        assert_eq!(
-            stats.total_copy_ops, 0,
-            "flow {flow:?} must record zero copy events when no elements are produced; \
-             got {}",
-            stats.total_copy_ops,
-        );
-    }
+    let stats = manager.flow_copy_stats(handle.flow_id());
+    assert_eq!(
+        stats.total_copy_ops, 0,
+        "the flow must record zero copy events when no elements are produced; got {}",
+        stats.total_copy_ops,
+    );
 }
 
 // ===========================================================================
@@ -428,6 +402,18 @@ async fn test_host_start_flow_runs_real_pipeline_to_completion() {
     assert_eq!(
         snapshot.errors_total, 0,
         "a clean run must record no invocation errors",
+    );
+    // Data-copy accounting reaches the collector too: the host wires it as the
+    // resource manager's copy sink, and the reactor stamps the real flow id
+    // onto every store, so all copies land under this flow — exactly four per
+    // element (2 reads + 2 writes). A zero here would mean copies never reached
+    // the collector; an undercount would mean they were misattributed.
+    assert_eq!(
+        snapshot.copies_total,
+        4 * ELEMENT_COUNT,
+        "the collector must record 4 copies per element (= {}); got {}",
+        4 * ELEMENT_COUNT,
+        snapshot.copies_total,
     );
 
     let _ = host.shutdown().await;

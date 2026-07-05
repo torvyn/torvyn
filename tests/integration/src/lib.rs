@@ -641,10 +641,4 @@ pub mod real_wasm {
     /// to `ComponentId::new((i as u64) + 1)`, so the sink at index 2
     /// becomes [`ComponentId::new(3)`].
     pub const SINK_COMPONENT_ID: ComponentId = ComponentId::new(3);
-
-    /// Per-stage [`FlowId`] assignment used by the real-Wasm
-    /// integration tests. `WasmtimeEngine::create_store` derives
-    /// `FlowId::new(component_id.as_u64())`, so the source/processor/
-    /// sink flows are `1`, `2`, `3` respectively.
-    pub const STAGE_FLOW_IDS: [FlowId; 3] = [FlowId::new(1), FlowId::new(2), FlowId::new(3)];
 }
