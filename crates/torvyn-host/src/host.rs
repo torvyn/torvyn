@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -364,6 +365,32 @@ impl TorvynHost {
         self.flows.read().await.values().cloned().collect()
     }
 
+    /// Interval between reactor polls in [`wait_for_all_flows`](Self::wait_for_all_flows).
+    ///
+    /// Flow completion is a cold-path event (a pipeline draining), so a short
+    /// fixed poll keeps the wait dependency-free without adding meaningful
+    /// latency to shutdown.
+    const FLOW_COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+    /// Wait until every active flow has reached a terminal state.
+    ///
+    /// The reactor drops a flow from its tracking table once the flow is reaped
+    /// after termination, so a flow that is absent from
+    /// [`ReactorHandle::list_flows`] has already finished. This returns once
+    /// every still-tracked flow reports a terminal state — including
+    /// immediately when no flows are active.
+    ///
+    /// # COLD PATH — the waiting is the point; hot-path work is in the reactor.
+    async fn wait_for_all_flows(&self) {
+        loop {
+            let flows = self.reactor.list_flows().await;
+            if flows.iter().all(|(_, state)| state.is_terminal()) {
+                return;
+            }
+            tokio::time::sleep(Self::FLOW_COMPLETION_POLL_INTERVAL).await;
+        }
+    }
+
     /// Run the host until all flows complete, a shutdown signal is
     /// received, or an unrecoverable error occurs.
     ///
@@ -394,18 +421,25 @@ impl TorvynHost {
             "Torvyn host started — {} flow(s) active", flow_count
         );
 
-        // Step 2: Wait for completion or shutdown signal
+        // Step 2: Run until every flow reaches a terminal state or a shutdown
+        // signal arrives, whichever comes first. Without the `signal` feature
+        // (embedded/library use), completion is the only exit.
         #[cfg(feature = "signal")]
         {
-            crate::signal::wait_for_shutdown_signal().await;
-            info!("Shutdown signal received");
+            tokio::select! {
+                () = self.wait_for_all_flows() => {
+                    info!("All flows reached a terminal state");
+                }
+                () = crate::signal::wait_for_shutdown_signal() => {
+                    info!("Shutdown signal received");
+                }
+            }
         }
 
         #[cfg(not(feature = "signal"))]
         {
-            // Without signal support, wait for all flows to complete.
-            // CROSS-CRATE DEPENDENCY: monitor flow states via reactor.
-            // self.wait_for_all_flows().await;
+            self.wait_for_all_flows().await;
+            info!("All flows reached a terminal state");
         }
 
         // Step 3: Graceful shutdown
@@ -653,5 +687,29 @@ mod tests {
             host.observability().current_level(),
             torvyn_types::ObservabilityLevel::Off,
         );
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_all_flows_returns_immediately_when_no_flows() {
+        let host = make_test_host().await;
+        // With no active flows there is nothing to wait for; this must resolve
+        // promptly rather than block.
+        tokio::time::timeout(Duration::from_secs(2), host.wait_for_all_flows())
+            .await
+            .expect("wait_for_all_flows must return immediately when no flows are active");
+    }
+
+    #[tokio::test]
+    async fn test_run_returns_when_no_flows_are_configured() {
+        // `run()` starts every configured flow, waits for completion or a
+        // shutdown signal, then shuts down. With no flows configured, the
+        // completion path fires immediately, so `run()` must return without a
+        // signal — previously it blocked forever on `wait_for_shutdown_signal`.
+        let mut host = make_test_host().await;
+        tokio::time::timeout(Duration::from_secs(5), host.run())
+            .await
+            .expect("run() must return promptly when there are no flows to wait for")
+            .expect("run() must complete without error");
+        assert_eq!(host.status(), HostStatus::Stopped);
     }
 }

@@ -273,18 +273,12 @@ async fn test_real_pipeline_handles_source_completion_gracefully() {
 // Host-driven end-to-end: start a real pipeline through `TorvynHost`
 // ===========================================================================
 
-/// The host runtime starts a real source → processor → sink pipeline from a
-/// flow definition — the same path `torvyn run` uses — and drives it to
-/// completion. Unlike the tests above (which call `instantiate_pipeline`
-/// directly), this exercises `TorvynHost::start_flow`, which resolves the flow
-/// definition, builds the topology, and instantiates it through the reactor.
-#[tokio::test]
-async fn test_host_start_flow_runs_real_pipeline_to_completion() {
+/// Build the canonical source → processor → sink `FlowDef` used by the
+/// host-driven end-to-end tests, with the source configured to emit
+/// `element_count` elements.
+fn host_e2e_flow(element_count: u64) -> torvyn_config::FlowDef {
     use std::collections::BTreeMap;
     use torvyn_config::{EdgeDef, EdgeEndpoint, FlowDef, NodeDef};
-    use torvyn_host::HostBuilder;
-
-    const ELEMENT_COUNT: u64 = 50;
 
     fn node(component: String, interface: &str, init: Option<String>) -> NodeDef {
         NodeDef {
@@ -315,7 +309,7 @@ async fn test_host_start_flow_runs_real_pipeline_to_completion() {
         node(
             file_uri(ECHO_SOURCE_WASM),
             "torvyn:streaming/source",
-            Some(format!("{{\"count\":{ELEMENT_COUNT}}}")),
+            Some(format!("{{\"count\":{element_count}}}")),
         ),
     );
     nodes.insert(
@@ -331,14 +325,26 @@ async fn test_host_start_flow_runs_real_pipeline_to_completion() {
         node(file_uri(ECHO_SINK_WASM), "torvyn:streaming/sink", None),
     );
 
-    let flow = FlowDef {
+    FlowDef {
         nodes,
         edges: vec![edge("source", "processor"), edge("processor", "sink")],
         ..FlowDef::default()
-    };
+    }
+}
+
+/// The host runtime starts a real source → processor → sink pipeline from a
+/// flow definition — the same path `torvyn run` uses — and drives it to
+/// completion. Unlike the tests above (which call `instantiate_pipeline`
+/// directly), this exercises `TorvynHost::start_flow`, which resolves the flow
+/// definition, builds the topology, and instantiates it through the reactor.
+#[tokio::test]
+async fn test_host_start_flow_runs_real_pipeline_to_completion() {
+    use torvyn_host::HostBuilder;
+
+    const ELEMENT_COUNT: u64 = 50;
 
     let mut host = HostBuilder::new()
-        .with_flow_definition("e2e", flow)
+        .with_flow_definition("e2e", host_e2e_flow(ELEMENT_COUNT))
         .build()
         .await
         .expect("host must build");
@@ -417,4 +423,52 @@ async fn test_host_start_flow_runs_real_pipeline_to_completion() {
     );
 
     let _ = host.shutdown().await;
+}
+
+/// `TorvynHost::run` — the loop behind `torvyn run` — must return on its own
+/// when a finite pipeline completes, without any external signal. Before flow
+/// completion was detected, `run()` blocked on the shutdown signal and hung
+/// forever on a finite pipeline. The wrapping timeout is the assertion: if
+/// `run()` fails to detect completion, it never returns and the timeout fires.
+#[tokio::test]
+async fn test_host_run_returns_on_finite_pipeline_completion() {
+    use torvyn_host::{HostBuilder, HostStatus};
+
+    const ELEMENT_COUNT: u64 = 30;
+
+    let mut host = HostBuilder::new()
+        .with_flow_definition("e2e", host_e2e_flow(ELEMENT_COUNT))
+        .build()
+        .await
+        .expect("host must build");
+
+    // run() starts the flow, waits for it to reach a terminal state, shuts
+    // down, and returns — all without a signal.
+    tokio::time::timeout(Duration::from_secs(30), host.run())
+        .await
+        .expect("run() must return once the finite pipeline completes")
+        .expect("run() must complete without error");
+
+    assert_eq!(
+        host.status(),
+        HostStatus::Stopped,
+        "run() must leave the host stopped after completion",
+    );
+
+    // Confirm run() returned because the pipeline genuinely completed (not a
+    // spurious early exit): its recorded metrics show elements were processed.
+    let flows = host.list_flows().await;
+    assert_eq!(flows.len(), 1, "exactly one flow should have been started");
+    let snapshot = host
+        .observability()
+        .snapshot(flows[0].flow_id)
+        .expect("the completed flow must have recorded metrics");
+    assert!(
+        snapshot.elements_total > 0,
+        "run() returned but the pipeline recorded no processed elements",
+    );
+    assert_eq!(
+        snapshot.errors_total, 0,
+        "a clean run must record no invocation errors",
+    );
 }
