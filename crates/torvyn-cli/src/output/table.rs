@@ -23,6 +23,11 @@ pub fn render_table<T: Tabled>(ctx: &OutputContext, items: &[T]) {
 }
 
 /// Display an `Option<String>` for tabled rendering.
+///
+/// Referenced by name in a `#[tabled(display_with = "display_option")]`
+/// attribute, which the dead-code analysis does not see; the row type it
+/// serves is likewise `#[allow(dead_code)]`.
+#[allow(dead_code)]
 fn display_option(o: &Option<String>) -> String {
     o.clone().unwrap_or_default()
 }

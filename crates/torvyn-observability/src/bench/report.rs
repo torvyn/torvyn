@@ -207,7 +207,7 @@ pub fn format_report(report: &BenchmarkReport) -> String {
     out.push_str("║                    Torvyn Benchmark Report                   ║\n");
     out.push_str(&format!(
         "║  Pipeline: {:<49}║\n",
-        &report.pipeline_description
+        report.pipeline_description
     ));
     out.push_str(&format!(
         "║  Duration: {:.2}s | Elements: {:<30}║\n",
