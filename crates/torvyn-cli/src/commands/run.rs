@@ -134,8 +134,10 @@ pub async fn execute(
         sp.finish_and_clear();
     }
 
-    // Start the flow
-    let _flow_id = host
+    // Start only the selected flow. `host.run()` is intentionally not used
+    // here: it starts *every* configured flow (ignoring `--flow`) and would
+    // double-start this one, since it is already running via `start_flow`.
+    let flow_id = host
         .start_flow(&flow_name)
         .await
         .map_err(|e| CliError::Runtime {
@@ -150,60 +152,46 @@ pub async fn execute(
 
     let start = Instant::now();
 
-    // Run until completion, limit, timeout, or Ctrl+C
+    // Wait for the flow to reach a terminal state, stopping early on timeout or
+    // Ctrl+C. Only this flow is active, so `wait_for_all_flows` waits for it.
     let ctrl_c = tokio::signal::ctrl_c();
-    let run_future = host.run();
-
-    let run_result = if let Some(timeout_dur) = timeout {
-        tokio::select! {
-            result = run_future => result,
-            _ = tokio::time::sleep(timeout_dur) => {
-                host.shutdown().await.ok();
-                Ok(())
-            },
-            _ = ctrl_c => {
-                eprintln!();
-                host.shutdown().await.ok();
-                Ok(())
+    match timeout {
+        Some(timeout_dur) => {
+            tokio::select! {
+                () = host.wait_for_all_flows() => {}
+                _ = tokio::time::sleep(timeout_dur) => {}
+                _ = ctrl_c => { eprintln!(); }
             }
         }
-    } else {
-        tokio::select! {
-            result = run_future => result,
-            _ = ctrl_c => {
-                eprintln!();
-                host.shutdown().await.ok();
-                Ok(())
+        None => {
+            tokio::select! {
+                () = host.wait_for_all_flows() => {}
+                _ = ctrl_c => { eprintln!(); }
             }
         }
-    };
+    }
 
-    run_result.map_err(|e| CliError::Runtime {
-        detail: format!("Pipeline execution failed: {e}"),
+    let elapsed = start.elapsed();
+
+    // Graceful shutdown drains the flow if it was stopped early (timeout/Ctrl+C)
+    // and is a no-op once it has already completed.
+    host.shutdown().await.map_err(|e| CliError::Runtime {
+        detail: format!("Graceful shutdown failed: {e}"),
         context: Some(flow_name.clone()),
     })?;
 
-    let elapsed = start.elapsed();
-    let elapsed_secs = elapsed.as_secs_f64();
-
-    // Placeholder metrics — FlowSummary doesn't yet expose detailed statistics
-    let elements_processed = 0_u64;
-    let error_count = 0_u64;
-    let throughput = if elapsed_secs > 0.0 {
-        elements_processed as f64 / elapsed_secs
-    } else {
-        0.0
-    };
-
-    let result = RunResult {
-        duration_secs: elapsed_secs,
-        elements_processed,
-        throughput_elem_per_sec: throughput,
-        error_count,
-        peak_memory_bytes: 0,
-        flow_name,
-        component_count: 0,
-        edge_count: 0,
+    // Report the flow's recorded metrics. The collector retains a flow's
+    // metrics after it terminates, so the snapshot is available post-shutdown.
+    let result = match host.observability().snapshot(flow_id) {
+        Some(snapshot) => build_run_result(
+            flow_name,
+            elapsed,
+            snapshot.elements_total,
+            snapshot.errors_total,
+            snapshot.components.len(),
+            snapshot.streams.len(),
+        ),
+        None => build_run_result(flow_name, elapsed, 0, 0, 0, 0),
     };
 
     Ok(CommandResult {
@@ -212,6 +200,37 @@ pub async fn execute(
         data: result,
         warnings: vec![],
     })
+}
+
+/// Assemble the run summary from a flow's recorded metrics.
+///
+/// COLD PATH — called once when a run finishes.
+fn build_run_result(
+    flow_name: String,
+    duration: Duration,
+    elements_processed: u64,
+    error_count: u64,
+    component_count: usize,
+    edge_count: usize,
+) -> RunResult {
+    let duration_secs = duration.as_secs_f64();
+    let throughput_elem_per_sec = if duration_secs > 0.0 {
+        elements_processed as f64 / duration_secs
+    } else {
+        0.0
+    };
+
+    RunResult {
+        duration_secs,
+        elements_processed,
+        throughput_elem_per_sec,
+        error_count,
+        // Per-flow peak memory is not yet tracked by the collector.
+        peak_memory_bytes: 0,
+        flow_name,
+        component_count,
+        edge_count,
+    }
 }
 
 /// Parse a duration string like "30s", "5m", "1h".
@@ -289,5 +308,26 @@ mod tests {
         assert!(parse_duration("abc").is_err());
         assert!(parse_duration("").is_err());
         assert!(parse_duration("-5s").is_err());
+    }
+
+    #[test]
+    fn test_build_run_result_maps_metrics_and_throughput() {
+        let result = build_run_result("pipeline".into(), Duration::from_secs(2), 100, 3, 4, 3);
+        assert_eq!(result.flow_name, "pipeline");
+        assert_eq!(result.elements_processed, 100);
+        assert_eq!(result.error_count, 3);
+        assert_eq!(result.component_count, 4);
+        assert_eq!(result.edge_count, 3);
+        assert_eq!(result.duration_secs, 2.0);
+        // 100 elements over 2 seconds.
+        assert!((result.throughput_elem_per_sec - 50.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_build_run_result_zero_duration_has_zero_throughput() {
+        // A zero-duration run must not divide by zero.
+        let result = build_run_result("empty".into(), Duration::ZERO, 0, 0, 0, 0);
+        assert_eq!(result.throughput_elem_per_sec, 0.0);
+        assert_eq!(result.elements_processed, 0);
     }
 }

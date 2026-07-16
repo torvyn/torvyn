@@ -380,8 +380,12 @@ impl TorvynHost {
     /// every still-tracked flow reports a terminal state — including
     /// immediately when no flows are active.
     ///
+    /// Callers that drive a single flow (for example `torvyn run`) can start it
+    /// with [`start_flow`](Self::start_flow) and await this to block until that
+    /// flow finishes, typically racing it against a timeout or interrupt.
+    ///
     /// # COLD PATH — the waiting is the point; hot-path work is in the reactor.
-    async fn wait_for_all_flows(&self) {
+    pub async fn wait_for_all_flows(&self) {
         loop {
             let flows = self.reactor.list_flows().await;
             if flows.iter().all(|(_, state)| state.is_terminal()) {

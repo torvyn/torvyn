@@ -472,3 +472,61 @@ async fn test_host_run_returns_on_finite_pipeline_completion() {
         "a clean run must record no invocation errors",
     );
 }
+
+/// Exercises the exact sequence `torvyn run` uses after the CLI fix: start only
+/// the selected flow, wait for it via `wait_for_all_flows`, then read its
+/// recorded metrics for the run summary. Verifies the flow runs exactly once
+/// (no double-start) and that the snapshot yields the real numbers the CLI
+/// reports — elements processed, zero errors, and the stage/edge counts.
+#[tokio::test]
+async fn test_host_run_single_flow_pattern_reports_real_metrics() {
+    use torvyn_host::HostBuilder;
+
+    const ELEMENT_COUNT: u64 = 40;
+
+    let mut host = HostBuilder::new()
+        .with_flow_definition("e2e", host_e2e_flow(ELEMENT_COUNT))
+        .build()
+        .await
+        .expect("host must build");
+
+    // Start ONLY the selected flow (no `run()`, which would start every
+    // configured flow and double-start this one).
+    let flow_id = host.start_flow("e2e").await.expect("flow must start");
+
+    // Wait for just this flow to finish.
+    tokio::time::timeout(Duration::from_secs(30), host.wait_for_all_flows())
+        .await
+        .expect("the finite flow must reach a terminal state");
+
+    // Exactly one flow ran — the selected one — with no accidental second start.
+    let flows = host.list_flows().await;
+    assert_eq!(
+        flows.len(),
+        1,
+        "the selected flow must run exactly once, not be double-started",
+    );
+
+    let _ = host.shutdown().await;
+
+    // The run summary the CLI builds is sourced entirely from this snapshot.
+    let snapshot = host
+        .observability()
+        .snapshot(flow_id)
+        .expect("a completed flow must have recorded metrics");
+    assert!(
+        snapshot.elements_total > 0,
+        "the run summary would report zero elements processed",
+    );
+    assert_eq!(snapshot.errors_total, 0, "a clean run reports no errors");
+    assert_eq!(
+        snapshot.components.len(),
+        3,
+        "component_count in the summary comes from the recorded stages",
+    );
+    assert_eq!(
+        snapshot.streams.len(),
+        2,
+        "edge_count in the summary comes from the recorded stream connections",
+    );
+}
