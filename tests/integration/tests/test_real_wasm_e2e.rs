@@ -24,8 +24,8 @@ use std::time::Duration;
 
 use torvyn_engine::{WasmtimeEngine, WasmtimeEngineConfig};
 use torvyn_integration_tests::real_wasm::{
-    await_flow_terminal, file_uri, spawn_real_coordinator, wait_for_sink_count, RecordingInvoker,
-    SINK_COMPONENT_ID,
+    await_flow_terminal, file_uri, spawn_real_coordinator, wait_for_sink_count,
+    wait_for_zero_live_buffers, RecordingInvoker, SINK_COMPONENT_ID,
 };
 use torvyn_pipeline::{
     instantiate_pipeline, NodeConfig, PipelineTopology, PipelineTopologyBuilder,
@@ -528,5 +528,77 @@ async fn test_host_run_single_flow_pattern_reports_real_metrics() {
         snapshot.streams.len(),
         2,
         "edge_count in the summary comes from the recorded stream connections",
+    );
+}
+
+/// **Test G** — the ownership invariant: after a real Source → Processor
+/// → Sink flow runs to completion, the resource manager must hold **zero**
+/// live buffers.
+///
+/// This is the end-to-end statement of the claim that the host owns and
+/// accounts for every buffer. It is asserted here, against real Wasm and
+/// the real reactor, because no unit test can reach the sequence that
+/// breaks it: a buffer is only orphaned once it has been *transferred*
+/// from a component to the host on its way downstream, and that transfer
+/// happens inside `WasmtimeInvoker` on the hot path.
+///
+/// Two distinct leaks are covered:
+///
+/// 1. **Per element.** The consumer of an element receives a borrow, so no
+///    guest-side drop ever fires for it, and the buffer is owned by the
+///    host rather than by any component, so component-keyed cleanup cannot
+///    see it either. Without the invoker reclaiming each consumed element,
+///    this grows by one buffer per element per stage for the whole life of
+///    the flow — unbounded on a long-running stream.
+/// 2. **At terminal.** Anything still queued when the flow ends is only
+///    reachable through the flow index, which the coordinator's
+///    flow-keyed sweep walks.
+///
+/// A element count well above the pool's tier size is used deliberately:
+/// if buffers were not being recycled, the run would be visibly
+/// accumulating rather than steady-state.
+#[tokio::test]
+async fn test_real_pipeline_leaks_no_buffers() {
+    const ELEMENT_COUNT: u64 = 100;
+
+    let pushed = Arc::new(Mutex::new(Vec::<u64>::new()));
+    let invoker: Arc<RecordingInvoker> = Arc::new(RecordingInvoker::new(
+        SINK_COMPONENT_ID,
+        Arc::clone(&pushed),
+    ));
+
+    let engine = WasmtimeEngine::new(WasmtimeEngineConfig::default())
+        .expect("WasmtimeEngine must initialise");
+    let manager = engine.resource_manager();
+
+    let topology = build_pipeline_topology(
+        "e2e-no-buffer-leak",
+        Some(format!("{{\"count\":{ELEMENT_COUNT}}}")),
+    );
+
+    let (reactor, _coordinator_join) =
+        spawn_real_coordinator(Arc::clone(&invoker), engine.resource_manager());
+
+    let handle = instantiate_pipeline(&topology, &engine, &invoker, &reactor)
+        .await
+        .expect("instantiate_pipeline must succeed");
+
+    let final_state =
+        await_flow_terminal(&reactor, handle.flow_id(), Duration::from_secs(30)).await;
+    assert_eq!(final_state, FlowState::Completed);
+
+    wait_for_sink_count(&pushed, ELEMENT_COUNT, Duration::from_secs(5)).await;
+
+    // Every buffer allocated over the run must have returned to the pool.
+    wait_for_zero_live_buffers(&manager, Duration::from_secs(10)).await;
+
+    // The copy ledger is retained through terminal reclamation, so the
+    // flow's accounting is still readable — and it confirms the run really
+    // did move data rather than completing early with nothing to free.
+    let stats = manager.flow_copy_stats(handle.flow_id());
+    assert_eq!(
+        stats.total_copy_ops,
+        4 * ELEMENT_COUNT,
+        "the flow must have actually processed {ELEMENT_COUNT} elements",
     );
 }

@@ -545,6 +545,35 @@ pub mod real_wasm {
         }
     }
 
+    /// Wait until the resource manager reports zero live buffers, then
+    /// return the number of polls it took; panic on deadline.
+    ///
+    /// Buffers are returned as each element is consumed, so a healthy
+    /// pipeline settles at zero almost immediately. The poll exists
+    /// because the coordinator's terminal reclamation sweep runs when it
+    /// reaps the finished driver task, which is strictly after the flow's
+    /// completion event becomes observable — so sampling the instant
+    /// `await_flow_terminal` returns would be racy.
+    pub async fn wait_for_zero_live_buffers(
+        manager: &Arc<DefaultResourceManager>,
+        timeout: Duration,
+    ) {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let live = manager.live_resource_count();
+            if live == 0 {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                panic!(
+                    "resource manager still holds {live} live buffer(s) after {timeout:?}; \
+                     every buffer that traverses the pipeline must return to the pool"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
     /// `ComponentInvoker` wrapper that records the metadata of every
     /// element pushed at the sink before delegating to a wrapped
     /// [`WasmtimeInvoker`].

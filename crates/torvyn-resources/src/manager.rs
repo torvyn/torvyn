@@ -586,8 +586,39 @@ impl DefaultResourceManager {
     ///
     /// Per C03-5: called by the reactor when a flow reaches terminal state.
     ///
+    /// Equivalent to [`Self::reclaim_flow_buffers`] followed by dropping the
+    /// flow's copy-ledger entry. Callers that still need the flow's copy
+    /// statistics after cleanup — the reactor reports them post-terminal —
+    /// should call [`Self::reclaim_flow_buffers`] instead.
+    ///
     /// # COLD PATH
     pub fn release_flow_resources(&self, flow_id: FlowId) -> error::Result<FlowResourceStats> {
+        let stats = self.reclaim_flow_buffers(flow_id);
+
+        // Clean up copy accounting for this flow
+        let _ = self.ledger.remove_flow(flow_id);
+
+        Ok(stats)
+    }
+
+    /// Return every buffer still associated with a flow to the pool,
+    /// **retaining** the flow's copy-ledger entry.
+    ///
+    /// This is the flow-scoped counterpart to [`Self::force_reclaim`], and
+    /// the two are not interchangeable. `force_reclaim` walks the
+    /// *component*-keyed index, so it cannot see buffers owned by
+    /// [`OwnerId::Host`] — which is every buffer that has been handed from
+    /// one stage to the next, since [`Self::transfer_ownership`] removes
+    /// the resource from the source component's index and a host owner has
+    /// no index of its own. Those buffers are reachable only through the
+    /// flow index, which is what this method walks.
+    ///
+    /// The copy ledger is left in place so post-terminal observability
+    /// (the reactor's completion stats, and the end-to-end copy-accounting
+    /// assertions) can still read the flow's totals.
+    ///
+    /// # COLD PATH — called once per flow when it reaches a terminal state.
+    pub fn reclaim_flow_buffers(&self, flow_id: FlowId) -> FlowResourceStats {
         let mut inner = self.inner.lock();
         let resource_ids: Vec<ResourceId> = inner
             .flow_resources
@@ -637,10 +668,7 @@ impl DefaultResourceManager {
             }
         }
 
-        // Clean up copy accounting for this flow
-        let _ = self.ledger.remove_flow(flow_id);
-
-        Ok(stats)
+        stats
     }
 
     /// Register a flow for copy accounting.
@@ -984,6 +1012,130 @@ mod tests {
         let _h3 = mgr
             .allocate(owner, 100, flow)
             .expect("budget must be free after reclamation");
+    }
+
+    /// `force_reclaim` is component-keyed and therefore **cannot** see a
+    /// buffer that has been handed downstream.
+    ///
+    /// This replays the real hot-path sequence: a component allocates an
+    /// output buffer, then the invoker transfers it to the host
+    /// (`Owned(Component) → Transit → Owned(Host)`) as it emits the
+    /// element. `transfer_ownership` drops the resource from the source
+    /// component's reverse index, and a host owner has no index of its
+    /// own — so the component-keyed sweep finds nothing, and the buffer is
+    /// reachable only through the flow index.
+    ///
+    /// The pre-existing `force_reclaim` test passes because it never
+    /// transfers ownership, which is a sequence the runtime never executes.
+    #[test]
+    fn test_force_reclaim_cannot_see_host_owned_buffers() {
+        let mgr = test_manager();
+        let flow = FlowId::new(1);
+        let component = ComponentId::new(1);
+        mgr.register_flow(flow);
+        mgr.register_component(component, Some(64 * 1024));
+
+        let owner = OwnerId::Component(component);
+        for _ in 0..3 {
+            let handle = mgr.allocate(owner, 100, flow).unwrap();
+            mgr.transfer_ownership(handle, owner, OwnerId::Host)
+                .unwrap();
+        }
+        assert_eq!(mgr.live_resource_count(), 3);
+
+        // The component-keyed sweep is blind to these.
+        assert_eq!(
+            mgr.force_reclaim(component).len(),
+            0,
+            "host-owned buffers are not in the component index",
+        );
+        assert_eq!(
+            mgr.live_resource_count(),
+            3,
+            "force_reclaim alone leaks every buffer that traversed the pipeline",
+        );
+
+        // The flow-keyed sweep is the one that reaches them.
+        let stats = mgr.reclaim_flow_buffers(flow);
+        assert_eq!(stats.returned_to_pool + stats.deallocated, 3);
+        assert_eq!(
+            mgr.live_resource_count(),
+            0,
+            "reclaim_flow_buffers must return host-owned buffers to the pool",
+        );
+    }
+
+    /// The reactor reports a flow's copy statistics *after* reclaiming it,
+    /// so terminal cleanup must not drop the ledger entry. This is the
+    /// property that makes `reclaim_flow_buffers` distinct from
+    /// `release_flow_resources`.
+    #[test]
+    fn test_reclaim_flow_buffers_retains_copy_ledger() {
+        let mgr = test_manager();
+        let flow = FlowId::new(1);
+        mgr.register_flow(flow);
+
+        let owner = OwnerId::Host;
+        let handle = mgr.allocate(owner, 100, flow).unwrap();
+        mgr.write_payload(handle, owner, 0, &[7u8; 64], flow)
+            .unwrap();
+        assert_eq!(mgr.flow_copy_stats(flow).total_copy_ops, 1);
+
+        let stats = mgr.reclaim_flow_buffers(flow);
+
+        assert_eq!(stats.returned_to_pool + stats.deallocated, 1);
+        assert_eq!(mgr.live_resource_count(), 0);
+        assert_eq!(
+            mgr.flow_copy_stats(flow).total_copy_ops,
+            1,
+            "copy stats must survive for post-terminal observability",
+        );
+    }
+
+    /// `release_flow_resources` keeps its stronger contract: it reclaims
+    /// buffers *and* drops the ledger entry.
+    #[test]
+    fn test_release_flow_resources_still_drops_copy_ledger() {
+        let mgr = test_manager();
+        let flow = FlowId::new(1);
+        mgr.register_flow(flow);
+
+        let owner = OwnerId::Host;
+        let handle = mgr.allocate(owner, 100, flow).unwrap();
+        mgr.write_payload(handle, owner, 0, &[7u8; 64], flow)
+            .unwrap();
+        assert_eq!(mgr.flow_copy_stats(flow).total_copy_ops, 1);
+
+        let stats = mgr.release_flow_resources(flow).unwrap();
+
+        assert_eq!(stats.returned_to_pool + stats.deallocated, 1);
+        assert_eq!(mgr.live_resource_count(), 0);
+        assert_eq!(
+            mgr.flow_copy_stats(flow).total_copy_ops,
+            0,
+            "release_flow_resources drops the ledger entry",
+        );
+    }
+
+    /// Terminal cleanup runs both sweeps, and must be idempotent — a flow
+    /// whose buffers were already returned during normal operation must
+    /// reclaim nothing rather than double-free.
+    #[test]
+    fn test_reclaim_flow_buffers_is_idempotent() {
+        let mgr = test_manager();
+        let flow = FlowId::new(1);
+        mgr.register_flow(flow);
+
+        let handle = mgr.allocate(OwnerId::Host, 100, flow).unwrap();
+        mgr.release(handle, OwnerId::Host).unwrap();
+        assert_eq!(mgr.live_resource_count(), 0);
+
+        let first = mgr.reclaim_flow_buffers(flow);
+        let second = mgr.reclaim_flow_buffers(flow);
+
+        assert_eq!(first.returned_to_pool + first.deallocated, 0);
+        assert_eq!(second.returned_to_pool + second.deallocated, 0);
+        assert_eq!(mgr.live_resource_count(), 0);
     }
 
     // --- Content Type ---

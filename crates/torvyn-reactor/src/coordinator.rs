@@ -479,15 +479,26 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
     }
 
     /// Reclaim a terminal flow's host-managed resources from the shared
-    /// resource manager by reclaiming each of its components' outstanding
-    /// buffers and releasing their budget, while leaving the copy-ledger stats
-    /// in place for post-terminal observability.
+    /// resource manager, while leaving the copy-ledger stats in place for
+    /// post-terminal observability.
     ///
-    /// Keyed by component identity, which is stable regardless of how flow
-    /// identifiers are derived, so this stays correct as the resource/flow-id
-    /// wiring evolves. Reclaiming a component whose buffers were already
-    /// returned during normal operation is a no-op, so this is safe to call for
-    /// every reaped flow.
+    /// Two sweeps are required, because the two reverse indices cover
+    /// disjoint sets of buffers:
+    ///
+    /// 1. **Component-keyed** (`force_reclaim`) — buffers a component
+    ///    allocated and still owns, e.g. an output buffer it never emitted.
+    ///    This also releases the component's memory budget.
+    /// 2. **Flow-keyed** (`reclaim_flow_buffers`) — buffers owned by the
+    ///    *host*. A buffer handed from one stage to the next is transferred
+    ///    to `OwnerId::Host`, which drops it from the source component's
+    ///    index without adding it to any other, so sweep 1 cannot see it.
+    ///    In steady state the invoker returns these as each element is
+    ///    consumed; this sweep catches what a cancelled or failed flow left
+    ///    queued.
+    ///
+    /// Both sweeps are idempotent — reclaiming buffers that were already
+    /// returned during normal operation is a no-op — so this is safe to
+    /// call for every reaped flow.
     ///
     /// # COLD PATH — called once per flow when it reaches a terminal state.
     fn reclaim_flow_resources(&self, flow_id: FlowId, component_ids: &[ComponentId]) {
@@ -499,12 +510,17 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
                 bytes += u64::from(reclaimed.payload_capacity);
             }
         }
+
+        let flow_stats = self.resources.reclaim_flow_buffers(flow_id);
+        buffers += (flow_stats.returned_to_pool + flow_stats.deallocated) as usize;
+        bytes += flow_stats.total_bytes_released;
+
         if buffers > 0 {
             debug!(
                 flow_id = %flow_id,
                 buffers,
                 bytes,
-                "reclaimed orphaned component buffers at flow terminal",
+                "reclaimed orphaned buffers at flow terminal",
             );
         }
     }

@@ -242,21 +242,25 @@ impl WasiView for HostState {
 }
 
 impl Drop for HostState {
-    /// Phase-0 placeholder: no manager-side cleanup on `HostState` drop.
+    /// No manager-side cleanup on `HostState` drop — by design, because
+    /// cleanup happens earlier and at a better-informed layer.
     ///
-    /// `DefaultResourceManager::release_flow_resources` would return any
-    /// outstanding buffer entries to the pool but it also *removes the
-    /// flow's entry from the [`CopyLedger`]*, making post-mortem
-    /// copy-accounting queries return zeros. Until the resource manager
-    /// grows a "release pool but retain ledger" mode (Session 2.4+), the
-    /// engine does not invoke that cleanup automatically. Buffers stay
-    /// allocated for the lifetime of the `Arc<DefaultResourceManager>`,
-    /// which in practice is the lifetime of the engine; everything is
-    /// reclaimed when the manager itself drops.
+    /// Buffers are reclaimed at two points, neither of which is here:
     ///
-    /// Production reactor wiring (which has access to the manager) will
-    /// invoke `release_flow_resources` explicitly on terminal-flow
-    /// events so the stat snapshot is sampled first.
+    /// - **Per element**, by `WasmtimeInvoker::reclaim_input_element`, as
+    ///   soon as a consumed element's `process` / `push` call returns.
+    ///   This is what keeps a long-running flow's memory bounded.
+    /// - **Per flow**, by the reactor coordinator when it reaps a terminal
+    ///   flow, via `DefaultResourceManager::reclaim_flow_buffers` — the
+    ///   "return buffers to the pool but retain the copy ledger" mode, so
+    ///   post-mortem copy-accounting queries still report real numbers.
+    ///   (`release_flow_resources` is the stronger variant that also drops
+    ///   the ledger entry, which would zero those queries.)
+    ///
+    /// Doing it here instead would be strictly worse: `HostState` is
+    /// per-component, so a drop-time sweep could not see buffers that had
+    /// already moved downstream, and it would run only when the whole
+    /// store is torn down rather than as each element is consumed.
     fn drop(&mut self) {
         // Intentionally empty — see method-level comment.
     }
@@ -852,14 +856,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_state_drop_is_a_phase0_noop_preserving_ledger() {
-        // Pinning the Phase-0 behaviour: dropping a `HostState` does NOT
-        // automatically return its outstanding buffers to the pool or
-        // wipe its `CopyLedger` entry. That intentionally lets
-        // end-to-end tests sample the post-flow copy stats. Production
-        // wiring (a future session) will call
-        // `release_flow_resources` explicitly on terminal-flow events
-        // after sampling.
+    async fn host_state_drop_does_not_reclaim_leaving_cleanup_to_the_reactor() {
+        // Pinning the deliberate division of labour: dropping a
+        // `HostState` does NOT return its outstanding buffers to the pool
+        // or wipe its `CopyLedger` entry. Reclamation belongs to the
+        // layers that can see the whole flow — the invoker frees each
+        // element as it is consumed, and the reactor coordinator sweeps
+        // the remainder via `reclaim_flow_buffers` when it reaps a
+        // terminal flow. Keeping `Drop` inert is what lets post-flow copy
+        // stats still be sampled.
+        //
+        // The buffers below are allocated directly against the manager and
+        // never enter a flow, so neither of those paths applies to them.
         let resources = Arc::new(DefaultResourceManager::new_for_testing());
         let flow = FlowId::new(7);
         {
@@ -880,7 +888,7 @@ mod tests {
         assert_eq!(
             resources.live_resource_count(),
             2,
-            "Phase-0 Drop must leave buffers allocated for post-mortem inspection"
+            "Drop must leave buffers allocated for post-mortem inspection"
         );
         // The same goes for the ledger entry — explicit teardown is
         // required to reclaim it.

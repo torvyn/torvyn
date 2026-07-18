@@ -247,12 +247,16 @@ unsafe impl Send for ResourceEntry {}
 
 /// Inline content type storage to avoid heap allocation on the hot path.
 ///
-/// Stores up to 63 bytes of ASCII content type (e.g., "application/json").
-/// This avoids a `String` allocation per buffer on the hot path.
+/// Stores up to 63 bytes of a content type (e.g., "application/json").
+/// This avoids a `String` allocation per buffer on the hot path. Content
+/// types are conventionally ASCII, but the input is guest-supplied and is
+/// therefore treated as arbitrary UTF-8.
 ///
 /// # Invariants
 /// - `len` <= 63.
-/// - `data[0..len]` is valid UTF-8.
+/// - `data[0..len]` is valid UTF-8. Upheld by [`ContentType::from_str`],
+///   which truncates only at character boundaries; [`ContentType::as_str`]
+///   relies on this for its `unsafe` conversion.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContentType {
     data: [u8; 63],
@@ -276,14 +280,30 @@ impl ContentType {
 
     /// Create a content type from a string slice. Truncates if > 63 bytes.
     ///
+    /// Truncation is performed at a UTF-8 character boundary, so the stored
+    /// bytes are always valid UTF-8 even when the input is longer than
+    /// [`Self::MAX_LEN`] and byte 63 falls inside a multi-byte sequence. A
+    /// content type whose 63-byte prefix splits a character is therefore
+    /// shortened to the last whole character that fits, never to a partial
+    /// one. This matters because the value is attacker-controlled: guest
+    /// components pass arbitrary strings to the `set-content-type` host
+    /// function.
+    ///
     /// # WARM PATH — called per allocation.
     #[inline]
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
-        let bytes = s.as_bytes();
-        let copy_len = bytes.len().min(Self::MAX_LEN);
-        let mut data = [0u8; 63];
-        data[..copy_len].copy_from_slice(&bytes[..copy_len]);
+        let mut copy_len = s.len().min(Self::MAX_LEN);
+
+        // Walk back to the nearest character boundary. `is_char_boundary`
+        // is true at 0 and at `s.len()`, so this terminates after at most
+        // three steps (the longest UTF-8 sequence is four bytes).
+        while copy_len > 0 && !s.is_char_boundary(copy_len) {
+            copy_len -= 1;
+        }
+
+        let mut data = [0u8; Self::MAX_LEN];
+        data[..copy_len].copy_from_slice(&s.as_bytes()[..copy_len]);
         Self {
             data,
             len: copy_len as u8,
@@ -295,9 +315,15 @@ impl ContentType {
     /// # HOT PATH
     #[inline]
     pub fn as_str(&self) -> &str {
-        // SAFETY: We only store valid UTF-8 bytes (from_str validates input).
-        // The `from_str` constructor copies from a `&str`, which is guaranteed
-        // to be valid UTF-8.
+        debug_assert!(
+            std::str::from_utf8(&self.data[..self.len as usize]).is_ok(),
+            "ContentType invariant violated: stored bytes are not valid UTF-8",
+        );
+        // SAFETY: `data[..len]` is valid UTF-8. The only constructors are
+        // `empty` (which stores nothing) and `from_str` (which copies a
+        // whole number of characters from a `&str`, truncating at a
+        // character boundary). The `debug_assert!` above re-checks the
+        // invariant in test and debug builds.
         unsafe { std::str::from_utf8_unchecked(&self.data[..self.len as usize]) }
     }
 
@@ -524,6 +550,83 @@ mod tests {
     fn test_content_type_display() {
         let ct = ContentType::from_str("text/plain");
         assert_eq!(format!("{ct}"), "text/plain");
+    }
+
+    /// Truncation must not split a multi-byte character.
+    ///
+    /// `as_str` converts `data[..len]` with `from_utf8_unchecked`, so a
+    /// truncation landing mid-character would produce a `&str` holding
+    /// invalid UTF-8 — undefined behaviour. The value is guest-supplied
+    /// via the `set-content-type` host function, so this is reachable
+    /// from untrusted component code.
+    #[test]
+    fn test_content_type_truncation_respects_char_boundaries() {
+        // 62 ASCII bytes + 'é' (2 bytes) = 64 bytes. A byte-wise cut at 63
+        // would keep only the 0xC3 lead byte of 'é'.
+        let input = format!("{}é", "a".repeat(62));
+        assert_eq!(input.len(), 64);
+
+        let ct = ContentType::from_str(&input);
+
+        assert_eq!(
+            ct.len(),
+            62,
+            "must drop the whole character, not half of it"
+        );
+        assert_eq!(ct.as_str(), "a".repeat(62));
+        assert!(std::str::from_utf8(ct.as_str().as_bytes()).is_ok());
+    }
+
+    /// Every truncation offset around the limit must stay valid UTF-8, for
+    /// characters of every encoded width.
+    #[test]
+    fn test_content_type_truncation_valid_utf8_for_all_widths() {
+        // 'é' = 2 bytes, 'あ' = 3 bytes, '𝄞' = 4 bytes.
+        for filler in ['é', 'あ', '𝄞'] {
+            let width = filler.len_utf8();
+            for prefix in 0..=ContentType::MAX_LEN + width {
+                let input = format!("{}{}", "a".repeat(prefix), filler);
+                let ct = ContentType::from_str(&input);
+
+                // The stored bytes must always be valid UTF-8 ...
+                assert!(
+                    std::str::from_utf8(ct.as_str().as_bytes()).is_ok(),
+                    "invalid UTF-8 for filler {filler:?} at prefix {prefix}",
+                );
+                // ... must never exceed the inline capacity ...
+                assert!(ct.len() <= ContentType::MAX_LEN);
+                // ... and must be a prefix of the input.
+                assert!(input.starts_with(ct.as_str()));
+            }
+        }
+    }
+
+    /// A character ending exactly on the limit is kept in full.
+    #[test]
+    fn test_content_type_truncation_exact_fit() {
+        // 61 ASCII bytes + 'é' (2 bytes) = exactly 63 bytes.
+        let input = format!("{}é", "a".repeat(61));
+        assert_eq!(input.len(), ContentType::MAX_LEN);
+
+        let ct = ContentType::from_str(&input);
+
+        assert_eq!(ct.len(), ContentType::MAX_LEN);
+        assert_eq!(ct.as_str(), input);
+    }
+
+    /// A single character wider than the whole buffer yields an empty value
+    /// rather than a partial sequence.
+    #[test]
+    fn test_content_type_truncation_single_oversized_char() {
+        let ct = ContentType::from_str("𝄞");
+        assert_eq!(ct.as_str(), "𝄞", "a 4-byte character fits within 63 bytes");
+
+        // Force the walk-back to reach zero: 16 four-byte characters = 64 bytes.
+        let input = "𝄞".repeat(16);
+        assert_eq!(input.len(), 64);
+        let ct = ContentType::from_str(&input);
+        assert_eq!(ct.len(), 60, "15 whole characters fit; the 16th is dropped");
+        assert!(std::str::from_utf8(ct.as_str().as_bytes()).is_ok());
     }
 
     #[test]

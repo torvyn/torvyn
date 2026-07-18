@@ -122,8 +122,9 @@ impl WasmtimeInvoker {
     /// 4. Return the Torvyn [`OutputElement`] for the reactor.
     ///
     /// On any failure the buffer's manager-side state may be inconsistent;
-    /// we propagate as `ProcessError::Internal` and rely on flow-level
-    /// cleanup (`Drop for HostState`) to reclaim leaks.
+    /// we propagate as `ProcessError::Internal` and rely on the reactor's
+    /// terminal-flow sweep (`reclaim_flow_buffers`, which walks the flow
+    /// index) to reclaim what is left behind.
     ///
     /// # HOT PATH — called per element produced by a source/processor.
     fn convert_output_element(
@@ -177,14 +178,18 @@ impl WasmtimeInvoker {
     /// [`StreamElement`]. The host inserts a `HostBuffer` entry into the
     /// per-store resource table on the spot, recording that the buffer is
     /// currently `Owned(Host)` and being borrowed for the duration of the
-    /// downstream call. The returned [`Resource<HostBuffer>`] is borrowed
-    /// (the host retains the table entry); the caller is responsible for
-    /// pairing this with `manager.borrow_start` / `borrow_end` calls in
-    /// future sessions that exercise process / push end-to-end.
+    /// downstream call. The handle handed to the guest is a *borrow*; the
+    /// host retains the owning table entry.
+    ///
+    /// Returns the marshalled element together with the `rep` of that
+    /// owning entry. The caller **must** pass the `rep` to
+    /// [`Self::reclaim_input_element`] once the guest call returns —
+    /// otherwise both the table entry and the underlying pool buffer leak,
+    /// once per element, for the lifetime of the flow.
     fn to_wit_stream_element(
         state: &mut HostState,
         element: &StreamElement,
-    ) -> wasmtime::Result<wit_types::StreamElement> {
+    ) -> wasmtime::Result<(wit_types::StreamElement, u32)> {
         let wrapper = HostBuffer {
             handle: element.payload,
             owner: OwnerId::Host,
@@ -194,15 +199,58 @@ impl WasmtimeInvoker {
             .push(wrapper)
             .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
         let rep = resource.rep();
-        Ok(wit_types::StreamElement {
-            meta: wit_types::ElementMeta {
-                sequence: element.meta.sequence,
-                timestamp_ns: element.meta.timestamp_ns,
-                content_type: element.meta.content_type.clone(),
+        Ok((
+            wit_types::StreamElement {
+                meta: wit_types::ElementMeta {
+                    sequence: element.meta.sequence,
+                    timestamp_ns: element.meta.timestamp_ns,
+                    content_type: element.meta.content_type.clone(),
+                },
+                payload: Resource::new_borrow(rep),
+                context: Self::borrow_flow_context(),
             },
-            payload: Resource::new_borrow(rep),
-            context: Self::borrow_flow_context(),
-        })
+            rep,
+        ))
+    }
+
+    /// Reclaim the input element handed to a `process` / `push` call.
+    ///
+    /// Deletes the owning `HostBuffer` entry that
+    /// [`Self::to_wit_stream_element`] pushed into the store's resource
+    /// table, then returns the underlying buffer to the pool. This is the
+    /// point at which a consumed element's memory is actually freed: the
+    /// guest received only a borrow, so no guest-side drop ever fires for
+    /// it, and the buffer is owned by the host rather than by any
+    /// component, so component-keyed cleanup cannot see it either.
+    ///
+    /// # Preconditions
+    /// The runtime delivers each element to exactly one consumer, so the
+    /// buffer is dead once the call returns. Broadcast fan-out — the same
+    /// buffer handed to several consumers — would need reference counting
+    /// before this is called.
+    ///
+    /// # HOT PATH — called once per element per stage.
+    fn reclaim_input_element(
+        state: &mut HostState,
+        input_rep: u32,
+        component_id: ComponentId,
+    ) -> Result<(), ProcessError> {
+        let entry: HostBuffer = state
+            .table
+            .delete(Resource::<HostBuffer>::new_own(input_rep))
+            .map_err(|e| {
+                ProcessError::Internal(format!(
+                    "Component {component_id}: input buffer resource missing at reclaim: {e}"
+                ))
+            })?;
+        state
+            .resources
+            .release(entry.handle, entry.owner)
+            .map_err(|e| {
+                ProcessError::Internal(format!(
+                    "Component {component_id}: input buffer release failed: {e}"
+                ))
+            })
     }
 }
 
@@ -256,8 +304,20 @@ impl ComponentInvoker for WasmtimeInvoker {
     ) -> Result<ProcessResult, ProcessError> {
         let state = Self::wasmtime_state(instance)?;
 
-        let wit_element = Self::to_wit_stream_element(state.store.data_mut(), &element)
-            .map_err(|e| ProcessError::Internal(format!("stream-element marshal: {e}")))?;
+        // Reject unsupported archetypes before marshalling, so no
+        // resource-table entry is created for a call that cannot be made.
+        if !matches!(
+            state.bindings,
+            Some(WitBindings::Transform(_)) | Some(WitBindings::ManagedTransform(_))
+        ) {
+            return Err(ProcessError::Internal(format!(
+                "Component {component_id} does not export `process`"
+            )));
+        }
+
+        let (wit_element, input_rep) =
+            Self::to_wit_stream_element(state.store.data_mut(), &element)
+                .map_err(|e| ProcessError::Internal(format!("stream-element marshal: {e}")))?;
 
         let outer = match &state.bindings {
             Some(WitBindings::Transform(b)) => {
@@ -270,14 +330,20 @@ impl ComponentInvoker for WasmtimeInvoker {
                     .call_process(&mut state.store, &wit_element)
                     .await
             }
-            _ => {
-                return Err(ProcessError::Internal(format!(
-                    "Component {component_id} does not export `process`"
-                )));
-            }
+            _ => unreachable!("archetype was checked before marshalling"),
         };
 
+        // The guest's borrow ends when the call returns, so reclaim the
+        // input on every path — a component error must not leak the
+        // element that caused it. Reclaim before interpreting the result,
+        // so a guest that returns the input's own `rep` as its "owned"
+        // output finds the entry already gone rather than double-freeing.
+        let reclaimed =
+            Self::reclaim_input_element(state.store.data_mut(), input_rep, component_id);
+
         let inner = outer.map_err(|e| Self::convert_wasm_error(e, component_id, "process"))?;
+        reclaimed?;
+
         match inner {
             Ok(wit_types::ProcessResult::Emit(out)) => {
                 let host_state = state.store.data_mut();
@@ -298,26 +364,37 @@ impl ComponentInvoker for WasmtimeInvoker {
     ) -> Result<BackpressureSignal, ProcessError> {
         let state = Self::wasmtime_state(instance)?;
 
-        let wit_element = Self::to_wit_stream_element(state.store.data_mut(), &element)
-            .map_err(|e| ProcessError::Internal(format!("stream-element marshal: {e}")))?;
+        // Reject unsupported archetypes before marshalling, so no
+        // resource-table entry is created for a call that cannot be made.
+        if !matches!(state.bindings, Some(WitBindings::DataSink(_))) {
+            return Err(ProcessError::Internal(format!(
+                "Component {component_id} is not a data-sink — `push` is not exported"
+            )));
+        }
 
-        let outer = {
-            let bindings = match &state.bindings {
-                Some(WitBindings::DataSink(b)) => b,
-                _ => {
-                    return Err(ProcessError::Internal(format!(
-                        "Component {component_id} is not a data-sink — `push` is not exported"
-                    )));
-                }
-            };
-            bindings
-                .torvyn_streaming_sink()
-                .call_push(&mut state.store, &wit_element)
-                .await
-                .map_err(|e| Self::convert_wasm_error(e, component_id, "push"))?
+        let (wit_element, input_rep) =
+            Self::to_wit_stream_element(state.store.data_mut(), &element)
+                .map_err(|e| ProcessError::Internal(format!("stream-element marshal: {e}")))?;
+
+        let outer = match &state.bindings {
+            Some(WitBindings::DataSink(b)) => {
+                b.torvyn_streaming_sink()
+                    .call_push(&mut state.store, &wit_element)
+                    .await
+            }
+            _ => unreachable!("archetype was checked before marshalling"),
         };
 
-        match outer {
+        // A sink is the end of the line: nothing downstream can observe the
+        // element, so this is where its buffer returns to the pool. Reclaim
+        // on both the success and failure paths.
+        let reclaimed =
+            Self::reclaim_input_element(state.store.data_mut(), input_rep, component_id);
+
+        let inner = outer.map_err(|e| Self::convert_wasm_error(e, component_id, "push"))?;
+        reclaimed?;
+
+        match inner {
             Ok(s) => Ok(Self::convert_backpressure_signal(s)),
             Err(e) => Err(Self::convert_wit_process_error(e)),
         }
@@ -565,13 +642,17 @@ mod tests {
             meta: ElementMeta::new(10, 2_000, "text/plain".into()),
             payload: handle,
         };
-        let wit_element =
+        let (wit_element, input_rep) =
             WasmtimeInvoker::to_wit_stream_element(&mut host_state, &element).expect("ok");
 
         assert_eq!(wit_element.meta.sequence, 10);
         assert_eq!(wit_element.meta.content_type, "text/plain");
         // The host pushed an entry into the per-store table for this call.
         let rep = wit_element.payload.rep();
+        assert_eq!(
+            rep, input_rep,
+            "the returned rep must identify the entry backing the guest's borrow"
+        );
         let entry = host_state
             .table
             .get(&wasmtime::component::Resource::<HostBuffer>::new_borrow(
@@ -580,5 +661,101 @@ mod tests {
             .expect("table entry exists");
         assert_eq!(entry.handle, handle, "BufferHandle preserved on insert");
         assert_eq!(entry.owner, OwnerId::Host, "host-owned for the borrow");
+    }
+
+    /// Marshalling an element pushes an owning entry into the per-store
+    /// resource table; reclaiming must remove it again. Without this the
+    /// table grows by one entry per element for the lifetime of the flow,
+    /// since the guest only ever receives a borrow and so never drops it.
+    #[tokio::test]
+    async fn test_reclaim_input_element_removes_table_entry_and_frees_buffer() {
+        use std::sync::Arc;
+        use torvyn_resources::DefaultResourceManager;
+        use torvyn_types::FlowId;
+
+        let resources = Arc::new(DefaultResourceManager::new_for_testing());
+        let cid = ComponentId::new(11);
+        let flow = FlowId::new(11);
+        resources.register_flow(flow);
+
+        let mut host_state = HostState::new(
+            cid,
+            wasmtime::StoreLimitsBuilder::new().build(),
+            1_000_000,
+            Arc::clone(&resources),
+            flow,
+            crate::host_state::deny_all_wasi_ctx(),
+        );
+
+        // A real host-owned buffer, as the reactor would hand to a stage.
+        let handle = resources
+            .allocate(OwnerId::Host, 64, flow)
+            .expect("allocation must succeed");
+        assert_eq!(resources.live_resource_count(), 1);
+
+        let element = StreamElement {
+            meta: ElementMeta::new(0, 0, "application/octet-stream".into()),
+            payload: handle,
+        };
+        let (_wit_element, input_rep) =
+            WasmtimeInvoker::to_wit_stream_element(&mut host_state, &element).expect("marshal");
+
+        WasmtimeInvoker::reclaim_input_element(&mut host_state, input_rep, cid)
+            .expect("reclaim must succeed for a host-owned buffer with no borrows");
+
+        assert!(
+            host_state
+                .table
+                .get(&wasmtime::component::Resource::<HostBuffer>::new_borrow(
+                    input_rep
+                ))
+                .is_err(),
+            "the per-invocation table entry must be gone",
+        );
+        assert_eq!(
+            resources.live_resource_count(),
+            0,
+            "the buffer must be returned to the pool",
+        );
+    }
+
+    /// Reclaiming twice must fail rather than double-free. This is the
+    /// guard against a guest that returns the `rep` of its own borrowed
+    /// input as an owned output.
+    #[tokio::test]
+    async fn test_reclaim_input_element_is_not_double_free() {
+        use std::sync::Arc;
+        use torvyn_resources::DefaultResourceManager;
+        use torvyn_types::FlowId;
+
+        let resources = Arc::new(DefaultResourceManager::new_for_testing());
+        let cid = ComponentId::new(12);
+        let flow = FlowId::new(12);
+        resources.register_flow(flow);
+
+        let mut host_state = HostState::new(
+            cid,
+            wasmtime::StoreLimitsBuilder::new().build(),
+            1_000_000,
+            Arc::clone(&resources),
+            flow,
+            crate::host_state::deny_all_wasi_ctx(),
+        );
+
+        let handle = resources
+            .allocate(OwnerId::Host, 64, flow)
+            .expect("allocation must succeed");
+        let element = StreamElement {
+            meta: ElementMeta::new(0, 0, String::new()),
+            payload: handle,
+        };
+        let (_wit_element, input_rep) =
+            WasmtimeInvoker::to_wit_stream_element(&mut host_state, &element).expect("marshal");
+
+        WasmtimeInvoker::reclaim_input_element(&mut host_state, input_rep, cid).expect("first");
+        let second = WasmtimeInvoker::reclaim_input_element(&mut host_state, input_rep, cid);
+
+        assert!(second.is_err(), "second reclaim must be rejected");
+        assert_eq!(resources.live_resource_count(), 0);
     }
 }
