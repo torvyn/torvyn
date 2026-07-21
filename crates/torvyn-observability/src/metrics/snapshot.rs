@@ -23,6 +23,8 @@ pub struct FlowMetricsSnapshot {
     pub copy_bytes_total: u64,
     /// Latency p50 in nanoseconds.
     pub latency_p50_ns: u64,
+    /// Latency p90 in nanoseconds.
+    pub latency_p90_ns: u64,
     /// Latency p95 in nanoseconds.
     pub latency_p95_ns: u64,
     /// Latency p99 in nanoseconds.
@@ -129,6 +131,7 @@ pub fn snapshot_flow(metrics: &FlowMetrics) -> FlowMetricsSnapshot {
         copies_total: metrics.copies_total.read(),
         copy_bytes_total: metrics.copy_bytes_total.read(),
         latency_p50_ns: latency_snap.percentile(50.0),
+        latency_p90_ns: latency_snap.percentile(90.0),
         latency_p95_ns: latency_snap.percentile(95.0),
         latency_p99_ns: latency_snap.percentile(99.0),
         latency_p999_ns: latency_snap.percentile(99.9),
@@ -152,6 +155,7 @@ pub fn delta(start: &FlowMetricsSnapshot, end: &FlowMetricsSnapshot) -> FlowMetr
         copy_bytes_total: end.copy_bytes_total.saturating_sub(start.copy_bytes_total),
         // Percentiles are from the end snapshot (not delta-able).
         latency_p50_ns: end.latency_p50_ns,
+        latency_p90_ns: end.latency_p90_ns,
         latency_p95_ns: end.latency_p95_ns,
         latency_p99_ns: end.latency_p99_ns,
         latency_p999_ns: end.latency_p999_ns,
@@ -202,6 +206,11 @@ mod tests {
         let snap = snapshot_flow(&fm);
         assert_eq!(snap.elements_total, 100);
         assert_eq!(snap.errors_total, 3);
+        // The flow-level latency percentiles (including p90) reflect the
+        // single recorded sample.
+        assert!(snap.latency_p50_ns > 0);
+        assert_eq!(snap.latency_p50_ns, snap.latency_p90_ns);
+        assert_eq!(snap.latency_p90_ns, snap.latency_p95_ns);
     }
 
     #[test]

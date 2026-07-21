@@ -529,6 +529,22 @@ async fn test_host_run_single_flow_pattern_reports_real_metrics() {
         2,
         "edge_count in the summary comes from the recorded stream connections",
     );
+
+    // End-to-end latency is recorded at the sink from each element's
+    // pipeline-entry timestamp (preserved across the processor), so the
+    // flow-level latency percentiles `torvyn bench` reports are populated and
+    // monotonically ordered — not a dead metric.
+    assert!(
+        snapshot.latency_p50_ns > 0,
+        "end-to-end latency must be recorded (was a dead metric before)",
+    );
+    // Percentiles from the same histogram are monotonically non-decreasing.
+    // (Percentile-vs-max is not asserted: bucketed percentiles are boundary
+    // estimates that can exceed the true max for small sample counts.)
+    assert!(snapshot.latency_p50_ns <= snapshot.latency_p90_ns);
+    assert!(snapshot.latency_p90_ns <= snapshot.latency_p95_ns);
+    assert!(snapshot.latency_p95_ns <= snapshot.latency_p99_ns);
+    assert!(snapshot.latency_max_ns > 0, "max latency must be recorded");
 }
 
 /// **Test G** — the ownership invariant: after a real Source → Processor

@@ -41,6 +41,7 @@ torvyn-config.workspace = true
 torvyn-contracts.workspace = true
 torvyn-engine.workspace = true
 torvyn-host.workspace = true
+torvyn-observability.workspace = true
 torvyn-packaging.workspace = true
 torvyn-linker.workspace = true
 

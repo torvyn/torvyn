@@ -3050,6 +3050,7 @@ dependencies = [
  "torvyn-engine",
  "torvyn-host",
  "torvyn-linker",
+ "torvyn-observability",
  "torvyn-packaging",
  "torvyn-types",
 ]

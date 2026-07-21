@@ -481,6 +481,10 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
 
         replenish_demand(&mut self.streams[input_si]);
 
+        // Carry the element's pipeline-entry timestamp forward so end-to-end
+        // latency is measured from the source, not re-stamped at each stage.
+        let origin_timestamp_ns = elem_ref.meta.timestamp_ns;
+
         let stream_element = StreamElement {
             meta: elem_ref.meta,
             payload: elem_ref.buffer_handle,
@@ -511,11 +515,7 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
                     let out_ref = StreamElementRef {
                         sequence: seq,
                         buffer_handle: output.payload,
-                        meta: ElementMeta::new(
-                            seq,
-                            torvyn_types::current_timestamp_ns(),
-                            output.meta.content_type,
-                        ),
+                        meta: ElementMeta::new(seq, origin_timestamp_ns, output.meta.content_type),
                         enqueued_at: Instant::now(),
                     };
                     let stream = &mut self.streams[si];
@@ -540,7 +540,7 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
                             buffer_handle: output.payload,
                             meta: ElementMeta::new(
                                 seq,
-                                torvyn_types::current_timestamp_ns(),
+                                origin_timestamp_ns,
                                 output.meta.content_type,
                             ),
                             enqueued_at: Instant::now(),
@@ -579,6 +579,9 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
 
         replenish_demand(&mut self.streams[input_si]);
 
+        // The element's pipeline-entry timestamp, for end-to-end latency below.
+        let origin_timestamp_ns = elem_ref.meta.timestamp_ns;
+
         let stream_element = StreamElement {
             meta: elem_ref.meta,
             payload: elem_ref.buffer_handle,
@@ -598,6 +601,12 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
             component: component_id,
             error: e,
         })?;
+
+        // The element has now completed its full journey (source → sink):
+        // record its end-to-end latency from the pipeline-entry timestamp.
+        let latency_ns = torvyn_types::current_timestamp_ns().saturating_sub(origin_timestamp_ns);
+        self.event_sink
+            .record_flow_latency(self.flow_id, latency_ns);
 
         // Backpressure signal from sink is handled by the check_backpressure_all
         // method which runs after every stage execution.

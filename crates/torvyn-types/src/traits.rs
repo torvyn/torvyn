@@ -86,6 +86,18 @@ pub trait EventSink: Send + Sync + 'static {
         reason: CopyReason,
     );
 
+    /// Record an element's end-to-end latency through the flow.
+    ///
+    /// Called by the reactor when a sink consumes an element, measured from the
+    /// element's pipeline-entry timestamp (set at the source) to its
+    /// consumption at the sink. Unlike per-component processing time, this is
+    /// the full journey — queueing plus every stage. The default is a no-op.
+    ///
+    /// # HOT PATH — called once per element delivered to a sink.
+    fn record_flow_latency(&self, flow_id: FlowId, latency_ns: u64) {
+        let _ = (flow_id, latency_ns);
+    }
+
     /// Returns the current observability level.
     ///
     /// Hot-path callers can skip expensive recording at lower levels.
@@ -180,6 +192,11 @@ impl<E: EventSink> EventSink for Arc<E> {
             copy_bytes,
             reason,
         );
+    }
+
+    #[inline]
+    fn record_flow_latency(&self, flow_id: FlowId, latency_ns: u64) {
+        (**self).record_flow_latency(flow_id, latency_ns);
     }
 
     #[inline]

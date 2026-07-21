@@ -12,6 +12,10 @@ use crate::output::{CommandResult, HumanRenderable, OutputContext};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::time::Instant;
+use torvyn_observability::FlowMetricsSnapshot;
+
+/// Default stream queue capacity (the runtime's `StreamConfig` default).
+const DEFAULT_QUEUE_CAPACITY: u64 = 64;
 
 /// Complete benchmark report.
 #[derive(Debug, Serialize)]
@@ -263,8 +267,8 @@ pub async fn execute(
             context: None,
         })?;
 
-    // Start flow
-    let _flow_id = host
+    // Start the flow.
+    let flow_id = host
         .start_flow(&flow_name)
         .await
         .map_err(|e| CliError::Runtime {
@@ -272,50 +276,35 @@ pub async fn execute(
             context: Some(flow_name.clone()),
         })?;
 
-    // Warmup phase
+    // Warmup phase — let the pipeline reach steady state, then snapshot so the
+    // measurement excludes warmup.
     tokio::time::sleep(warmup_dur).await;
+    let warmup_snapshot = host.observability().snapshot(flow_id);
 
-    // Measurement phase
+    // Measurement phase.
     let bench_start = Instant::now();
     tokio::time::sleep(bench_dur).await;
     let bench_elapsed = bench_start.elapsed();
+    let end_snapshot = host.observability().snapshot(flow_id);
 
-    // Shutdown
+    // Shutdown.
     host.shutdown().await.ok();
 
-    let elapsed_secs = bench_elapsed.as_secs_f64();
-
-    // Placeholder metrics — real data will come from host inspection APIs
-    let report = BenchReport {
-        flow_name: flow_name.clone(),
-        warmup_secs: warmup_dur.as_secs_f64(),
-        measurement_secs: elapsed_secs,
-        throughput: ThroughputReport {
-            elements_per_sec: 0.0,
-            bytes_per_sec: 0.0,
-        },
-        latency: LatencyReport {
-            p50_us: 0.0,
-            p90_us: 0.0,
-            p95_us: 0.0,
-            p99_us: 0.0,
-            p999_us: 0.0,
-            max_us: 0.0,
-        },
-        per_component: vec![],
-        resources: ResourceReport {
-            buffer_allocs: 0,
-            pool_reuse_pct: 0.0,
-            total_copies: 0,
-            peak_memory_bytes: 0,
-        },
-        scheduling: SchedulingReport {
-            total_wakeups: 0,
-            backpressure_events: 0,
-            queue_peak: 0,
-            queue_capacity: 64,
-        },
-        saved_to: None,
+    // Build the report from the metrics recorded over the measurement window.
+    // Counters (elements, copies, bytes) are the delta after warmup; latency
+    // percentiles and peaks come from the end snapshot.
+    let report = match (warmup_snapshot, end_snapshot) {
+        (Some(start_snap), Some(end_snap)) => build_bench_report(
+            flow_name.clone(),
+            warmup_dur.as_secs_f64(),
+            bench_elapsed.as_secs_f64(),
+            &torvyn_observability::metrics::delta(&start_snap, &end_snap),
+        ),
+        _ => empty_bench_report(
+            flow_name.clone(),
+            warmup_dur.as_secs_f64(),
+            bench_elapsed.as_secs_f64(),
+        ),
     };
 
     // Save report to .torvyn/bench/
@@ -345,4 +334,235 @@ pub async fn execute(
         data: final_report,
         warnings: vec![],
     })
+}
+
+/// Assemble a benchmark report from the metrics recorded over the measurement
+/// window.
+///
+/// `measured` is the delta between the post-warmup and end snapshots: counters
+/// (elements, copies, bytes) are windowed to exclude warmup, while latency
+/// percentiles, per-component stats, and stream peaks are carried from the end
+/// snapshot.
+///
+/// COLD PATH — called once when a benchmark finishes.
+fn build_bench_report(
+    flow_name: String,
+    warmup_secs: f64,
+    measurement_secs: f64,
+    measured: &FlowMetricsSnapshot,
+) -> BenchReport {
+    let per_sec = |n: u64| {
+        if measurement_secs > 0.0 {
+            n as f64 / measurement_secs
+        } else {
+            0.0
+        }
+    };
+    let ns_to_us = |ns: u64| ns as f64 / 1_000.0;
+
+    let per_component = measured
+        .components
+        .iter()
+        .map(|c| ComponentBenchRow {
+            component: format!("component {}", c.component_id.as_u64()),
+            p50_us: ns_to_us(c.processing_time_p50_ns),
+            p99_us: ns_to_us(c.processing_time_p99_ns),
+        })
+        .collect();
+
+    let peak_memory_bytes = measured
+        .components
+        .iter()
+        .map(|c| c.memory_peak)
+        .max()
+        .unwrap_or(0);
+    let backpressure_events: u64 = measured.streams.iter().map(|s| s.backpressure_events).sum();
+    let queue_peak = measured
+        .streams
+        .iter()
+        .map(|s| s.queue_depth_peak)
+        .max()
+        .unwrap_or(0);
+
+    BenchReport {
+        flow_name,
+        warmup_secs,
+        measurement_secs,
+        throughput: ThroughputReport {
+            elements_per_sec: per_sec(measured.elements_total),
+            bytes_per_sec: per_sec(measured.copy_bytes_total),
+        },
+        latency: LatencyReport {
+            p50_us: ns_to_us(measured.latency_p50_ns),
+            p90_us: ns_to_us(measured.latency_p90_ns),
+            p95_us: ns_to_us(measured.latency_p95_ns),
+            p99_us: ns_to_us(measured.latency_p99_ns),
+            p999_us: ns_to_us(measured.latency_p999_ns),
+            max_us: ns_to_us(measured.latency_max_ns),
+        },
+        per_component,
+        resources: ResourceReport {
+            // Buffer-pool allocation and reuse counters are not yet surfaced by
+            // the resource manager; reported as 0 until that inspection lands.
+            buffer_allocs: 0,
+            pool_reuse_pct: 0.0,
+            total_copies: measured.copies_total,
+            peak_memory_bytes,
+        },
+        scheduling: SchedulingReport {
+            // Scheduler wakeup counts are not yet surfaced by the reactor.
+            total_wakeups: 0,
+            backpressure_events,
+            queue_peak,
+            queue_capacity: DEFAULT_QUEUE_CAPACITY,
+        },
+        saved_to: None,
+    }
+}
+
+/// A zero-valued report, used only when no metrics snapshot is available (for
+/// example if the flow failed to register). COLD PATH.
+fn empty_bench_report(flow_name: String, warmup_secs: f64, measurement_secs: f64) -> BenchReport {
+    BenchReport {
+        flow_name,
+        warmup_secs,
+        measurement_secs,
+        throughput: ThroughputReport {
+            elements_per_sec: 0.0,
+            bytes_per_sec: 0.0,
+        },
+        latency: LatencyReport {
+            p50_us: 0.0,
+            p90_us: 0.0,
+            p95_us: 0.0,
+            p99_us: 0.0,
+            p999_us: 0.0,
+            max_us: 0.0,
+        },
+        per_component: vec![],
+        resources: ResourceReport {
+            buffer_allocs: 0,
+            pool_reuse_pct: 0.0,
+            total_copies: 0,
+            peak_memory_bytes: 0,
+        },
+        scheduling: SchedulingReport {
+            total_wakeups: 0,
+            backpressure_events: 0,
+            queue_peak: 0,
+            queue_capacity: DEFAULT_QUEUE_CAPACITY,
+        },
+        saved_to: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use torvyn_observability::metrics::{ComponentMetricsSnapshot, StreamMetricsSnapshot};
+    use torvyn_types::{ComponentId, FlowId, StreamId};
+
+    /// A `measured` snapshot (a delta) with distinctive values in every field
+    /// the report maps.
+    fn sample_measured() -> FlowMetricsSnapshot {
+        let component = |id: u64, p50: u64, p99: u64, mem_peak: u64| ComponentMetricsSnapshot {
+            component_id: ComponentId::new(id),
+            invocations: 10,
+            errors: 0,
+            processing_time_p50_ns: p50,
+            processing_time_p95_ns: p50,
+            processing_time_p99_ns: p99,
+            processing_time_mean_ns: p50 as f64,
+            fuel_consumed: 0,
+            memory_current: 0,
+            memory_peak: mem_peak,
+        };
+        let stream = |id: u64, bp: u64, peak: u64| StreamMetricsSnapshot {
+            stream_id: StreamId::new(id),
+            elements: 100,
+            queue_depth: 0,
+            queue_depth_peak: peak,
+            backpressure_events: bp,
+            backpressure_duration_ns: 0,
+        };
+        FlowMetricsSnapshot {
+            flow_id: FlowId::new(1),
+            elements_total: 200,
+            errors_total: 0,
+            copies_total: 800,
+            copy_bytes_total: 1_600,
+            latency_p50_ns: 1_000,
+            latency_p90_ns: 2_000,
+            latency_p95_ns: 3_000,
+            latency_p99_ns: 4_000,
+            latency_p999_ns: 5_000,
+            latency_min_ns: 500,
+            latency_max_ns: 6_000,
+            latency_mean_ns: 1_500.0,
+            components: vec![
+                component(1, 500, 1_500, 1_000),
+                component(2, 700, 1_700, 2_000),
+            ],
+            streams: vec![stream(0, 3, 10), stream(1, 2, 20)],
+        }
+    }
+
+    #[test]
+    fn test_build_bench_report_maps_all_metrics() {
+        let measured = sample_measured();
+        let report = build_bench_report("bench-flow".into(), 2.0, 2.0, &measured);
+
+        // Throughput: counters over a 2s window.
+        assert_eq!(report.throughput.elements_per_sec, 100.0); // 200 / 2s
+        assert_eq!(report.throughput.bytes_per_sec, 800.0); // 1600 / 2s
+
+        // Flow-level latency: ns -> µs.
+        assert_eq!(report.latency.p50_us, 1.0);
+        assert_eq!(report.latency.p90_us, 2.0);
+        assert_eq!(report.latency.p95_us, 3.0);
+        assert_eq!(report.latency.p99_us, 4.0);
+        assert_eq!(report.latency.p999_us, 5.0);
+        assert_eq!(report.latency.max_us, 6.0);
+
+        // Per-component rows, in order, with processing-time percentiles.
+        assert_eq!(report.per_component.len(), 2);
+        assert_eq!(report.per_component[0].component, "component 1");
+        assert_eq!(report.per_component[0].p50_us, 0.5);
+        assert_eq!(report.per_component[0].p99_us, 1.5);
+        assert_eq!(report.per_component[1].component, "component 2");
+
+        // Resources: copies over the window; peak memory is the max across stages.
+        assert_eq!(report.resources.total_copies, 800);
+        assert_eq!(report.resources.peak_memory_bytes, 2_000);
+        // Genuinely-untracked fields stay zero (never fabricated).
+        assert_eq!(report.resources.buffer_allocs, 0);
+        assert_eq!(report.resources.pool_reuse_pct, 0.0);
+
+        // Scheduling: backpressure summed, queue peak maxed.
+        assert_eq!(report.scheduling.backpressure_events, 5); // 3 + 2
+        assert_eq!(report.scheduling.queue_peak, 20); // max(10, 20)
+        assert_eq!(report.scheduling.queue_capacity, DEFAULT_QUEUE_CAPACITY);
+        assert_eq!(report.scheduling.total_wakeups, 0);
+    }
+
+    #[test]
+    fn test_build_bench_report_zero_duration_is_safe() {
+        let measured = sample_measured();
+        let report = build_bench_report("bench-flow".into(), 0.0, 0.0, &measured);
+        // No division by zero — throughput collapses to 0.
+        assert_eq!(report.throughput.elements_per_sec, 0.0);
+        assert_eq!(report.throughput.bytes_per_sec, 0.0);
+        // Latency percentiles are still reported (they are not rate-based).
+        assert_eq!(report.latency.p50_us, 1.0);
+    }
+
+    #[test]
+    fn test_empty_bench_report_is_all_zero() {
+        let report = empty_bench_report("f".into(), 1.0, 5.0);
+        assert_eq!(report.throughput.elements_per_sec, 0.0);
+        assert_eq!(report.latency.p99_us, 0.0);
+        assert!(report.per_component.is_empty());
+        assert_eq!(report.resources.total_copies, 0);
+        assert_eq!(report.scheduling.queue_capacity, DEFAULT_QUEUE_CAPACITY);
+    }
 }

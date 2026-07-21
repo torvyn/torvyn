@@ -320,6 +320,19 @@ impl EventSink for ObservabilityCollector {
 
     /// # HOT PATH
     #[inline]
+    fn record_flow_latency(&self, flow_id: FlowId, latency_ns: u64) {
+        let level = self.current_level();
+        if !level.is_enabled() {
+            return;
+        }
+
+        if let Some(flow_metrics) = self.metrics.get_flow(flow_id) {
+            flow_metrics.end_to_end_latency.record(latency_ns);
+        }
+    }
+
+    /// # HOT PATH
+    #[inline]
     fn level(&self) -> ObservabilityLevel {
         self.current_level()
     }
@@ -522,6 +535,53 @@ mod tests {
         assert_eq!(snap.elements_total, 1);
         assert_eq!(snap.copies_total, 1);
         assert_eq!(snap.copy_bytes_total, 1024);
+    }
+
+    #[test]
+    fn test_record_flow_latency_populates_end_to_end_histogram() {
+        let collector = ObservabilityCollector::new_for_testing(test_config());
+        collector
+            .register_flow(FlowId::new(1), &[ComponentId::new(1)], &[StreamId::new(1)])
+            .unwrap();
+
+        // Before any latency is recorded, the histogram is empty.
+        assert_eq!(
+            collector.snapshot(FlowId::new(1)).unwrap().latency_p50_ns,
+            0
+        );
+
+        // Record a spread of end-to-end latencies (1µs .. 1000µs).
+        for i in 1..=1000u64 {
+            collector.record_flow_latency(FlowId::new(1), i * 1_000);
+        }
+
+        let snap = collector.snapshot(FlowId::new(1)).unwrap();
+        // Percentiles are now populated and monotonically non-decreasing,
+        // including the newly added p90. (Percentile-vs-max is not asserted:
+        // bucketed percentiles are boundary estimates, not raw values.)
+        assert!(snap.latency_p50_ns > 0, "p50 must be populated");
+        assert!(snap.latency_p50_ns <= snap.latency_p90_ns);
+        assert!(snap.latency_p90_ns <= snap.latency_p95_ns);
+        assert!(snap.latency_p95_ns <= snap.latency_p99_ns);
+        assert!(snap.latency_p99_ns <= snap.latency_p999_ns);
+        assert!(snap.latency_max_ns > 0, "max must be populated");
+    }
+
+    #[test]
+    fn test_record_flow_latency_skipped_when_level_off() {
+        let mut config = test_config();
+        config.level = ObservabilityLevel::Off;
+        let collector = ObservabilityCollector::new_for_testing(config);
+        collector
+            .register_flow(FlowId::new(1), &[ComponentId::new(1)], &[StreamId::new(1)])
+            .unwrap();
+
+        collector.record_flow_latency(FlowId::new(1), 5_000);
+
+        assert_eq!(
+            collector.snapshot(FlowId::new(1)).unwrap().latency_p50_ns,
+            0
+        );
     }
 
     #[test]
