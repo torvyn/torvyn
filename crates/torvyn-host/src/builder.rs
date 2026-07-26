@@ -406,15 +406,32 @@ impl Default for HostBuilder {
 fn observability_collector_config(
     cfg: &ObservabilityConfig,
 ) -> torvyn_observability::ObservabilityConfig {
+    use torvyn_observability::config::{ExportConfig, ExportTarget};
+
     let level = if cfg.tracing_enabled || cfg.metrics_enabled {
         ObservabilityLevel::Production
     } else {
         ObservabilityLevel::Off
     };
 
+    // Map the user-facing `metrics_exporter` to a collector export target.
+    // `stdout`/`file` write newline-delimited JSON metrics; `otlp` is
+    // recognized but not yet transmitting; everything else disables export.
+    let target = match cfg.metrics_exporter.as_str() {
+        "stdout" => ExportTarget::Stdout,
+        "file" => ExportTarget::File(PathBuf::from(&cfg.metrics_endpoint)),
+        "otlp" => ExportTarget::OtlpHttp,
+        _ => ExportTarget::None,
+    };
+
+    let base = torvyn_observability::ObservabilityConfig::default();
     torvyn_observability::ObservabilityConfig {
         level,
-        ..Default::default()
+        export: ExportConfig {
+            target,
+            ..base.export
+        },
+        ..base
     }
 }
 
@@ -473,6 +490,38 @@ mod tests {
         // `ObservabilityCollector::new` cannot fail during host startup.
         let mapped = observability_collector_config(&ObservabilityConfig::default());
         assert!(mapped.validate().is_ok());
+    }
+
+    #[test]
+    fn test_metrics_exporter_maps_to_export_target() {
+        use torvyn_observability::config::ExportTarget;
+
+        let with_exporter = |exporter: &str, endpoint: &str| {
+            observability_collector_config(&ObservabilityConfig {
+                metrics_exporter: exporter.to_owned(),
+                metrics_endpoint: endpoint.to_owned(),
+                ..ObservabilityConfig::default()
+            })
+            .export
+            .target
+        };
+
+        // Default config (metrics_exporter = "none") disables export.
+        assert_eq!(
+            observability_collector_config(&ObservabilityConfig::default())
+                .export
+                .target,
+            ExportTarget::None,
+        );
+        assert_eq!(with_exporter("stdout", ""), ExportTarget::Stdout);
+        assert_eq!(
+            with_exporter("file", "/tmp/torvyn-metrics.ndjson"),
+            ExportTarget::File(std::path::PathBuf::from("/tmp/torvyn-metrics.ndjson")),
+        );
+        assert_eq!(with_exporter("otlp", ""), ExportTarget::OtlpHttp);
+        // Unsupported / unknown values disable export rather than erroring.
+        assert_eq!(with_exporter("prometheus", ""), ExportTarget::None);
+        assert_eq!(with_exporter("bogus", ""), ExportTarget::None);
     }
 
     #[test]

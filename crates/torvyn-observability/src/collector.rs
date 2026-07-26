@@ -11,8 +11,11 @@ use torvyn_types::{
     StreamId,
 };
 
-use crate::config::ObservabilityConfig;
+use tokio::sync::mpsc;
+
+use crate::config::{ExportTarget, ObservabilityConfig};
 use crate::events::{event_channel, DiagnosticEvent, EventBuffer, EventSender};
+use crate::export::json::{metrics_export_task, JsonTarget};
 use crate::metrics::flow_metrics::FlowMetrics;
 use crate::metrics::registry::MetricsRegistry;
 use crate::metrics::snapshot::{snapshot_flow, FlowMetricsSnapshot};
@@ -45,13 +48,18 @@ pub struct ObservabilityCollector {
     sampler: Sampler,
     /// Configuration.
     config: ObservabilityConfig,
+    /// Held to keep the periodic metrics export task running; dropping it (on
+    /// collector teardown) closes the task's stop channel and the task exits.
+    /// `None` when export is disabled or targets a not-yet-wired transport.
+    _export_stop: Option<mpsc::Sender<()>>,
 }
 
 impl ObservabilityCollector {
     /// Create a new collector with the given configuration.
     ///
-    /// Does NOT start background tasks. Export processing is configured
-    /// separately via the export module.
+    /// Spawns the background event recorder and, when the configured export
+    /// target is `Stdout` or `File`, the periodic metrics exporter. Must be
+    /// called from within a Tokio runtime.
     ///
     /// # COLD PATH — called once at runtime startup.
     ///
@@ -76,6 +84,34 @@ impl ObservabilityCollector {
             None,
         ));
 
+        // Spawn the periodic metrics exporter for the self-contained JSON
+        // targets (stdout / file). `interval` is validated to be non-zero
+        // above. OTLP-over-HTTP and channel targets are not yet wired.
+        let export_stop = match &config.export.target {
+            ExportTarget::Stdout | ExportTarget::File(_) => {
+                let json_target = match &config.export.target {
+                    ExportTarget::File(path) => JsonTarget::File(path.clone()),
+                    _ => JsonTarget::Stderr,
+                };
+                let (stop_tx, stop_rx) = mpsc::channel(1);
+                tokio::spawn(metrics_export_task(
+                    Arc::clone(&metrics),
+                    json_target,
+                    config.export.interval,
+                    stop_rx,
+                ));
+                Some(stop_tx)
+            }
+            ExportTarget::OtlpHttp => {
+                tracing::warn!(
+                    "observability: OTLP export is configured but not yet implemented; \
+                     no metrics will be exported"
+                );
+                None
+            }
+            ExportTarget::None | ExportTarget::Channel => None,
+        };
+
         Ok(Self {
             level,
             metrics,
@@ -83,6 +119,7 @@ impl ObservabilityCollector {
             event_buffer,
             sampler,
             config,
+            _export_stop: export_stop,
         })
     }
 
@@ -103,6 +140,7 @@ impl ObservabilityCollector {
             event_buffer,
             sampler,
             config,
+            _export_stop: None,
         }
     }
 
@@ -465,6 +503,45 @@ mod tests {
     fn test_collector_creation() {
         let collector = ObservabilityCollector::new_for_testing(test_config());
         assert_eq!(collector.current_level(), ObservabilityLevel::Production);
+    }
+
+    #[tokio::test]
+    async fn test_new_exports_metrics_to_file_target() {
+        let path = std::env::temp_dir().join(format!(
+            "torvyn_collector_export_{}.ndjson",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        // Configure a file export target on a short interval, then build a real
+        // collector (which spawns the periodic exporter).
+        let mut config = test_config();
+        config.export.target = ExportTarget::File(path.clone());
+        config.export.interval = std::time::Duration::from_millis(20);
+        let collector = ObservabilityCollector::new(config).unwrap();
+
+        // Register a flow and record an invocation through the collector.
+        collector
+            .register_flow(FlowId::new(1), &[ComponentId::new(1)], &[StreamId::new(0)])
+            .unwrap();
+        collector.record_invocation(
+            FlowId::new(1),
+            ComponentId::new(1),
+            0,
+            1_000,
+            InvocationStatus::Ok,
+        );
+
+        // Let the exporter run, then tear the collector down (stops the task).
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        drop(collector);
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            contents.contains("\"elements_total\":1"),
+            "the collector must export the flow's recorded metrics; got: {contents}",
+        );
     }
 
     #[test]

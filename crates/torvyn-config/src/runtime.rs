@@ -224,12 +224,21 @@ pub struct ObservabilityConfig {
     pub metrics_enabled: bool,
 
     /// Metrics exporter backend.
-    /// Valid values: `"prometheus"`, `"otlp"`, `"none"`.
+    ///
+    /// Valid values:
+    /// - `"stdout"` — periodic newline-delimited JSON metrics to stderr.
+    /// - `"file"` — periodic newline-delimited JSON metrics to the file at
+    ///   [`metrics_endpoint`](Self::metrics_endpoint).
+    /// - `"otlp"` — recognized but not yet transmitting (logs a warning; no
+    ///   metrics are exported).
+    /// - `"prometheus"`, `"none"`, or any other value — export disabled.
+    ///
     /// Default: `"none"`.
     #[serde(default = "default_metrics_exporter")]
     pub metrics_exporter: String,
 
-    /// Metrics endpoint (for prometheus scrape or OTLP push).
+    /// Metrics endpoint. For `metrics_exporter = "file"` this is the export
+    /// file path; for OTLP/prometheus it is the push/scrape endpoint.
     /// Default: `"0.0.0.0:9090"`.
     #[serde(default = "default_metrics_endpoint")]
     pub metrics_endpoint: String,

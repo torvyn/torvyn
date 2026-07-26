@@ -146,6 +146,17 @@ impl MetricsRegistry {
         flows.keys().copied().collect()
     }
 
+    /// Snapshot every active flow's metrics.
+    ///
+    /// # COLD PATH — used by the periodic metrics exporter.
+    pub fn snapshot_all(&self) -> Vec<super::snapshot::FlowMetricsSnapshot> {
+        let flows = self.flows.read().unwrap_or_else(|e| e.into_inner());
+        flows
+            .values()
+            .map(|fm| super::snapshot::snapshot_flow(fm))
+            .collect()
+    }
+
     /// Register a pool for metrics tracking.
     ///
     /// # COLD PATH
@@ -216,6 +227,37 @@ mod tests {
 
         let retrieved = reg.get_flow(flow_id).unwrap();
         assert_eq!(retrieved.flow_id, flow_id);
+    }
+
+    #[test]
+    fn test_snapshot_all_covers_every_active_flow() {
+        let reg = MetricsRegistry::new();
+        assert!(reg.snapshot_all().is_empty(), "no flows -> no snapshots");
+
+        let f1 = reg
+            .register_flow(
+                FlowId::new(1),
+                &[ComponentId::new(1)],
+                &[StreamId::new(0)],
+                0,
+            )
+            .unwrap();
+        f1.elements_total.increment(10);
+        reg.register_flow(
+            FlowId::new(2),
+            &[ComponentId::new(1)],
+            &[StreamId::new(0)],
+            0,
+        )
+        .unwrap();
+
+        let mut snaps = reg.snapshot_all();
+        assert_eq!(snaps.len(), 2, "one snapshot per active flow");
+        snaps.sort_by_key(|s| s.flow_id.as_u64());
+        assert_eq!(snaps[0].flow_id, FlowId::new(1));
+        assert_eq!(snaps[0].elements_total, 10);
+        assert_eq!(snaps[1].flow_id, FlowId::new(2));
+        assert_eq!(snaps[1].elements_total, 0);
     }
 
     #[test]
