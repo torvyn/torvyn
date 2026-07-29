@@ -204,10 +204,20 @@ impl WasmtimeEngine {
                 reason,
             })?;
 
+        // The store carries its own per-invocation fuel budget so the invoker
+        // can refuel before every guest call. Zero means "fuel budgeting is
+        // disabled for this store", which is the only state in which
+        // `Store::set_fuel` would fail (the engine's `consume_fuel` is off).
+        let fuel_budget = if self.config.fuel_enabled {
+            self.config.default_fuel
+        } else {
+            0
+        };
+
         let host_state = HostState::new(
             component_id,
             limits,
-            self.config.default_fuel,
+            fuel_budget,
             Arc::clone(&self.resources),
             flow_id,
             wasi_ctx,

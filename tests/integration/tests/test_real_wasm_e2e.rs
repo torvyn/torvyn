@@ -141,6 +141,60 @@ async fn test_real_source_to_sink_one_hundred_elements_completes() {
     }
 }
 
+/// **Regression** — a long-running pipeline must keep processing after a
+/// component's *cumulative* fuel consumption exceeds `default_fuel`.
+///
+/// `default_fuel` is documented as a budget **per invocation**, but Wasmtime
+/// never replenishes fuel on its own (its async yield interval yields without
+/// adding fuel). Before the invoker refuelled each guest call, the initial
+/// allocation therefore acted as a per-*lifetime* cap: this very pipeline
+/// delivered only ~1,600 of its elements and then died with `Trap::OutOfFuel`,
+/// silently dropping the rest. The element count here is deliberately an order
+/// of magnitude past that cliff, so a regression fails loudly.
+#[tokio::test]
+async fn test_long_running_pipeline_survives_cumulative_fuel_use() {
+    const ELEMENT_COUNT: u64 = 20_000;
+
+    let pushed = Arc::new(Mutex::new(Vec::<u64>::new()));
+    let invoker: Arc<RecordingInvoker> = Arc::new(RecordingInvoker::new(
+        SINK_COMPONENT_ID,
+        Arc::clone(&pushed),
+    ));
+
+    let engine = WasmtimeEngine::new(WasmtimeEngineConfig::default())
+        .expect("WasmtimeEngine must initialise");
+
+    let topology = build_pipeline_topology(
+        "e2e-long-running-fuel",
+        Some(format!("{{\"count\":{ELEMENT_COUNT}}}")),
+    );
+
+    let (reactor, _coordinator_join) =
+        spawn_real_coordinator(Arc::clone(&invoker), engine.resource_manager());
+
+    let handle = instantiate_pipeline(&topology, &engine, &invoker, &reactor)
+        .await
+        .expect("instantiate_pipeline must succeed");
+
+    let final_state =
+        await_flow_terminal(&reactor, handle.flow_id(), Duration::from_secs(120)).await;
+    assert_eq!(
+        final_state,
+        FlowState::Completed,
+        "the long-running flow must drain cleanly; got {final_state:?}",
+    );
+
+    // The real regression signal: every element reaches the sink. Fuel
+    // exhaustion manifests as a partial delivery, not an error here.
+    wait_for_sink_count(&pushed, ELEMENT_COUNT, Duration::from_secs(30)).await;
+    let delivered = pushed.lock().expect("pushed mutex").len() as u64;
+    assert_eq!(
+        delivered, ELEMENT_COUNT,
+        "sink received {delivered} of {ELEMENT_COUNT} elements; a shortfall means \
+         components ran out of fuel mid-flow",
+    );
+}
+
 /// **Test B** — The headline invariant: with a real Source → Processor
 /// → Sink flow, the `CopyLedger` must record **exactly four** measured
 /// copy events per element, all attributed to the flow's single

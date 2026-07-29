@@ -62,9 +62,19 @@ pub(crate) struct HostState {
     /// Resource limits for this store.
     pub(crate) limits: wasmtime::StoreLimits,
 
-    /// The fuel budget configured for this component. Tracked for
-    /// observability/diagnostics.
-    #[allow(dead_code)]
+    /// This component's fuel budget **per guest invocation**.
+    ///
+    /// The invoker resets the store's fuel to this value before every guest
+    /// call (see `WasmtimeInvoker::refuel`), which is what makes the budget
+    /// per-invocation — as [`WasmtimeEngineConfig::default_fuel`] documents —
+    /// rather than a per-lifetime cap that would trap a healthy component once
+    /// its *cumulative* consumption crossed the budget.
+    ///
+    /// Zero means fuel budgeting is disabled for this store; it is set to zero
+    /// exactly when the engine was built without `consume_fuel`, so a non-zero
+    /// budget guarantees `Store::set_fuel` succeeds.
+    ///
+    /// [`WasmtimeEngineConfig::default_fuel`]: crate::WasmtimeEngineConfig::default_fuel
     pub(crate) fuel_budget: u64,
 
     /// Resource table shared by Torvyn host resources

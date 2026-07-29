@@ -68,6 +68,40 @@ impl WasmtimeInvoker {
         }
     }
 
+    /// Reset a component's fuel to its per-invocation budget.
+    ///
+    /// Called before every guest entry point. `default_fuel` is documented as a
+    /// budget *per component invocation*: it bounds how much a single call may
+    /// execute before Wasmtime preempts it. Wasmtime's fuel counter is
+    /// monotonically consumed and is never replenished on its own — the async
+    /// yield interval only yields, it does not add fuel — so without this reset
+    /// the initial allocation would act as a per-*lifetime* cap. A healthy
+    /// component would then trap with `Trap::OutOfFuel` once its cumulative
+    /// consumption crossed the budget, ending a long-running flow after a
+    /// bounded number of elements.
+    ///
+    /// A zero budget means fuel budgeting is disabled for this store, in which
+    /// case this is a no-op.
+    ///
+    /// # HOT PATH — one `set_fuel` per invocation (a single store field write).
+    #[inline]
+    fn refuel(state: &mut WasmtimeInstanceState) {
+        let budget = state.store.data().fuel_budget;
+        if budget == 0 {
+            return;
+        }
+
+        // `set_fuel` fails only when the engine was built without
+        // `consume_fuel`; `create_store` sets the budget to zero in exactly
+        // that case, so a non-zero budget cannot fail here.
+        let refuelled = state.store.set_fuel(budget);
+        debug_assert!(
+            refuelled.is_ok(),
+            "a non-zero fuel budget implies the engine enabled consume_fuel",
+        );
+        let _ = refuelled;
+    }
+
     /// Convert a Wasmtime trap or error into a `ProcessError`.
     ///
     /// # WARM PATH — called per error.
@@ -269,6 +303,7 @@ impl ComponentInvoker for WasmtimeInvoker {
         component_id: ComponentId,
     ) -> Result<Option<OutputElement>, ProcessError> {
         let state = Self::wasmtime_state(instance)?;
+        Self::refuel(state);
         let outer = {
             let bindings = match &state.bindings {
                 Some(WitBindings::DataSource(b)) => b,
@@ -303,6 +338,7 @@ impl ComponentInvoker for WasmtimeInvoker {
         element: StreamElement,
     ) -> Result<ProcessResult, ProcessError> {
         let state = Self::wasmtime_state(instance)?;
+        Self::refuel(state);
 
         // Reject unsupported archetypes before marshalling, so no
         // resource-table entry is created for a call that cannot be made.
@@ -363,6 +399,7 @@ impl ComponentInvoker for WasmtimeInvoker {
         element: StreamElement,
     ) -> Result<BackpressureSignal, ProcessError> {
         let state = Self::wasmtime_state(instance)?;
+        Self::refuel(state);
 
         // Reject unsupported archetypes before marshalling, so no
         // resource-table entry is created for a call that cannot be made.
@@ -408,6 +445,7 @@ impl ComponentInvoker for WasmtimeInvoker {
         config: &str,
     ) -> Result<(), ProcessError> {
         let state = Self::wasmtime_state(instance)?;
+        Self::refuel(state);
 
         let outer = match &state.bindings {
             Some(WitBindings::DataSink(b)) => {
@@ -443,6 +481,7 @@ impl ComponentInvoker for WasmtimeInvoker {
             Ok(s) => s,
             Err(_) => return,
         };
+        Self::refuel(state);
 
         let outer = match &state.bindings {
             Some(WitBindings::DataSink(b)) => {
@@ -563,6 +602,127 @@ mod tests {
                 "kind() mismatch for translated variant"
             );
         }
+    }
+
+    /// Build a real (export-less) Wasmtime instance for fuel tests.
+    ///
+    /// The empty `(component)` exports nothing, so a guest entry point fails
+    /// *after* the refuel step — which is exactly what lets these tests observe
+    /// refuelling in isolation from any guest execution.
+    #[cfg(feature = "wasmtime-backend")]
+    async fn instance_with_config(
+        config: crate::WasmtimeEngineConfig,
+    ) -> (crate::WasmtimeEngine, ComponentInstance) {
+        use crate::traits::WasmEngine;
+        use crate::types::{CompiledComponent, CompiledComponentInner};
+        use torvyn_security::WasiConfiguration;
+        use wasmtime::component::Component;
+
+        let engine = crate::WasmtimeEngine::new(config).expect("engine must initialise");
+        let component = Component::new(engine.inner(), "(component)").expect("compile WAT");
+        let compiled = CompiledComponent {
+            inner: CompiledComponentInner::Wasmtime(component),
+        };
+        let imports = crate::WasmtimeEngine::import_bindings_from_linker(engine.create_linker());
+        let instance = engine
+            .instantiate(
+                &compiled,
+                imports,
+                ComponentId::new(1),
+                &WasiConfiguration::deny_all(),
+            )
+            .await
+            .expect("instantiate must succeed");
+        (engine, instance)
+    }
+
+    /// Every guest invocation must start from the full per-invocation fuel
+    /// budget. Without this, `default_fuel` would act as a per-*lifetime* cap
+    /// and a healthy component would trap with `Trap::OutOfFuel` once its
+    /// cumulative consumption crossed the budget.
+    #[tokio::test]
+    async fn test_invocation_refuels_to_per_invocation_budget() {
+        use crate::traits::WasmEngine;
+
+        let config = crate::WasmtimeEngineConfig::default();
+        let budget = config.default_fuel;
+        let (engine, mut instance) = instance_with_config(config).await;
+
+        // Simulate a component that has nearly exhausted its fuel.
+        engine.set_fuel(&mut instance, 1).expect("set_fuel");
+        assert_eq!(engine.fuel_remaining(&instance), Some(1));
+
+        let invoker = WasmtimeInvoker::new();
+        let _ = invoker
+            .invoke_pull(&mut instance, ComponentId::new(1))
+            .await;
+
+        assert_eq!(
+            engine.fuel_remaining(&instance),
+            Some(budget),
+            "each invocation must begin with the full per-invocation budget",
+        );
+    }
+
+    /// Refuelling applies to every guest entry point, not just `pull`.
+    #[tokio::test]
+    async fn test_all_guest_entry_points_refuel() {
+        use crate::traits::WasmEngine;
+
+        let config = crate::WasmtimeEngineConfig::default();
+        let budget = config.default_fuel;
+        let (engine, mut instance) = instance_with_config(config).await;
+        let invoker = WasmtimeInvoker::new();
+        let cid = ComponentId::new(1);
+
+        let element = || StreamElement {
+            meta: ElementMeta::new(0, 0, String::new()),
+            payload: torvyn_types::BufferHandle::new(torvyn_types::ResourceId::new(0, 0)),
+        };
+
+        // Drain fuel, invoke, and confirm the budget was restored — once per
+        // entry point.
+        engine.set_fuel(&mut instance, 1).expect("set_fuel");
+        let _ = invoker.invoke_process(&mut instance, cid, element()).await;
+        assert_eq!(engine.fuel_remaining(&instance), Some(budget), "process");
+
+        engine.set_fuel(&mut instance, 1).expect("set_fuel");
+        let _ = invoker.invoke_push(&mut instance, cid, element()).await;
+        assert_eq!(engine.fuel_remaining(&instance), Some(budget), "push");
+
+        engine.set_fuel(&mut instance, 1).expect("set_fuel");
+        let _ = invoker.invoke_init(&mut instance, cid, "{}").await;
+        assert_eq!(engine.fuel_remaining(&instance), Some(budget), "init");
+
+        engine.set_fuel(&mut instance, 1).expect("set_fuel");
+        invoker.invoke_teardown(&mut instance, cid).await;
+        assert_eq!(engine.fuel_remaining(&instance), Some(budget), "teardown");
+    }
+
+    /// With fuel budgeting disabled the refuel step is a no-op and must not
+    /// panic or attempt to set fuel on a store that does not track it.
+    #[tokio::test]
+    async fn test_no_refuel_when_fuel_disabled() {
+        use crate::traits::WasmEngine;
+
+        let config = crate::WasmtimeEngineConfig {
+            fuel_enabled: false,
+            ..crate::WasmtimeEngineConfig::default()
+        };
+        let (engine, mut instance) = instance_with_config(config).await;
+
+        assert_eq!(
+            engine.fuel_remaining(&instance),
+            None,
+            "fuel is not tracked when budgeting is disabled",
+        );
+
+        let invoker = WasmtimeInvoker::new();
+        let _ = invoker
+            .invoke_pull(&mut instance, ComponentId::new(1))
+            .await;
+
+        assert_eq!(engine.fuel_remaining(&instance), None);
     }
 
     #[tokio::test]
