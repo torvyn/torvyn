@@ -19,19 +19,11 @@ use std::time::Duration;
 
 use torvyn_engine::{WasmtimeEngine, WasmtimeEngineConfig};
 use torvyn_integration_tests::real_wasm::{
-    await_flow_terminal, file_uri, spawn_real_coordinator, wait_for_sink_count, RecordingInvoker,
-    SINK_COMPONENT_ID,
+    await_flow_terminal, echo_sink_wasm, file_uri, go_echo_source_wasm, identity_processor_wasm,
+    spawn_real_coordinator, wait_for_sink_count, RecordingInvoker, SINK_COMPONENT_ID,
 };
 use torvyn_pipeline::{instantiate_pipeline, NodeConfig, PipelineTopologyBuilder};
 use torvyn_types::{ComponentRole, FlowState};
-
-// ===========================================================================
-// Component fixture paths — populated by build.rs at compile time
-// ===========================================================================
-
-const GO_ECHO_SOURCE_WASM: &str = env!("TORVYN_GO_ECHO_SOURCE_WASM");
-const IDENTITY_PROCESSOR_WASM: &str = env!("TORVYN_IDENTITY_PROCESSOR_WASM");
-const ECHO_SINK_WASM: &str = env!("TORVYN_ECHO_SINK_WASM");
 
 /// **Polyglot proof** — Go-source → Rust-processor → Rust-sink. Asserts
 /// the same "exactly 4 measured copies per element" invariant that the
@@ -62,19 +54,19 @@ async fn test_polyglot_go_source_to_rust_sink_records_four_copies_per_element() 
         .add_node(
             "source",
             ComponentRole::Source,
-            &file_uri(GO_ECHO_SOURCE_WASM),
+            &file_uri(go_echo_source_wasm()),
             source_cfg,
         )
         .add_node(
             "processor",
             ComponentRole::Processor,
-            &file_uri(IDENTITY_PROCESSOR_WASM),
+            &file_uri(identity_processor_wasm()),
             NodeConfig::default(),
         )
         .add_node(
             "sink",
             ComponentRole::Sink,
-            &file_uri(ECHO_SINK_WASM),
+            &file_uri(echo_sink_wasm()),
             NodeConfig::default(),
         )
         .add_edge("source", "output", "processor", "input")

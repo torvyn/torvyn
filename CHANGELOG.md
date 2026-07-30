@@ -27,12 +27,16 @@ Torvyn uses the following versioning policy:
 - `torvyn-host` crate: runtime binary entry point — startup, pipeline instantiation, graceful shutdown.
 - `torvyn-cli` crate: `torvyn init`, `torvyn check`, `torvyn run` commands.
 - Benchmark suite: Source-to-Sink latency and throughput measurement, comparison harness for gRPC localhost baseline.
+- Real-Wasm benchmark suite (`cargo bench -p torvyn-benchmarks --features real-wasm`): per-element latency and throughput for Source-to-Sink and Source-to-Processor-to-Sink through `WasmtimeEngine` and `WasmtimeInvoker`, a payload sweep across three buffer-pool tiers (8 B / 256 B / 4 KiB / 64 KiB), and pipeline instantiation cost on a warm engine. Every configuration is validated for clean completion, exact copy count, exact copied-byte total, and zero outstanding buffers before it is measured.
+- Benchmark regression gate: `check-thresholds` compares criterion's medians against ceilings committed in `benches/thresholds.json` and fails CI on a regression.
+- `echo-source` test component accepts a `payload_bytes` field in its `lifecycle.init` config (default 8, preserving the previous behaviour), which is what lets the benchmark sweep payload sizes.
 - WIT contract definitions: `torvyn:streaming@0.1.0` package with split `buffer` / `mutable-buffer` resource model.
 - Project scaffolding: `torvyn init` generates component projects with WIT contracts, Cargo configuration, and starter implementations.
 - CI pipeline: build, test, lint (`clippy`), format check (`rustfmt`), MSRV verification, benchmark regression detection.
 
 ### Changed
-- Nothing yet — this is the initial release.
+- Published performance numbers in `README.md` and `benches/README.md` are now measured on the real-Wasm path. The previous figures came from the mock-invoker path, which executes no WebAssembly and moves no payload bytes; they are retained, relabelled as the runtime's overhead floor, and no longer presented as the cost of running a pipeline.
+- The gRPC comparison (`comparison/grpc_comparison.rs`) gained a real-Wasm arm carrying the same 256-byte payload as the gRPC arm, making it a like-for-like measurement. Its criterion groups were renamed to `torvyn_vs_grpc_latency` and `torvyn_vs_grpc_throughput`, with each arm named for what it actually executes.
 
 ### Deprecated
 - Nothing yet.
@@ -41,7 +45,7 @@ Torvyn uses the following versioning policy:
 - Nothing yet.
 
 ### Fixed
-- Nothing yet.
+- gRPC benchmark baseline: sockets accepted by the in-process echo server kept Nagle's algorithm enabled, because `serve_with_incoming` bypasses tonic's own socket configuration. Combined with the client's delayed-ACK timer this stalled every unary round trip until the timer fired — a flat ~41 ms per call on Linux CI runners, against ~53 us on macOS. The baseline was measuring a kernel timer rather than gRPC's transport cost, and the CI benchmark job timed out before finishing. `TCP_NODELAY` is now set explicitly on both ends.
 
 ### Security
 - Nothing yet.

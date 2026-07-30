@@ -345,24 +345,50 @@ Torvyn treats benchmarks as product features. All performance claims are backed 
 
 ### Measured Baseline (Phase 0)
 
-Numbers from a full criterion run on Apple M-series, macOS, Rust 1.95.0
-stable, release profile (LTO + single codegen unit). Mock-invoker path —
-real-Wasm benchmarks land alongside Item 2.
+Criterion medians from a full run on an Apple M5 Max, macOS 26.4, Rust 1.97.0
+stable, `bench` profile (LTO + single codegen unit). Reproduce with
+`cargo bench -p torvyn-benchmarks --features real-wasm`.
+
+**Real Wasm — what a pipeline costs.** Three `cargo component`-built guests
+through `WasmtimeEngine`, real buffer pool, real Canonical ABI marshalling,
+256-byte payloads.
+
+| Metric | Measured |
+|--------|---------:|
+| Source → Sink, per element (steady state) | 2.66 µs — 387 K elem/s |
+| Source → Processor → Sink, per element (steady state) | 4.50 µs — 228 K elem/s |
+| Payload scaling, 8 B → 4 KiB (Source → Processor → Sink) | 4.40 µs → 5.01 µs per element |
+| Copy bandwidth at 64 KiB payloads (4 copies/element) | 16.2 GB/s |
+| Pipeline startup, cached components (3 stages) | 125 µs |
+| Speedup vs. gRPC unary localhost, like-for-like | **~11×** |
+
+**Mock invoker — the runtime's overhead floor.** Queue transfer, scheduling,
+and copy accounting with no WebAssembly executed and no payload bytes moved.
+This is the metric the `< 5 µs` target above is written against.
 
 | Metric | Measured | vs. Target |
 |--------|---------:|-----------:|
-| Source → Sink per-element overhead (steady state) | ~410 ns | ~12× under target |
-| Source → Sink throughput | 2.19 M elem/s | exceeds 1 M target by ~2× |
-| Source → Processor → Sink throughput | 1.37 M elem/s | exceeds 500 K target by ~2.7× |
-| Copy-ledger overhead per record | ~12 ns | ~8× under target |
-| Speedup vs. gRPC unary localhost | ~140× | n/a — comparison baseline |
+| Per-element runtime overhead (Source → Processor → Sink) | 757 ns | ~6.6× under target |
+| Source → Sink throughput | 2.11 M elem/s | exceeds 1 M target by ~2.1× |
+| Source → Processor → Sink throughput | 1.32 M elem/s | exceeds 500 K target by ~2.6× |
+| Copy-ledger overhead per record | 12.3 ns | ~8.1× under target |
 
-The gRPC comparison uses an in-process Tonic echo service on `127.0.0.1`
-with the same payload size (256 bytes) and element counts (100 / 1 000 /
-10 000) as the Torvyn arm. Full numbers, methodology, hardware caveats,
-and reproduction steps are in [`benches/README.md`](benches/README.md).
+The two paths measure different things and are not interchangeable. The
+throughput targets (> 1 M and > 500 K elements/second, published in
+[`benches/README.md`](benches/README.md)) were set against the overhead floor
+and are met there; on the path that actually executes WebAssembly, single-flow
+throughput is 387 K and 228 K elements/second. The gRPC comparison runs all
+three arms — real Wasm, mock, and an in-process Tonic echo service on
+`127.0.0.1` — in one criterion group with matching payloads and element
+counts; only the real-Wasm arm is a like-for-like ratio.
 
-Benchmark comparisons against same-node gRPC, process boundaries, and conventional plugin approaches are published in [`benches/`](benches/) and tracked in CI to catch regressions. See `torvyn bench --help` for details on running benchmarks locally.
+Full numbers, per-tier payload scaling, methodology, hardware caveats, and
+reproduction steps are in [`benches/README.md`](benches/README.md).
+
+Benchmarks run on every push to `main`, and a regression gate compares each
+median against the ceilings committed in
+[`benches/thresholds.json`](benches/thresholds.json) and fails the build. See
+`torvyn bench --help` for benchmarking your own pipeline.
 
 ## Status
 

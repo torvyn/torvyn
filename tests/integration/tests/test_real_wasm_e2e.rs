@@ -24,21 +24,14 @@ use std::time::Duration;
 
 use torvyn_engine::{WasmtimeEngine, WasmtimeEngineConfig};
 use torvyn_integration_tests::real_wasm::{
-    await_flow_terminal, file_uri, spawn_real_coordinator, wait_for_sink_count,
-    wait_for_zero_live_buffers, RecordingInvoker, SINK_COMPONENT_ID,
+    await_flow_terminal, echo_sink_wasm, echo_source_wasm, file_uri, identity_processor_wasm,
+    spawn_real_coordinator, wait_for_sink_count, wait_for_zero_live_buffers, RecordingInvoker,
+    SINK_COMPONENT_ID,
 };
 use torvyn_pipeline::{
     instantiate_pipeline, NodeConfig, PipelineTopology, PipelineTopologyBuilder,
 };
 use torvyn_types::{ComponentRole, FlowState};
-
-// ===========================================================================
-// Component fixture paths — populated by build.rs at compile time
-// ===========================================================================
-
-const ECHO_SOURCE_WASM: &str = env!("TORVYN_ECHO_SOURCE_WASM");
-const IDENTITY_PROCESSOR_WASM: &str = env!("TORVYN_IDENTITY_PROCESSOR_WASM");
-const ECHO_SINK_WASM: &str = env!("TORVYN_ECHO_SINK_WASM");
 
 fn build_pipeline_topology(name: &'static str, source_init: Option<String>) -> PipelineTopology {
     let mut source_cfg = NodeConfig::default();
@@ -49,19 +42,19 @@ fn build_pipeline_topology(name: &'static str, source_init: Option<String>) -> P
         .add_node(
             "source",
             ComponentRole::Source,
-            &file_uri(ECHO_SOURCE_WASM),
+            &file_uri(echo_source_wasm()),
             source_cfg,
         )
         .add_node(
             "processor",
             ComponentRole::Processor,
-            &file_uri(IDENTITY_PROCESSOR_WASM),
+            &file_uri(identity_processor_wasm()),
             NodeConfig::default(),
         )
         .add_node(
             "sink",
             ComponentRole::Sink,
-            &file_uri(ECHO_SINK_WASM),
+            &file_uri(echo_sink_wasm()),
             NodeConfig::default(),
         )
         .add_edge("source", "output", "processor", "input")
@@ -361,7 +354,7 @@ fn host_e2e_flow(element_count: u64) -> torvyn_config::FlowDef {
     nodes.insert(
         "source".to_owned(),
         node(
-            file_uri(ECHO_SOURCE_WASM),
+            file_uri(echo_source_wasm()),
             "torvyn:streaming/source",
             Some(format!("{{\"count\":{element_count}}}")),
         ),
@@ -369,14 +362,14 @@ fn host_e2e_flow(element_count: u64) -> torvyn_config::FlowDef {
     nodes.insert(
         "processor".to_owned(),
         node(
-            file_uri(IDENTITY_PROCESSOR_WASM),
+            file_uri(identity_processor_wasm()),
             "torvyn:streaming/processor",
             None,
         ),
     );
     nodes.insert(
         "sink".to_owned(),
-        node(file_uri(ECHO_SINK_WASM), "torvyn:streaming/sink", None),
+        node(file_uri(echo_sink_wasm()), "torvyn:streaming/sink", None),
     );
 
     FlowDef {

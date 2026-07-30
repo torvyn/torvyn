@@ -183,15 +183,38 @@ jobs:
   benchmark:
     name: Benchmark
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Longer than the other jobs: this builds the workspace with LTO and a
+    # single codegen unit (the `bench` profile inherits `release`), then runs
+    # both the mock-invoker suite and the real-Wasm suite.
+    timeout-minutes: 45
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # The real-Wasm arms run `cargo component`-built guests, so this job
+      # needs the same component toolchain as the `wasm-e2e` job. Without it
+      # the integration crate's build.rs skips the fixtures and the
+      # `--features real-wasm` benchmarks cannot run.
+      - name: Install wasm32-wasip2 target
+        run: rustup target add wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: benchmark
+      - uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: cargo-component@0.21.1
       - name: Run benchmarks
-        run: cargo bench -p torvyn-benchmarks
+        run: cargo bench -p torvyn-benchmarks --features real-wasm
+      # The gate. Compares each benchmark's median against the ceilings in
+      # `benches/thresholds.json` and fails the job on a regression. The
+      # feature flag matches the `cargo bench` invocation above so the build
+      # graph is identical and nothing is recompiled here.
+      - name: Check for performance regressions
+        run: cargo run -p torvyn-benchmarks --release --features real-wasm --bin check-thresholds
       - name: Upload criterion reports
+        # Uploaded even when the gate fails — that is exactly when the
+        # detailed reports are worth having.
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-reports

@@ -5,6 +5,24 @@ edition = "2021"
 publish = false
 description = "Performance benchmarks for Torvyn streaming runtime"
 
+[features]
+# Enables the real-Wasm benchmark arms: `benches/real_wasm.rs`, and the
+# real-Wasm side of `comparison/grpc_comparison.rs`. Off by default so a
+# contributor without the component toolchain can still run `cargo bench`.
+#
+# Requires, in addition to a normal Rust toolchain:
+#   rustup target add wasm32-wasip2
+#   cargo install cargo-component --locked
+#
+# `torvyn-integration-tests/wasm-e2e` is what exposes the compiled component
+# fixture paths its `build.rs` produces; `torvyn-engine/wasmtime-backend`
+# swaps the real Wasmtime engine in alongside the mock one.
+real-wasm = [
+    "dep:torvyn-pipeline",
+    "torvyn-engine/wasmtime-backend",
+    "torvyn-integration-tests/wasm-e2e",
+]
+
 [dependencies]
 # Internal crates
 torvyn-types = { path = "../crates/torvyn-types" }
@@ -12,11 +30,16 @@ torvyn-engine = { path = "../crates/torvyn-engine", default-features = false, fe
 torvyn-reactor = { path = "../crates/torvyn-reactor" }
 torvyn-resources = { path = "../crates/torvyn-resources" }
 torvyn-integration-tests = { path = "../tests/integration" }
+# Only the real-Wasm arms instantiate pipelines through the production
+# `instantiate_pipeline` path, so this stays optional.
+torvyn-pipeline = { path = "../crates/torvyn-pipeline", optional = true }
 
 # External
 tokio = { version = "1.41.0", features = ["full"] }
 async-trait = "0.1"
 criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
+# `check-thresholds` reads criterion's `estimates.json` output.
+serde_json = "1.0"
 
 # gRPC comparison baseline (used by `comparison/grpc_comparison.rs`).
 # Tonic 0.12 + prost 0.13 are stable and have MSRVs well below 1.91.
@@ -62,3 +85,14 @@ harness = false
 name = "grpc_comparison"
 path = "comparison/grpc_comparison.rs"
 harness = false
+
+[[bench]]
+name = "real_wasm"
+harness = false
+required-features = ["real-wasm"]
+
+# Post-run regression gate. Reads criterion's own JSON output and compares it
+# against the ceilings committed in `thresholds.json`. See `README.md`.
+[[bin]]
+name = "check-thresholds"
+path = "src/bin/check_thresholds.rs"

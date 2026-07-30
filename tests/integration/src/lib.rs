@@ -664,6 +664,69 @@ pub mod real_wasm {
         format!("file://{absolute_path}")
     }
 
+    // -----------------------------------------------------------------
+    // Compiled component fixtures
+    // -----------------------------------------------------------------
+
+    /// Resolve a fixture path captured by `build.rs`, or panic with a
+    /// message that names the missing toolchain step.
+    ///
+    /// `build.rs` emits `cargo:rustc-env=TORVYN_<NAME>_WASM=<path>` for
+    /// every fixture it manages to build, and downgrades a missing
+    /// toolchain to a `cargo:warning` so a plain `cargo test --workspace`
+    /// still succeeds on a checkout without `cargo-component`. `option_env!`
+    /// mirrors that stance for consumers: this crate always compiles, and
+    /// the failure surfaces — with instructions — only when a target that
+    /// genuinely needs the artefact runs.
+    fn fixture_path(captured: Option<&'static str>, component: &str) -> &'static str {
+        captured.unwrap_or_else(|| {
+            panic!(
+                "the '{component}' Wasm fixture was not built, so this target cannot run. \
+                 Install the component toolchain and rebuild:\n  \
+                 rustup target add wasm32-wasip2\n  \
+                 cargo install cargo-component --locked\n\
+                 (If TORVYN_SKIP_WASM_BUILD is set in the environment, unset it.)"
+            )
+        })
+    }
+
+    /// Absolute path to the compiled `echo-source` component.
+    ///
+    /// # Panics
+    /// Panics if `build.rs` could not build the fixture.
+    pub fn echo_source_wasm() -> &'static str {
+        fixture_path(option_env!("TORVYN_ECHO_SOURCE_WASM"), "echo-source")
+    }
+
+    /// Absolute path to the compiled `identity-processor` component.
+    ///
+    /// # Panics
+    /// Panics if `build.rs` could not build the fixture.
+    pub fn identity_processor_wasm() -> &'static str {
+        fixture_path(
+            option_env!("TORVYN_IDENTITY_PROCESSOR_WASM"),
+            "identity-processor",
+        )
+    }
+
+    /// Absolute path to the compiled `echo-sink` component.
+    ///
+    /// # Panics
+    /// Panics if `build.rs` could not build the fixture.
+    pub fn echo_sink_wasm() -> &'static str {
+        fixture_path(option_env!("TORVYN_ECHO_SINK_WASM"), "echo-sink")
+    }
+
+    /// Absolute path to the compiled `go-echo-source` component (TinyGo).
+    ///
+    /// # Panics
+    /// Panics if `build.rs` could not build the fixture — most often
+    /// because TinyGo or `wit-bindgen-go` is not installed.
+    #[cfg(feature = "wasm-polyglot")]
+    pub fn go_echo_source_wasm() -> &'static str {
+        fixture_path(option_env!("TORVYN_GO_ECHO_SOURCE_WASM"), "go-echo-source")
+    }
+
     /// `ComponentId` of the sink stage in the three-stage
     /// Source → Processor → Sink topology used by the real-Wasm
     /// integration tests. `instantiate_pipeline` maps node index `i`
