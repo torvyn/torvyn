@@ -161,6 +161,7 @@ fn conn(from: usize, to: usize) -> StreamConnection {
 fn make_element(seq: u64) -> StreamElementRef {
     StreamElementRef {
         sequence: seq,
+        origin_sequence: seq,
         buffer_handle: BufferHandle::new(ResourceId::new(seq as u32, 0)),
         meta: ElementMeta::new(seq, 0, "test/plain".into()),
         enqueued_at: Instant::now(),

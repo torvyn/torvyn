@@ -28,6 +28,7 @@ torvyn-resources = { path = "../../crates/torvyn-resources" }
 torvyn-security = { path = "../../crates/torvyn-security" }
 torvyn-pipeline = { path = "../../crates/torvyn-pipeline" }
 torvyn-config = { path = "../../crates/torvyn-config" }
+torvyn-observability = { path = "../../crates/torvyn-observability" }
 torvyn-host = { path = "../../crates/torvyn-host" }
 
 # External

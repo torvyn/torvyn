@@ -29,6 +29,7 @@ async fn test_shutdown_all_already_completed() {
                 flow_id: FlowId::new(1),
                 name: "done-1".into(),
                 state: FlowState::Completed,
+                stages: Vec::new(),
             },
         );
         guard.insert(
@@ -37,6 +38,7 @@ async fn test_shutdown_all_already_completed() {
                 flow_id: FlowId::new(2),
                 name: "done-2".into(),
                 state: FlowState::Completed,
+                stages: Vec::new(),
             },
         );
     }
@@ -57,6 +59,7 @@ async fn test_shutdown_cancelled_flows_counted() {
                 flow_id: FlowId::new(1),
                 name: "cancelled-flow".into(),
                 state: FlowState::Cancelled,
+                stages: Vec::new(),
             },
         );
     }
@@ -77,6 +80,7 @@ async fn test_shutdown_mixed_states() {
                 flow_id: FlowId::new(1),
                 name: "completed".into(),
                 state: FlowState::Completed,
+                stages: Vec::new(),
             },
         );
         guard.insert(
@@ -85,6 +89,7 @@ async fn test_shutdown_mixed_states() {
                 flow_id: FlowId::new(2),
                 name: "cancelled".into(),
                 state: FlowState::Cancelled,
+                stages: Vec::new(),
             },
         );
         guard.insert(
@@ -93,6 +98,7 @@ async fn test_shutdown_mixed_states() {
                 flow_id: FlowId::new(3),
                 name: "failed".into(),
                 state: FlowState::Failed,
+                stages: Vec::new(),
             },
         );
     }

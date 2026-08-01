@@ -19,7 +19,7 @@ use torvyn_engine::{WasmtimeEngine, WasmtimeInvoker};
 use torvyn_observability::ObservabilityCollector;
 use torvyn_pipeline::{flow_def_to_topology, instantiate_pipeline};
 use torvyn_reactor::{cancellation::CancellationReason, ReactorHandle};
-use torvyn_types::{FlowId, FlowState};
+use torvyn_types::{ComponentId, ComponentRole, FlowId, FlowState};
 
 use crate::builder::HostConfig;
 use crate::error::{HostError, StartupError, StartupStage};
@@ -49,6 +49,44 @@ pub struct FlowRecord {
 
     /// Current flow state (cached from reactor queries).
     pub state: FlowState,
+
+    /// The flow's stages, in topology order.
+    ///
+    /// Observability records components by [`ComponentId`], which is assigned
+    /// positionally at instantiation and carries no name. Retaining the
+    /// mapping here is what lets a trace or a report say "hello-source"
+    /// rather than "component-1".
+    pub stages: Vec<FlowStage>,
+}
+
+/// One stage of a running flow: the identity observability records it under,
+/// paired with the name and role the topology gave it.
+#[derive(Debug, Clone)]
+pub struct FlowStage {
+    /// The component identity used in metrics and spans.
+    pub component_id: ComponentId,
+    /// The node name from the pipeline topology.
+    pub name: String,
+    /// The node's role, which determines which guest export the reactor
+    /// invokes — and therefore how an invocation should be labelled.
+    pub role: ComponentRole,
+}
+
+impl FlowStage {
+    /// The guest operation the reactor invokes for this role.
+    ///
+    /// These are the export names from `torvyn:streaming`, so the label a
+    /// user sees matches the contract they wrote.
+    #[must_use]
+    pub const fn operation(&self) -> &'static str {
+        match self.role {
+            ComponentRole::Source => "pull",
+            ComponentRole::Processor => "process",
+            ComponentRole::Sink => "push",
+            ComponentRole::Filter => "filter",
+            ComponentRole::Router => "route",
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -282,10 +320,25 @@ impl TorvynHost {
             })?;
 
         let flow_id = handle.flow_id();
+        // `instantiate_pipeline` assigns `ComponentId::new(index + 1)` walking
+        // `topology.nodes()` in order; mirroring that here keeps the mapping
+        // from recorded component identity back to node name authoritative
+        // rather than reconstructed by a caller.
+        let stages: Vec<FlowStage> = topology
+            .nodes()
+            .iter()
+            .enumerate()
+            .map(|(index, node)| FlowStage {
+                component_id: ComponentId::new((index as u64).saturating_add(1)),
+                name: node.name().to_owned(),
+                role: node.role(),
+            })
+            .collect();
         let record = FlowRecord {
             flow_id,
             name: flow_name.to_owned(),
             state: FlowState::Running,
+            stages,
         };
 
         self.flows.write().await.insert(flow_id, record);

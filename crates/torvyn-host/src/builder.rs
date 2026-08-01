@@ -151,6 +151,11 @@ impl HostConfig {
 pub struct HostBuilder {
     config: HostConfig,
     config_path: Option<PathBuf>,
+    /// Collector configuration supplied directly, bypassing the mapping from
+    /// the user-facing `[observability]` table. Set by callers that need
+    /// control the configuration file does not expose — `torvyn trace` uses
+    /// it to run at Diagnostic level with a span buffer sized for the run.
+    collector_config: Option<torvyn_observability::ObservabilityConfig>,
     /// Flow definitions registered programmatically. Merged with any flows
     /// loaded from the configuration file during [`build()`](Self::build);
     /// programmatic definitions take precedence on name conflicts.
@@ -166,6 +171,7 @@ impl HostBuilder {
         Self {
             config: HostConfig::default(),
             config_path: None,
+            collector_config: None,
             flow_definitions: BTreeMap::new(),
         }
     }
@@ -218,6 +224,28 @@ impl HostBuilder {
     #[must_use]
     pub fn with_observability_config(mut self, config: ObservabilityConfig) -> Self {
         self.config.observability = config;
+        self
+    }
+
+    /// Supply the observability collector's configuration directly, in place
+    /// of the mapping derived from the `[observability]` table.
+    ///
+    /// The configuration file expresses intent — tracing on or off, which
+    /// exporter — and the host maps it onto a collector configuration. This
+    /// is the escape hatch for callers that need a setting the file does not
+    /// expose: `torvyn trace` uses it to run at
+    /// [`ObservabilityLevel::Diagnostic`] with full sampling and a span
+    /// buffer sized for the number of elements being traced.
+    ///
+    /// Takes precedence over [`Self::with_observability_config`].
+    ///
+    /// # COLD PATH
+    #[must_use]
+    pub fn with_collector_config(
+        mut self,
+        config: torvyn_observability::ObservabilityConfig,
+    ) -> Self {
+        self.collector_config = Some(config);
         self
     }
 
@@ -320,14 +348,18 @@ impl HostBuilder {
         // reference; the `Arc` provides the cheap `Clone` the coordinator's
         // `E: EventSink + Clone + 'static` bound requires.
         let observability = Arc::new(
-            ObservabilityCollector::new(observability_collector_config(&self.config.observability))
-                .map_err(|errors| StartupError::ObservabilityInit {
-                    reason: errors
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                })?,
+            ObservabilityCollector::new(
+                self.collector_config
+                    .clone()
+                    .unwrap_or_else(|| observability_collector_config(&self.config.observability)),
+            )
+            .map_err(|errors| StartupError::ObservabilityInit {
+                reason: errors
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            })?,
         );
         info!("Observability collector initialized");
 
@@ -427,6 +459,15 @@ fn observability_collector_config(
     let base = torvyn_observability::ObservabilityConfig::default();
     torvyn_observability::ObservabilityConfig {
         level,
+        // Head sampling is what decides whether a flow's spans are retained at
+        // all, so the user-facing sample rate has to reach the collector. It
+        // is clamped because the collector rejects a rate outside [0, 1] at
+        // validation time, and a malformed config should not fail host
+        // startup over an observability knob.
+        tracing: torvyn_observability::config::TracingConfig {
+            sample_rate: cfg.tracing_sample_rate.clamp(0.0, 1.0),
+            ..base.tracing
+        },
         export: ExportConfig {
             target,
             ..base.export
@@ -590,6 +631,7 @@ mod tests {
         let builder = HostBuilder {
             config,
             config_path: None,
+            collector_config: None,
             flow_definitions: BTreeMap::new(),
         };
 

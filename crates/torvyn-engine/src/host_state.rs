@@ -27,7 +27,7 @@ use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiCtxView, W
 
 use torvyn_resources::{DefaultResourceManager, OwnerId};
 use torvyn_security::WasiConfiguration;
-use torvyn_types::{BufferHandle, ComponentId, FlowId, ResourceId};
+use torvyn_types::{BufferHandle, ComponentId, FlowId, ResourceId, TraceContext};
 
 /// Sentinel value that the `mutable-buffer.freeze` impl writes into the
 /// retired [`HostMutableBuffer`] wrapper so its eventual host-side
@@ -95,6 +95,17 @@ pub(crate) struct HostState {
     /// from the component ID; Session 2.3 wires real reactor-assigned
     /// flow identifiers.
     pub(crate) flow_id: FlowId,
+
+    /// W3C trace context assigned to this component's flow, when the flow is
+    /// being traced.
+    ///
+    /// Stamped by the reactor alongside [`Self::set_flow_id`], from the
+    /// observability sink's per-flow context. `None` means the flow is not
+    /// being traced — because observability is off, because the level is
+    /// below Diagnostic, or because head sampling declined the flow — and the
+    /// guest's `flow-context` accessors report empty identifiers, which is
+    /// the W3C representation of "no trace".
+    pub(crate) trace_context: Option<TraceContext>,
 
     /// WASI Preview-2 sandbox context, built from the component's resolved
     /// [`WasiConfiguration`] by [`build_wasi_ctx`].
@@ -217,6 +228,7 @@ impl HostState {
             table: ResourceTable::new(),
             resources,
             flow_id,
+            trace_context: None,
             wasi,
         }
     }
@@ -232,6 +244,19 @@ impl HostState {
     #[inline]
     pub(crate) fn set_flow_id(&mut self, flow_id: FlowId) {
         self.flow_id = flow_id;
+    }
+
+    /// Stamp the flow's W3C trace context onto this store.
+    ///
+    /// Called by the reactor at flow spawn, next to [`Self::set_flow_id`], so
+    /// a guest calling `flow-context.trace-id()` receives the same trace
+    /// identifier the host records its spans under — which is what lets a
+    /// component's own logs be correlated with the host's trace.
+    ///
+    /// # COLD PATH — called once per component instance at flow spawn.
+    #[inline]
+    pub(crate) fn set_trace_context(&mut self, trace_context: TraceContext) {
+        self.trace_context = Some(trace_context);
     }
 
     /// The [`OwnerId`] used when this instance is the principal of a
@@ -486,20 +511,39 @@ impl wit_types::HostMutableBuffer for HostState {
 }
 
 impl wit_types::HostFlowContext for HostState {
+    /// The flow's W3C trace id, lower-case hex, or an empty string when the
+    /// flow is not being traced.
     async fn trace_id(&mut self, _h: Resource<HostFlowContext>) -> wasmtime::Result<String> {
-        Ok(String::new())
+        Ok(self
+            .trace_context
+            .map(|ctx| ctx.trace_id.to_string())
+            .unwrap_or_default())
     }
 
+    /// The flow's root span id, lower-case hex, or an empty string when the
+    /// flow is not being traced.
+    ///
+    /// This is the span the host records the component's own invocation spans
+    /// under, so a guest that emits its own telemetry should use it as the
+    /// parent.
     async fn span_id(&mut self, _h: Resource<HostFlowContext>) -> wasmtime::Result<String> {
-        Ok(String::new())
+        Ok(self
+            .trace_context
+            .map(|ctx| ctx.span_id.to_string())
+            .unwrap_or_default())
     }
 
+    /// Per-invocation deadline. Not yet plumbed: the reactor enforces
+    /// `component_invocation_timeout` host-side rather than surfacing a
+    /// budget to the guest, so this reports 0 ("no deadline") rather than a
+    /// value a component could act on.
     async fn deadline_ns(&mut self, _h: Resource<HostFlowContext>) -> wasmtime::Result<u64> {
         Ok(0)
     }
 
+    /// The reactor-assigned flow id this component is running under.
     async fn flow_id(&mut self, _h: Resource<HostFlowContext>) -> wasmtime::Result<String> {
-        Ok(String::new())
+        Ok(self.flow_id.to_string())
     }
 
     async fn drop(&mut self, h: Resource<HostFlowContext>) -> wasmtime::Result<()> {

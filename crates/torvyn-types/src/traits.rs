@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::{
     enums::{CopyReason, ObservabilityLevel},
     error::ProcessErrorKind,
-    ComponentId, FlowId, ResourceId, StreamId,
+    ComponentId, FlowId, ResourceId, StreamId, TraceContext,
 };
 
 /// The hot-path trait for recording observability events.
@@ -96,6 +96,66 @@ pub trait EventSink: Send + Sync + 'static {
     /// # HOT PATH — called once per element delivered to a sink.
     fn record_flow_latency(&self, flow_id: FlowId, latency_ns: u64) {
         let _ = (flow_id, latency_ns);
+    }
+
+    /// Record one component invocation as a per-element span.
+    ///
+    /// Called by the reactor immediately after [`record_invocation`], with
+    /// the sequence number of the element the invocation handled.
+    ///
+    /// This is the per-element counterpart to `record_invocation`: where that
+    /// call folds the invocation into aggregate counters and histograms, this
+    /// one retains the individual event so a trace can reconstruct one
+    /// element's path through the pipeline. Sinks are expected to drop these
+    /// below [`ObservabilityLevel::Diagnostic`] — the level check is the
+    /// sink's responsibility, and at Production level this must cost no more
+    /// than the atomic load it takes to decide to do nothing.
+    ///
+    /// `start_ns` and `end_ns` are nanoseconds since the Unix epoch, so a
+    /// span is directly exportable without a second clock reading.
+    ///
+    /// The default is a no-op: sinks that do not retain per-element detail
+    /// (such as [`NoopEventSink`]) need not implement it.
+    ///
+    /// # HOT PATH — called once per invocation; must be non-blocking.
+    ///
+    /// [`record_invocation`]: EventSink::record_invocation
+    fn record_element_span(
+        &self,
+        flow_id: FlowId,
+        component_id: ComponentId,
+        element_sequence: u64,
+        start_ns: u64,
+        end_ns: u64,
+        status: InvocationStatus,
+    ) {
+        let _ = (
+            flow_id,
+            component_id,
+            element_sequence,
+            start_ns,
+            end_ns,
+            status,
+        );
+    }
+
+    /// The trace context assigned to a flow, if this sink is tracing it.
+    ///
+    /// Called once per flow, after [`on_flow_start`], so the host can
+    /// propagate the flow's W3C trace and span identifiers into each
+    /// component's store — which is what lets a guest calling
+    /// `flow-context.trace-id()` correlate its own work with the host's
+    /// trace.
+    ///
+    /// Returns `None` when the sink is not tracing (the default), when the
+    /// flow is unknown, or when the flow was not selected by head sampling.
+    ///
+    /// # COLD PATH — called once per flow.
+    ///
+    /// [`on_flow_start`]: EventSink::on_flow_start
+    fn flow_trace_context(&self, flow_id: FlowId) -> Option<TraceContext> {
+        let _ = flow_id;
+        None
     }
 
     /// Returns the current observability level.
@@ -197,6 +257,31 @@ impl<E: EventSink> EventSink for Arc<E> {
     #[inline]
     fn record_flow_latency(&self, flow_id: FlowId, latency_ns: u64) {
         (**self).record_flow_latency(flow_id, latency_ns);
+    }
+
+    #[inline]
+    fn record_element_span(
+        &self,
+        flow_id: FlowId,
+        component_id: ComponentId,
+        element_sequence: u64,
+        start_ns: u64,
+        end_ns: u64,
+        status: InvocationStatus,
+    ) {
+        (**self).record_element_span(
+            flow_id,
+            component_id,
+            element_sequence,
+            start_ns,
+            end_ns,
+            status,
+        );
+    }
+
+    #[inline]
+    fn flow_trace_context(&self, flow_id: FlowId) -> Option<TraceContext> {
+        (**self).flow_trace_context(flow_id)
     }
 
     #[inline]

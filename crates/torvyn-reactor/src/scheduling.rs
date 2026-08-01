@@ -307,6 +307,7 @@ mod tests {
         // Put an element in the queue so the sink can consume.
         let elem = crate::stream::StreamElementRef {
             sequence: 0,
+            origin_sequence: 0,
             buffer_handle: torvyn_types::BufferHandle::new(torvyn_types::ResourceId::new(0, 0)),
             meta: torvyn_types::ElementMeta::new(0, 0, String::new()),
             enqueued_at: std::time::Instant::now(),
@@ -339,6 +340,7 @@ mod tests {
         for i in 0..64 {
             let elem = crate::stream::StreamElementRef {
                 sequence: i,
+                origin_sequence: i,
                 buffer_handle: torvyn_types::BufferHandle::new(torvyn_types::ResourceId::new(
                     i as u32, 0,
                 )),

@@ -232,6 +232,7 @@ mod tests {
                     flow_id: FlowId::new(1),
                     name: "test".into(),
                     state: FlowState::Completed,
+                    stages: Vec::new(),
                 },
             );
         }
@@ -252,6 +253,7 @@ mod tests {
                     flow_id: FlowId::new(1),
                     name: "stuck".into(),
                     state: FlowState::Running,
+                    stages: Vec::new(),
                 },
             );
         }
@@ -282,6 +284,7 @@ mod tests {
                     flow_id: FlowId::new(1),
                     name: "cancelled-flow".into(),
                     state: FlowState::Cancelled,
+                    stages: Vec::new(),
                 },
             );
         }

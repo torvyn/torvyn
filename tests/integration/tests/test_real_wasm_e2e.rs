@@ -665,3 +665,251 @@ async fn test_real_pipeline_leaks_no_buffers() {
         "the flow must have actually processed {ELEMENT_COUNT} elements",
     );
 }
+
+/// Per-element tracing must produce real spans from a real Wasm pipeline.
+///
+/// Before this wiring the runtime recorded no spans at all — `record_span`
+/// had no caller outside a unit test — so `torvyn trace` reported zeros after
+/// successfully running a pipeline. This is the test that would have caught
+/// that: it runs three real components at Diagnostic level and asserts the
+/// spans that come back describe what actually happened.
+#[tokio::test]
+async fn test_diagnostic_level_records_spans_for_real_wasm_pipeline() {
+    use std::collections::{BTreeMap, BTreeSet, HashSet};
+    use torvyn_host::HostBuilder;
+    use torvyn_observability::config::TracingConfig;
+    use torvyn_types::{EventSink, ObservabilityLevel};
+
+    const ELEMENT_COUNT: u64 = 25;
+    const STAGES: usize = 3;
+
+    let base = torvyn_observability::ObservabilityConfig::default();
+    let collector_config = torvyn_observability::ObservabilityConfig {
+        level: ObservabilityLevel::Diagnostic,
+        tracing: TracingConfig {
+            sample_rate: 1.0,
+            // One span per stage per element, rounded up to a power of two so
+            // nothing is evicted during the run.
+            ring_buffer_capacity: (ELEMENT_COUNT as usize * STAGES).next_power_of_two().max(8),
+            ..base.tracing
+        },
+        ..base
+    };
+
+    let mut host = HostBuilder::new()
+        .with_flow_definition("trace-e2e", host_e2e_flow(ELEMENT_COUNT))
+        .with_collector_config(collector_config)
+        .build()
+        .await
+        .expect("host must build");
+
+    let flow_id = host.start_flow("trace-e2e").await.expect("flow must start");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let state = host.flow_state(flow_id).await.expect("flow must be known");
+        if state.is_terminal() {
+            assert_eq!(state, FlowState::Completed, "the traced flow must complete");
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "traced flow did not finish within 30s (last: {state:?})",
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // The flow must carry a valid W3C trace context, which is also what the
+    // guests see through `flow-context.trace-id()`.
+    let trace_ctx = host
+        .observability()
+        .flow_trace_context(flow_id)
+        .expect("a sampled flow at Diagnostic level must have a trace context");
+    assert!(
+        trace_ctx.trace_id.is_valid() && trace_ctx.span_id.is_valid(),
+        "trace and span ids must be non-zero per the W3C spec",
+    );
+
+    assert!(
+        !host.observability().flow_spans_wrapped(flow_id),
+        "the span buffer was sized for this run and must not have wrapped",
+    );
+
+    let spans = host.observability().drain_flow_spans(flow_id);
+    assert_eq!(
+        spans.len(),
+        ELEMENT_COUNT as usize * STAGES,
+        "expected one span per stage per element",
+    );
+
+    // Every span must describe a real invocation: ordered epoch timestamps,
+    // a non-zero span id, and no error on a clean run.
+    let mut span_ids = HashSet::new();
+    for span in &spans {
+        assert!(
+            span.end_ns >= span.start_ns,
+            "span for component {} ends before it starts",
+            span.component_id,
+        );
+        assert!(span.start_ns > 0, "spans must carry absolute timestamps");
+        assert!(!span.is_error(), "a clean run must record no failed spans");
+        assert!(
+            span.span_id.is_valid(),
+            "every span needs a non-zero id per the W3C spec",
+        );
+        assert!(
+            span_ids.insert(span.span_id),
+            "span ids must be unique within a trace",
+        );
+    }
+
+    // Grouping by origin sequence must reconstruct each element's journey
+    // across all three stages — the property `torvyn trace` renders.
+    let mut by_element: BTreeMap<u64, BTreeSet<u64>> = BTreeMap::new();
+    for span in &spans {
+        by_element
+            .entry(span.element_sequence)
+            .or_default()
+            .insert(span.component_id.as_u64());
+    }
+    assert_eq!(
+        by_element.len() as u64,
+        ELEMENT_COUNT,
+        "expected {ELEMENT_COUNT} distinct traced elements",
+    );
+    for (element, stages) in &by_element {
+        assert_eq!(
+            stages.len(),
+            STAGES,
+            "element {element} was seen by components {stages:?}, expected all {STAGES} stages",
+        );
+    }
+
+    // Draining is destructive, as the export path requires.
+    assert!(
+        host.observability().drain_flow_spans(flow_id).is_empty(),
+        "draining must empty the buffer",
+    );
+
+    let _ = host.shutdown().await;
+}
+
+/// At Production level the runtime must retain no per-element spans: the
+/// level gate is what keeps the documented sub-microsecond overhead budget,
+/// and a leak here would silently cost every production pipeline.
+#[tokio::test]
+async fn test_production_level_records_no_spans_for_real_wasm_pipeline() {
+    use torvyn_host::HostBuilder;
+
+    const ELEMENT_COUNT: u64 = 25;
+
+    let mut host = HostBuilder::new()
+        .with_flow_definition("no-trace-e2e", host_e2e_flow(ELEMENT_COUNT))
+        .build()
+        .await
+        .expect("host must build");
+
+    let flow_id = host
+        .start_flow("no-trace-e2e")
+        .await
+        .expect("flow must start");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let state = host.flow_state(flow_id).await.expect("flow must be known");
+        if state.is_terminal() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "flow did not finish"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // Metrics still recorded — only the per-element spans are withheld.
+    let snapshot = host
+        .observability()
+        .snapshot(flow_id)
+        .expect("metrics are recorded at Production level");
+    assert!(
+        snapshot.elements_total > 0,
+        "metrics must still be recorded"
+    );
+
+    assert!(
+        host.observability().drain_flow_spans(flow_id).is_empty(),
+        "Production level must retain no per-element spans",
+    );
+
+    let _ = host.shutdown().await;
+}
+
+/// The reactor reports invocation timings as absolute epoch timestamps, and
+/// every sink derives a duration from `end_ns - start_ns`. This asserts the
+/// per-component processing-time histogram is actually populated on a real
+/// Wasm run.
+///
+/// The driver used to pass elapsed-since values rather than points in time,
+/// which made `end_ns` smaller than `start_ns` and saturated every recorded
+/// duration to zero — so this histogram read zero for every component on
+/// every run.
+#[tokio::test]
+async fn test_component_processing_time_is_recorded_for_real_wasm() {
+    use torvyn_host::HostBuilder;
+
+    const ELEMENT_COUNT: u64 = 100;
+
+    let mut host = HostBuilder::new()
+        .with_flow_definition("timing-e2e", host_e2e_flow(ELEMENT_COUNT))
+        .build()
+        .await
+        .expect("host must build");
+
+    let flow_id = host
+        .start_flow("timing-e2e")
+        .await
+        .expect("flow must start");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let state = host.flow_state(flow_id).await.expect("flow must be known");
+        if state.is_terminal() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "flow did not finish"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let snapshot = host
+        .observability()
+        .snapshot(flow_id)
+        .expect("a completed flow must have recorded metrics");
+
+    // Assert on the mean, not a percentile. Percentiles are read off a
+    // bucketed histogram and interpolated within the bucket they land in, so
+    // a histogram of nothing but zeros still reports a non-zero p95 — it
+    // interpolates inside the 0..100 ns bucket. The mean is the exact
+    // `sum / count`, so it is zero if and only if every recorded duration was
+    // zero, which is precisely the failure being guarded against.
+    for component in &snapshot.components {
+        assert!(
+            component.invocations > 0,
+            "component {} recorded no invocations",
+            component.component_id,
+        );
+        assert!(
+            component.processing_time_mean_ns > 0.0,
+            "component {} reported a mean processing time of 0 ns across {} invocations; \
+             every recorded duration was zero, which means durations are being computed \
+             from ill-formed timestamps rather than that the guest was instantaneous",
+            component.component_id,
+            component.invocations,
+        );
+    }
+
+    let _ = host.shutdown().await;
+}

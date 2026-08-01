@@ -95,6 +95,24 @@ pub struct FlowDriver<I: ComponentInvoker, E: EventSink> {
     /// Sequence counter for element metadata assignment.
     /// Per C01-4: the reactor assigns sequence numbers.
     next_global_sequence: u64,
+    /// Anchor pairing a monotonic `Instant` with the wall-clock nanosecond it
+    /// was taken at, captured once when the flow starts running.
+    ///
+    /// Spans have to carry absolute timestamps to be exportable, but reading
+    /// the wall clock per invocation would put a `SystemTime::now` on the hot
+    /// path. Anchoring once and converting monotonic instants against it
+    /// costs only arithmetic per invocation, and keeps the ordering
+    /// guarantees of a monotonic clock — a wall clock can step backwards, and
+    /// a span whose end precedes its start is worse than no span.
+    epoch_anchor: Option<(Instant, u64)>,
+    /// Sequence number of the element the stage currently executing is
+    /// handling, if any.
+    ///
+    /// Set by each stage executor as soon as the element is known — before
+    /// the guest is invoked, so that a failed invocation still produces a
+    /// span attributed to the right element — and read by `execute_stage`
+    /// once the invocation returns.
+    current_element_sequence: Option<u64>,
 }
 
 impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
@@ -142,6 +160,24 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
             state: FlowState::Instantiated,
             started_at: None,
             next_global_sequence: 0,
+            epoch_anchor: None,
+            current_element_sequence: None,
+        }
+    }
+
+    /// Convert a monotonic instant to nanoseconds since the Unix epoch, using
+    /// the anchor captured at flow start.
+    ///
+    /// Falls back to reading the wall clock if the anchor is missing, which
+    /// can only happen if a stage runs before `run` sets it.
+    ///
+    /// # HOT PATH — arithmetic only.
+    #[inline]
+    fn epoch_ns(&self, at: Instant) -> u64 {
+        match self.epoch_anchor {
+            Some((anchor_instant, anchor_ns)) => anchor_ns
+                .saturating_add(at.saturating_duration_since(anchor_instant).as_nanos() as u64),
+            None => torvyn_types::current_timestamp_ns(),
         }
     }
 
@@ -154,7 +190,9 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
     pub async fn run(mut self) -> (FlowId, FlowState, FlowCompletionStats) {
         // Transition to Running.
         self.state = FlowState::Running;
-        self.started_at = Some(Instant::now());
+        let start_instant = Instant::now();
+        self.started_at = Some(start_instant);
+        self.epoch_anchor = Some((start_instant, torvyn_types::current_timestamp_ns()));
         self.emit_state_change(FlowState::Instantiated, FlowState::Running);
 
         info!(flow_id = %self.flow_id, "flow started");
@@ -343,6 +381,7 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
         let start = Instant::now();
         let stage_idx = execution.stage_index;
         let component_id = execution.component_id;
+        self.current_element_sequence = None;
 
         let result = match &execution.action {
             StageAction::PullFromSource => self.execute_pull(stage_idx, component_id).await,
@@ -356,7 +395,8 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
             }
         };
 
-        let duration = start.elapsed();
+        let end = Instant::now();
+        let duration = end.saturating_duration_since(start);
         let is_error = result.is_err();
         self.component_metrics[stage_idx].record_invocation(duration, is_error);
 
@@ -365,13 +405,27 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
         } else {
             InvocationStatus::Ok
         };
-        self.event_sink.record_invocation(
-            self.flow_id,
-            component_id,
-            start.elapsed().as_nanos() as u64,
-            (start + duration).elapsed().as_nanos() as u64,
-            status,
-        );
+
+        // `record_invocation` takes absolute epoch timestamps, and the sink
+        // derives the invocation's duration from `end_ns - start_ns`. Both
+        // instants are converted through the flow's epoch anchor, so the
+        // difference is exactly `duration` and the values are meaningful as
+        // points in time — which is what makes them exportable as spans.
+        let start_ns = self.epoch_ns(start);
+        let end_ns = self.epoch_ns(end);
+        self.event_sink
+            .record_invocation(self.flow_id, component_id, start_ns, end_ns, status);
+
+        if let Some(element_sequence) = self.current_element_sequence {
+            self.event_sink.record_element_span(
+                self.flow_id,
+                component_id,
+                element_sequence,
+                start_ns,
+                end_ns,
+                status,
+            );
+        }
 
         result
     }
@@ -406,8 +460,13 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
                 if let Some(&si) = output_streams.first() {
                     let seq = self.next_global_sequence;
                     self.next_global_sequence += 1;
+                    // The source is where an element's identity begins, so
+                    // this sequence is both the stream sequence and the
+                    // origin sequence every later stage carries forward.
+                    self.current_element_sequence = Some(seq);
                     let elem_ref = StreamElementRef {
                         sequence: seq,
+                        origin_sequence: seq,
                         buffer_handle: element.payload,
                         meta: ElementMeta::new(
                             seq,
@@ -484,6 +543,11 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
         // Carry the element's pipeline-entry timestamp forward so end-to-end
         // latency is measured from the source, not re-stamped at each stage.
         let origin_timestamp_ns = elem_ref.meta.timestamp_ns;
+        // Likewise its origin sequence, so every span this invocation
+        // produces is attributed to the element that entered at the source.
+        // Set before the invoke so a failing invocation still yields a span.
+        let origin_sequence = elem_ref.origin_sequence;
+        self.current_element_sequence = Some(origin_sequence);
 
         let stream_element = StreamElement {
             meta: elem_ref.meta,
@@ -514,6 +578,7 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
                     self.next_global_sequence += 1;
                     let out_ref = StreamElementRef {
                         sequence: seq,
+                        origin_sequence,
                         buffer_handle: output.payload,
                         meta: ElementMeta::new(seq, origin_timestamp_ns, output.meta.content_type),
                         enqueued_at: Instant::now(),
@@ -537,6 +602,7 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
                         self.next_global_sequence += 1;
                         let out_ref = StreamElementRef {
                             sequence: seq,
+                            origin_sequence,
                             buffer_handle: output.payload,
                             meta: ElementMeta::new(
                                 seq,
@@ -581,6 +647,9 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
 
         // The element's pipeline-entry timestamp, for end-to-end latency below.
         let origin_timestamp_ns = elem_ref.meta.timestamp_ns;
+        // Set before the invoke so a failing push still yields a span
+        // attributed to the right element.
+        self.current_element_sequence = Some(elem_ref.origin_sequence);
 
         let stream_element = StreamElement {
             meta: elem_ref.meta,
@@ -747,10 +816,11 @@ mod tests {
     use crate::topology::{StageDefinition, StreamConnection};
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Arc;
     use torvyn_engine::{ComponentInstance, OutputElement};
     use torvyn_types::{
         BackpressurePolicy, BackpressureSignal, BufferHandle, ComponentRole, NoopEventSink,
-        ResourceId,
+        ObservabilityLevel, ResourceId,
     };
 
     // -- Test invoker that doesn't need private fields --
@@ -1235,5 +1305,237 @@ mod tests {
         assert!(transitions.contains(&(FlowState::Instantiated, FlowState::Running)));
         assert!(transitions.contains(&(FlowState::Running, FlowState::Draining)));
         assert_eq!(state, FlowState::Completed);
+    }
+
+    // -- Observability recording --
+
+    /// An `EventSink` that keeps every invocation and span it is handed, so a
+    /// test can assert on what the driver actually reported.
+    #[derive(Default)]
+    struct RecordingSink {
+        invocations: std::sync::Mutex<Vec<(ComponentId, u64, u64)>>,
+        spans: std::sync::Mutex<Vec<(ComponentId, u64, u64, u64)>>,
+        level: ObservabilityLevel,
+    }
+
+    impl RecordingSink {
+        fn at(level: ObservabilityLevel) -> Arc<Self> {
+            Arc::new(Self {
+                level,
+                ..Default::default()
+            })
+        }
+    }
+
+    impl EventSink for RecordingSink {
+        fn record_invocation(
+            &self,
+            _flow_id: FlowId,
+            component_id: ComponentId,
+            start_ns: u64,
+            end_ns: u64,
+            _status: InvocationStatus,
+        ) {
+            self.invocations.lock().expect("invocations mutex").push((
+                component_id,
+                start_ns,
+                end_ns,
+            ));
+        }
+
+        fn record_element_transfer(&self, _: FlowId, _: StreamId, _: u64, _: u32) {}
+
+        fn record_backpressure(&self, _: FlowId, _: StreamId, _: bool, _: u32, _: u64) {}
+
+        fn record_copy(
+            &self,
+            _: FlowId,
+            _: torvyn_types::ResourceId,
+            _: ComponentId,
+            _: ComponentId,
+            _: u64,
+            _: torvyn_types::CopyReason,
+        ) {
+        }
+
+        fn record_element_span(
+            &self,
+            _flow_id: FlowId,
+            component_id: ComponentId,
+            element_sequence: u64,
+            start_ns: u64,
+            end_ns: u64,
+            _status: InvocationStatus,
+        ) {
+            if self.level != ObservabilityLevel::Diagnostic {
+                return;
+            }
+            self.spans.lock().expect("spans mutex").push((
+                component_id,
+                element_sequence,
+                start_ns,
+                end_ns,
+            ));
+        }
+
+        fn level(&self) -> ObservabilityLevel {
+            self.level
+        }
+    }
+
+    async fn run_recorded(
+        element_count: u64,
+        three_stage: bool,
+        level: ObservabilityLevel,
+    ) -> Arc<RecordingSink> {
+        let sink = RecordingSink::at(level);
+        let flow_id = FlowId::new(1);
+        let topology = if three_stage {
+            FlowTopology {
+                stages: vec![source_stage(1), processor_stage(2), sink_stage(3)],
+                connections: vec![conn(0, 1), conn(1, 2)],
+            }
+        } else {
+            FlowTopology {
+                stages: vec![source_stage(1), sink_stage(2)],
+                connections: vec![conn(0, 1)],
+            }
+        };
+        topology.validate().unwrap();
+
+        let streams = make_streams(&topology, flow_id);
+        let instances = make_instances(&topology).await;
+        let config = FlowConfig::default_with_topology(topology.clone());
+        let (event_tx, _event_rx) = mpsc::channel(1024);
+
+        let driver = FlowDriver::new(
+            flow_id,
+            config,
+            instances,
+            streams,
+            TestInvoker::new(element_count),
+            Arc::clone(&sink),
+            FlowCancellation::new(),
+            event_tx,
+        );
+        let (_, state, _) = driver.run().await;
+        assert_eq!(state, FlowState::Completed);
+        sink
+    }
+
+    /// Regression test. `record_invocation` is documented to take absolute
+    /// epoch timestamps, and every sink derives the invocation's duration
+    /// from `end_ns - start_ns`.
+    ///
+    /// The driver used to pass `start.elapsed()` and
+    /// `(start + duration).elapsed()` — both of which measure time *since* an
+    /// instant, not a point in time. That made `start_ns` roughly the
+    /// invocation's duration and `end_ns` roughly zero, so every sink
+    /// computing `end_ns - start_ns` saturated to 0 and the per-component
+    /// processing-time histogram recorded nothing but zeros.
+    #[tokio::test]
+    async fn test_record_invocation_reports_ordered_epoch_timestamps() {
+        let before = torvyn_types::current_timestamp_ns();
+        let sink = run_recorded(50, false, ObservabilityLevel::Production).await;
+        let after = torvyn_types::current_timestamp_ns();
+
+        let invocations = sink.invocations.lock().expect("invocations mutex");
+        assert!(
+            !invocations.is_empty(),
+            "the driver must report its invocations"
+        );
+
+        for (component_id, start_ns, end_ns) in invocations.iter().copied() {
+            assert!(
+                end_ns >= start_ns,
+                "component {component_id}: end_ns ({end_ns}) precedes start_ns ({start_ns});                  a sink computing end - start would saturate to zero"
+            );
+            assert!(
+                start_ns >= before && end_ns <= after,
+                "component {component_id}: [{start_ns}, {end_ns}] falls outside the run's                  wall-clock window [{before}, {after}] — these are not epoch timestamps"
+            );
+            assert!(
+                end_ns.saturating_sub(start_ns) < 10_000_000_000,
+                "component {component_id}: implausible duration {} ns",
+                end_ns.saturating_sub(start_ns),
+            );
+        }
+    }
+
+    /// The mock invoker returns immediately, so most invocations are shorter
+    /// than a nanosecond and legitimately round to zero. The point of this
+    /// test is that the reported durations are not *uniformly* zero, which is
+    /// what the old arithmetic guaranteed.
+    #[tokio::test]
+    async fn test_reported_durations_are_not_uniformly_zero() {
+        let sink = run_recorded(200, true, ObservabilityLevel::Production).await;
+        let invocations = sink.invocations.lock().expect("invocations mutex");
+        let nonzero = invocations
+            .iter()
+            .filter(|(_, start, end)| end.saturating_sub(*start) > 0)
+            .count();
+        assert!(
+            nonzero > 0,
+            "every one of {} invocations reported a zero duration",
+            invocations.len(),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spans_are_recorded_at_diagnostic_level() {
+        const ELEMENTS: u64 = 20;
+        let sink = run_recorded(ELEMENTS, true, ObservabilityLevel::Diagnostic).await;
+        let spans = sink.spans.lock().expect("spans mutex");
+
+        // Source, processor, and sink each handle every element once.
+        assert_eq!(
+            spans.len() as u64,
+            ELEMENTS * 3,
+            "expected one span per stage per element"
+        );
+
+        for (component_id, _sequence, start_ns, end_ns) in spans.iter().copied() {
+            assert!(
+                end_ns >= start_ns,
+                "component {component_id}: span ends before it starts"
+            );
+        }
+
+        // Every element must be traceable end to end. Origin sequences are
+        // drawn from a counter shared by every emit site, so in a three-stage
+        // flow the source's elements are numbered 0, 2, 4, ... rather than
+        // 0, 1, 2, ... — what matters is that there are exactly `ELEMENTS` of
+        // them and that each is seen by all three stages, which is what lets
+        // a trace group three spans into one element's journey.
+        let mut by_element: std::collections::BTreeMap<u64, std::collections::HashSet<u64>> =
+            std::collections::BTreeMap::new();
+        for (component_id, sequence, _, _) in spans.iter().copied() {
+            by_element
+                .entry(sequence)
+                .or_default()
+                .insert(component_id.as_u64());
+        }
+        assert_eq!(
+            by_element.len() as u64,
+            ELEMENTS,
+            "expected {ELEMENTS} distinct traced elements, got {}",
+            by_element.len()
+        );
+        for (sequence, stages) in &by_element {
+            assert_eq!(
+                stages.len(),
+                3,
+                "element {sequence} was seen by components {stages:?}, expected all three stages"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_no_spans_below_diagnostic_level() {
+        let sink = run_recorded(20, true, ObservabilityLevel::Production).await;
+        assert!(
+            sink.spans.lock().expect("spans mutex").is_empty(),
+            "Production level must not retain per-element spans"
+        );
     }
 }

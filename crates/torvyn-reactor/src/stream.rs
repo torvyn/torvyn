@@ -30,6 +30,18 @@ use crate::queue::BoundedQueue;
 pub struct StreamElementRef {
     /// Sequence number within this stream (monotonically increasing).
     pub sequence: u64,
+    /// Sequence number this element was given when it entered the pipeline at
+    /// the source.
+    ///
+    /// `sequence` is reassigned at every emit site, so a single logical
+    /// element carries a different `sequence` on each stream it crosses. This
+    /// field is assigned once, at the source, and carried forward unchanged —
+    /// it is what makes an element identifiable end to end, which per-element
+    /// tracing needs in order to group a source's, a processor's, and a
+    /// sink's work into one element's journey.
+    ///
+    /// At the source, `origin_sequence == sequence`.
+    pub origin_sequence: u64,
     /// Handle to the payload buffer (managed by Resource Manager).
     /// Per C04-1: `BufferHandle` from `torvyn-types`.
     pub buffer_handle: BufferHandle,

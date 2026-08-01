@@ -139,7 +139,7 @@ Runs `torvyn check` and `torvyn link` implicitly before execution. Displays real
 
 ### `torvyn trace`
 
-Execute a pipeline with full tracing enabled, producing per-element diagnostic output.
+Execute a pipeline with per-element tracing enabled, producing diagnostic output for each element's path through the pipeline.
 
 ```
 torvyn trace [OPTIONS]
@@ -148,14 +148,39 @@ Options:
   --manifest <PATH>       Path to Torvyn.toml
   --flow <NAME>           Flow to trace
   --input <SOURCE>        Override source input
-  --limit <N>             Trace at most N elements
+  --limit <N>             Report at most N elements
   --output-trace <PATH>   Write trace data to file (default: stdout)
   --trace-format <FMT>    Trace output: pretty (default), json, otlp
-  --show-buffers          Include buffer content snapshots
-  --show-backpressure     Highlight backpressure events
+  --show-buffers          Include buffer content snapshots (not implemented)
+  --show-backpressure     Include per-stream backpressure detail
 ```
 
-Same as `run` but with Diagnostic-level observability enabled. Every element's path through the pipeline is traced with timing, buffer operations, and copy events.
+Runs the flow at Diagnostic-level observability, which is the level at which the runtime retains a span per component invocation instead of folding invocations into aggregate histograms. Head sampling is set to 1.0 so the flow being traced is always traced.
+
+Output looks like:
+
+```
+  elem-0  ┬─ greeter        pull     461.7µs
+          └─ printer        push     346.1µs
+          in-component total: 807.8µs
+
+  -- Trace Summary ---------------------------------------------------
+  Elements traced:  5
+  End-to-end latency:  mean 98.2µs (p50: 37.5µs, p99: 500.0µs)
+  Copies:  10 (250 bytes)
+  Backpressure:  0 events
+  Trace ID:  42394cb3729956c5b0b16c619c3a5e6b
+```
+
+**The two latency figures measure different things.** A span's duration is one guest invocation, timed by the reactor around the call; `in-component total` sums an element's spans, so it is the time that element spent *inside* components. The summary's end-to-end percentiles come from the flow's latency histogram, measured from an element's pipeline-entry timestamp to its consumption at the sink — so they *do* include time queued between stages, and are larger.
+
+**`--limit` bounds the report, not the run.** A source decides how many elements it produces; the limit selects the first N for display. The summary always covers the whole run, and the report says so when the two differ.
+
+**Trace identity.** Every span carries a W3C span id under the flow's trace id, and components can read the same identifiers through `flow-context.trace-id()` and `flow-context.span-id()` — so a component's own telemetry can be correlated with the host's trace.
+
+**`--trace-format otlp`** emits an OTLP/HTTP `ExportTraceServiceRequest` body with absolute epoch timestamps, ready to POST to a collector's `/v1/traces` endpoint. Torvyn does not open the connection itself; pair it with `--output-trace` and your own transport.
+
+**`--show-buffers` is not implemented** and exits with an error rather than being silently ignored. Buffer content snapshots would require the runtime to retain payload bytes after an element is consumed, which it deliberately does not do — buffers return to the pool as soon as a stage releases them. Per-element copy counts and byte totals are in the summary.
 
 **Exit codes:** Same as `torvyn run`.
 

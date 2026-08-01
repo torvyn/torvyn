@@ -20,7 +20,8 @@ use crate::metrics::flow_metrics::FlowMetrics;
 use crate::metrics::registry::MetricsRegistry;
 use crate::metrics::snapshot::{snapshot_flow, FlowMetricsSnapshot};
 use crate::tracer::{
-    generate_span_id, generate_trace_id, FlowTraceContext, Sampler, SpanRingBuffer,
+    derive_span_id, generate_span_id, generate_trace_id, CompactSpanRecord, FlowTraceContext,
+    FlowTraceState, Sampler, SpanRingBuffer, TraceRegistry,
 };
 
 /// The central observability collector.
@@ -46,6 +47,10 @@ pub struct ObservabilityCollector {
     event_buffer: Arc<EventBuffer>,
     /// Trace sampler.
     sampler: Sampler,
+    /// Per-flow trace state: context plus retained spans. Populated by
+    /// `on_flow_start`, read by `record_element_span` on the hot path and by
+    /// the inspection APIs on the cold path.
+    traces: Arc<TraceRegistry>,
     /// Configuration.
     config: ObservabilityConfig,
     /// Held to keep the periodic metrics export task running; dropping it (on
@@ -104,8 +109,10 @@ impl ObservabilityCollector {
             }
             ExportTarget::OtlpHttp => {
                 tracing::warn!(
-                    "observability: OTLP export is configured but not yet implemented; \
-                     no metrics will be exported"
+                    "observability: OTLP metrics transport is not implemented, so no metrics \
+                     will be exported. Set metrics_exporter to \"stdout\" or \"file\" for \
+                     newline-delimited JSON metrics. Traces are separate and do export as \
+                     OTLP: `torvyn trace --trace-format otlp --output-trace <path>`."
                 );
                 None
             }
@@ -118,6 +125,7 @@ impl ObservabilityCollector {
             event_tx,
             event_buffer,
             sampler,
+            traces: Arc::new(TraceRegistry::new()),
             config,
             _export_stop: export_stop,
         })
@@ -139,6 +147,7 @@ impl ObservabilityCollector {
             event_tx,
             event_buffer,
             sampler,
+            traces: Arc::new(TraceRegistry::new()),
             config,
             _export_stop: None,
         }
@@ -158,20 +167,11 @@ impl ObservabilityCollector {
         component_ids: &[ComponentId],
         stream_ids: &[StreamId],
     ) -> Result<FlowObserver, crate::metrics::registry::RegistryError> {
-        let start_time_ns = crate::events::current_time_ns();
-        let flow_metrics =
-            self.metrics
-                .register_flow(flow_id, component_ids, stream_ids, start_time_ns)?;
-
-        let trace_id = generate_trace_id();
-        let root_span_id = generate_span_id();
-        let mut trace_ctx = FlowTraceContext::new(trace_id, root_span_id, flow_id);
-
-        // Head-based sampling decision.
-        let sampled = self.sampler.should_sample_head(trace_id.as_bytes());
-        if sampled == crate::tracer::SamplingDecision::Sample {
-            trace_ctx.set_sampled();
-        }
+        let flow_metrics = self.register_flow_state(flow_id, component_ids, stream_ids)?;
+        let trace_ctx = self
+            .traces
+            .get(flow_id)
+            .map_or_else(|| self.new_trace_context(flow_id), |state| *state.context());
 
         let ring_buffer = SpanRingBuffer::new(self.config.tracing.ring_buffer_capacity);
 
@@ -186,6 +186,109 @@ impl ObservabilityCollector {
         })
     }
 
+    /// Allocate a flow's metrics *and* its trace state.
+    ///
+    /// This is what `on_flow_start` calls. It is deliberately separate from
+    /// [`Self::register_flow`]: that method additionally builds a
+    /// `FlowObserver`, which owns a second ring buffer, and the reactor does
+    /// not use one — so the hot path's state is allocated here exactly once.
+    ///
+    /// # COLD PATH — once per flow.
+    fn register_flow_state(
+        &self,
+        flow_id: FlowId,
+        component_ids: &[ComponentId],
+        stream_ids: &[StreamId],
+    ) -> Result<Arc<FlowMetrics>, crate::metrics::registry::RegistryError> {
+        let start_time_ns = crate::events::current_time_ns();
+        let flow_metrics =
+            self.metrics
+                .register_flow(flow_id, component_ids, stream_ids, start_time_ns)?;
+
+        let trace_ctx = self.new_trace_context(flow_id);
+        self.traces.register(
+            flow_id,
+            Arc::new(FlowTraceState::new(
+                trace_ctx,
+                self.config.tracing.ring_buffer_capacity,
+            )),
+        );
+
+        Ok(flow_metrics)
+    }
+
+    /// Mint a flow's trace context and apply the head-sampling decision.
+    fn new_trace_context(&self, flow_id: FlowId) -> FlowTraceContext {
+        let trace_id = generate_trace_id();
+        let root_span_id = generate_span_id();
+        let mut trace_ctx = FlowTraceContext::new(trace_id, root_span_id, flow_id);
+
+        // Head-based sampling decision. A flow the sampler declines is not
+        // traced at any level: head sampling is what bounds tracing cost, and
+        // raising the level is not a way around it. `torvyn trace` sets the
+        // sample rate to 1.0 so that every flow it runs is traced.
+        if self.sampler.should_sample_head(trace_id.as_bytes())
+            == crate::tracer::SamplingDecision::Sample
+        {
+            trace_ctx.set_sampled();
+        }
+        if self.current_level() == ObservabilityLevel::Diagnostic {
+            trace_ctx.set_diagnostic();
+        }
+        trace_ctx
+    }
+
+    /// Take every span retained for a flow, oldest first, emptying the
+    /// buffer.
+    ///
+    /// Returns an empty vector for an unknown flow, an unsampled flow, or a
+    /// flow that ran below Diagnostic level — in each case nothing was
+    /// recorded, which is different from a flow that recorded nothing, and
+    /// callers that report to a user should distinguish the two using
+    /// [`Self::flow_trace_context`].
+    ///
+    /// # COLD PATH — inspection and export.
+    #[must_use]
+    pub fn drain_flow_spans(&self, flow_id: FlowId) -> Vec<CompactSpanRecord> {
+        self.traces
+            .get(flow_id)
+            .map(|state| state.drain_spans())
+            .unwrap_or_default()
+    }
+
+    /// Whether a flow's span buffer overwrote older spans to make room.
+    ///
+    /// A trace built from a wrapped buffer is the most recent window of the
+    /// run, not the whole run. Callers should say so rather than present a
+    /// truncated trace as complete.
+    ///
+    /// # COLD PATH
+    #[must_use]
+    pub fn flow_spans_wrapped(&self, flow_id: FlowId) -> bool {
+        self.traces
+            .get(flow_id)
+            .is_some_and(|state| state.has_wrapped())
+    }
+
+    /// The number of spans currently retained for a flow.
+    ///
+    /// # COLD PATH
+    #[must_use]
+    pub fn flow_span_count(&self, flow_id: FlowId) -> usize {
+        self.traces
+            .get(flow_id)
+            .map_or(0, |state| state.span_count())
+    }
+
+    /// The capacity of each flow's span ring buffer, from configuration.
+    ///
+    /// Exposed so a caller can tell a user how many spans a run can retain
+    /// before older ones are evicted.
+    #[must_use]
+    pub const fn span_buffer_capacity(&self) -> usize {
+        self.config.tracing.ring_buffer_capacity
+    }
+
     /// Deregister a flow and return its final metrics snapshot.
     ///
     /// # COLD PATH
@@ -197,6 +300,7 @@ impl ObservabilityCollector {
         flow_id: FlowId,
     ) -> Result<FlowMetricsSnapshot, crate::metrics::registry::RegistryError> {
         let metrics = self.metrics.deregister_flow(flow_id)?;
+        self.traces.deregister(flow_id);
         Ok(snapshot_flow(&metrics))
     }
 
@@ -385,13 +489,60 @@ impl EventSink for ObservabilityCollector {
     /// by the observer is not needed for metric recording.
     ///
     /// # COLD PATH — once per flow, before the flow driver starts.
+    /// # HOT PATH at Diagnostic level; a single atomic load below it.
+    #[inline]
+    fn record_element_span(
+        &self,
+        flow_id: FlowId,
+        component_id: ComponentId,
+        element_sequence: u64,
+        start_ns: u64,
+        end_ns: u64,
+        status: InvocationStatus,
+    ) {
+        // The level gate comes first and does nothing but load an atomic, so
+        // Production-level flows pay one relaxed-ordering read per invocation
+        // for a feature they are not using.
+        if self.current_level() != ObservabilityLevel::Diagnostic {
+            return;
+        }
+
+        let Some(state) = self.traces.get(flow_id) else {
+            self.metrics.system.spans_dropped.increment(1);
+            return;
+        };
+        if !state.is_sampled() {
+            return;
+        }
+
+        let record = CompactSpanRecord {
+            span_id: derive_span_id(flow_id, component_id, element_sequence),
+            parent_span_id: state.context().trace_ctx.span_id,
+            component_id,
+            start_ns,
+            end_ns,
+            status_code: status_code(status),
+            element_sequence,
+        };
+
+        if !state.push_span(record) {
+            self.metrics.system.spans_dropped.increment(1);
+        }
+    }
+
+    /// # COLD PATH — once per flow.
+    fn flow_trace_context(&self, flow_id: FlowId) -> Option<torvyn_types::TraceContext> {
+        let state = self.traces.get(flow_id)?;
+        state.is_sampled().then(|| state.context().trace_ctx)
+    }
+
     fn on_flow_start(
         &self,
         flow_id: FlowId,
         component_ids: &[ComponentId],
         stream_ids: &[StreamId],
     ) {
-        if let Err(error) = self.register_flow(flow_id, component_ids, stream_ids) {
+        if let Err(error) = self.register_flow_state(flow_id, component_ids, stream_ids) {
             // Registration only fails on a duplicate flow id or a registry
             // capacity limit; neither should stall the flow. Log and continue —
             // the flow runs with metrics recording degraded to a no-op rather
@@ -402,6 +553,22 @@ impl EventSink for ObservabilityCollector {
                 "observability: flow metrics registration failed; metrics disabled for this flow"
             );
         }
+    }
+}
+
+/// Map an [`InvocationStatus`] onto the compact status code stored in a span
+/// record.
+///
+/// The encoding matches [`CompactSpanRecord::status_code`]'s documented
+/// contract (0 = ok, 1 = error, 2 = timeout, 3 = cancelled) and the OTLP
+/// exporter's expectation that any non-zero value means the span failed.
+#[inline]
+const fn status_code(status: InvocationStatus) -> u8 {
+    match status {
+        InvocationStatus::Ok => 0,
+        InvocationStatus::Error(_) => 1,
+        InvocationStatus::Timeout => 2,
+        InvocationStatus::Cancelled => 3,
     }
 }
 

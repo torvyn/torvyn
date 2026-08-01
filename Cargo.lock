@@ -3125,6 +3125,7 @@ dependencies = [
  "torvyn-config",
  "torvyn-engine",
  "torvyn-host",
+ "torvyn-observability",
  "torvyn-pipeline",
  "torvyn-reactor",
  "torvyn-resources",

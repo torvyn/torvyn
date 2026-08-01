@@ -6,7 +6,7 @@
 
 #[cfg(feature = "mock")]
 use torvyn_types::BackpressureSignal;
-use torvyn_types::{BufferHandle, ComponentId, ElementMeta, FlowId};
+use torvyn_types::{BufferHandle, ComponentId, ElementMeta, FlowId, TraceContext};
 
 // ---------------------------------------------------------------------------
 // CompiledComponent
@@ -202,6 +202,27 @@ impl ComponentInstance {
             }
             _ => {
                 let _ = flow_id;
+            }
+        }
+    }
+
+    /// Stamp the flow's W3C trace context onto this instance's store.
+    ///
+    /// Called by the reactor once per instance at flow spawn, next to
+    /// [`Self::set_flow_id`], so a guest calling `flow-context.trace-id()`
+    /// receives the identifier the host records the flow's spans under.
+    /// Instances that carry no host-side state are left unchanged.
+    ///
+    /// # COLD PATH — called once per instance at spawn.
+    #[inline]
+    pub fn set_trace_context(&mut self, trace_context: TraceContext) {
+        match &mut self.inner {
+            #[cfg(feature = "wasmtime-backend")]
+            ComponentInstanceInner::Wasmtime(state) => {
+                state.store.data_mut().set_trace_context(trace_context);
+            }
+            _ => {
+                let _ = trace_context;
             }
         }
     }

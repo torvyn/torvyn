@@ -236,6 +236,18 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
         self.event_sink
             .on_flow_start(flow_id, &component_ids, &stream_ids);
 
+        // Propagate the flow's trace context into every component's store, so
+        // a guest calling `flow-context.trace-id()` reports the identifier the
+        // host records this flow's spans under. This must follow
+        // `on_flow_start`, which is where the sink mints the context; a sink
+        // that is not tracing returns `None` and the guests report empty
+        // identifiers, the W3C representation of "no trace".
+        if let Some(trace_context) = self.event_sink.flow_trace_context(flow_id) {
+            for instance in &mut instances {
+                instance.set_trace_context(trace_context);
+            }
+        }
+
         // 4. Build streams from connections.
         let streams: Vec<StreamState> = config
             .topology

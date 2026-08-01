@@ -165,6 +165,7 @@ mod tests {
                     flow_id: FlowId::new(1),
                     name: "alpha".into(),
                     state: FlowState::Running,
+                    stages: Vec::new(),
                 },
             );
             guard.insert(
@@ -173,6 +174,7 @@ mod tests {
                     flow_id: FlowId::new(2),
                     name: "beta".into(),
                     state: FlowState::Completed,
+                    stages: Vec::new(),
                 },
             );
         }
@@ -192,6 +194,7 @@ mod tests {
                     flow_id: FlowId::new(42),
                     name: "target".into(),
                     state: FlowState::Running,
+                    stages: Vec::new(),
                 },
             );
         }
@@ -230,6 +233,7 @@ mod tests {
             flow_id: FlowId::new(7),
             name: "test-flow".into(),
             state: FlowState::Draining,
+            stages: Vec::new(),
         };
         let summary = FlowSummary::from(&record);
         assert_eq!(summary.flow_id, FlowId::new(7));
