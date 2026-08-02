@@ -106,6 +106,14 @@ pub async fn execute(
             suggestion: "Add a [flow.*] section or use --flow <name>.".into(),
         })?;
 
+    // Reject the options this command cannot honour. Accepting a flag and
+    // ignoring it leaves the user believing they got something they did not —
+    // a bounded run, a redirected source — and the pipeline behaves as though
+    // the flag were never typed.
+    if let Some(unsupported) = unsupported_option(args) {
+        return Err(unsupported);
+    }
+
     // Parse timeout
     let timeout = args
         .timeout
@@ -277,6 +285,53 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
     };
 
     Ok(Duration::from_millis(millis as u64))
+}
+
+/// Report the first option that is accepted by the parser but not implemented.
+///
+/// These are declared in [`RunArgs`] and documented in the CLI reference, so
+/// they cannot simply be removed without breaking `--help` and the docs. Until
+/// each is wired up, failing loudly is the honest behaviour: the alternative
+/// is a run that quietly ignores what the user asked for.
+fn unsupported_option(args: &RunArgs) -> Option<CliError> {
+    let unsupported = |option: &str, detail: &str, suggestion: &str| {
+        Some(CliError::Config {
+            detail: format!("{option} is not implemented: {detail}"),
+            file: None,
+            suggestion: suggestion.to_owned(),
+        })
+    };
+
+    if args.limit.is_some() {
+        return unsupported(
+            "--limit",
+            "the runtime has no element budget to stop a flow at a count",
+            "A source decides how many elements it produces; give it a bounded count through \
+             the node's `config` in Torvyn.toml, or use --timeout to bound the run by time.",
+        );
+    }
+    if args.input.is_some() {
+        return unsupported(
+            "--input",
+            "overriding a source's input is not wired up",
+            "Set the source node's `config` in Torvyn.toml and re-run without --input.",
+        );
+    }
+    if args.output.is_some() {
+        return unsupported(
+            "--output",
+            "overriding a sink's destination is not wired up",
+            "Set the sink node's `config` in Torvyn.toml and re-run without --output.",
+        );
+    }
+    if !args.config.is_empty() {
+        return unsupported(
+            "--config",
+            "per-component configuration overrides are not wired up",
+            "Set the node's `config` value in Torvyn.toml and re-run without --config.",
+        );
+    }
+    None
 }
 
 #[cfg(test)]

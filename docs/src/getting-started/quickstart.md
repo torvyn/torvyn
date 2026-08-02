@@ -52,7 +52,7 @@ Expected output:
     cd my-transform
     torvyn check              # Validate contracts and manifest
     torvyn build              # Compile to WebAssembly component
-    torvyn run --limit 10     # Run and see output
+    torvyn run                # Run and see output
 ```
 
 Move into the project directory:
@@ -205,7 +205,7 @@ interface = "torvyn:streaming/processor"
 Now run the pipeline with a limited number of elements:
 
 ```bash
-torvyn run --limit 10
+torvyn run
 ```
 
 Expected output:

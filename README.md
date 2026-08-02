@@ -308,7 +308,10 @@ cd my-pipeline
 # Validate contracts and check compatibility
 torvyn check
 
-# Run the pipeline locally with tracing enabled
+# Compile the components to WebAssembly
+torvyn build
+
+# Run the pipeline locally
 torvyn run
 
 # View latency, throughput, and copy accounting
@@ -328,7 +331,7 @@ The starter template creates a two-component pipeline (Source to Sink) with WIT 
 - **Per-element observability** — Three-level system (Off / Production / Diagnostic) with explicit overhead budgets. Production records counters and histograms; Diagnostic additionally retains a span per component invocation, so `torvyn trace` shows each element's real path through the pipeline. Spans carry W3C trace and span ids — readable by components themselves — and export as OTLP/HTTP JSON.
 - **Polyglot components** — Write components in any language targeting WebAssembly Components. Rust-first, with planned support for Go, Python, and more.
 - **OCI packaging** — Package and distribute components as OCI-compatible artifacts with signed provenance.
-- **CLI-first workflow** — `init`, `check`, `link`, `run`, `trace`, `bench`, `pack`, `publish`, `doctor`.
+- **CLI-first workflow** — `init`, `check`, `build`, `link`, `run`, `trace`, `bench`, `pack`, `publish`, `doctor`.
 
 ## Performance
 

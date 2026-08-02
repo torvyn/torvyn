@@ -78,6 +78,12 @@ jobs:
           tool: cargo-component@0.21.1
       - name: Run real-Wasm end-to-end tests
         run: cargo test -p torvyn-integration-tests --features wasm-e2e --test test_real_wasm_e2e
+      # Scaffolds a project with `torvyn init` and drives it through
+      # check -> build -> run, asserting the pipeline produces its expected
+      # output. This is the path a new user takes, and it needs the same
+      # component toolchain this job already installs.
+      - name: Run scaffold end-to-end test
+        run: cargo test -p torvyn-cli --features scaffold-e2e --test scaffold_end_to_end_tests
 
   wasm-polyglot-e2e:
     name: Wasm Polyglot End-to-End

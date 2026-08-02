@@ -52,7 +52,7 @@ impl HumanRenderable for InitResult {
         eprintln!("    cd {}", self.directory.display());
         eprintln!("    torvyn check              # Validate contracts and manifest");
         eprintln!("    torvyn build              # Compile to WebAssembly component");
-        eprintln!("    torvyn run --limit 10     # Run and see output");
+        eprintln!("    torvyn run                # Run and see output");
     }
 }
 

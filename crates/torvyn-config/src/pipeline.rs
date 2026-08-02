@@ -247,6 +247,17 @@ pub struct PipelineDefinition {
     #[serde(default, rename = "flow")]
     pub flows: BTreeMap<String, FlowDef>,
 
+    /// Component declarations from the manifest's `[[component]]`
+    /// array-of-tables.
+    ///
+    /// A flow node names the component it runs (`component = "source"`); this
+    /// is where that name is declared and pointed at a source directory. The
+    /// host resolves one to the other when it builds a topology, so the two
+    /// halves of the manifest connect. Empty for manifests whose nodes
+    /// reference components directly by `file://` URI.
+    #[serde(default, rename = "component")]
+    pub components: Vec<crate::manifest::ComponentDecl>,
+
     /// Runtime configuration overrides for this pipeline.
     #[serde(default)]
     pub runtime: Option<RuntimeConfig>,

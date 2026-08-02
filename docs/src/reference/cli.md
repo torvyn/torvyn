@@ -79,6 +79,37 @@ Runs a seven-step validation pipeline: manifest parse, manifest schema validatio
 
 **Exit codes:** 0 (all checks passed), 1 (errors found), 2 (warnings found, only with `--strict`)
 
+### `torvyn build`
+
+Compile the project's declared components to WebAssembly.
+
+```
+torvyn build [OPTIONS]
+
+Options:
+  --manifest <PATH>       Path to Torvyn.toml
+  --component <NAME>      Build only this component (default: all)
+  --debug                 Build without optimisations, overriding `[build] release`
+```
+
+Builds every component in the manifest's `[[component]]` list with the toolchain for its `language`, and copies each artifact to `.torvyn/build/<name>.wasm`.
+
+That destination is the contract with `torvyn run`: a flow node naming a component resolves to exactly this path. It is why the artifact is copied rather than read from the component's own `target/` directory — a compiler names its output after the component's package, which need not match the name the manifest gives it.
+
+Rust components build with `cargo component` out of the box. For another language, set `build_command` on the `[[component]]` entry to the command that produces a WebAssembly Component:
+
+```toml
+[[component]]
+name = "tokenizer"
+path = "components/tokenizer"
+language = "go"
+build_command = "tinygo build -target=wasip2 -o tokenizer.wasm ."
+```
+
+The `[build]` table sets the target triple, profile, and any extra arguments passed to the toolchain.
+
+**Exit codes:** 0 (built), 1 (manifest or configuration error), 2 (a component's build failed)
+
 ### `torvyn link`
 
 Verify that a pipeline's components are compatible and can be composed.

@@ -459,7 +459,7 @@ Expected output:
 Now run the pipeline:
 
 ```bash
-torvyn run --limit 10
+torvyn run
 ```
 
 Expected output:

@@ -18,33 +18,50 @@ fn tf(path: &str, content: &str) -> TemplateFile {
 // ---------------------------------------------------------------------------
 
 /// The `transform` template: a stateless data transformer.
+/// Emit the complete `torvyn:streaming` contract under `prefix`.
+///
+/// Every scaffolded component receives the whole canonical package, not the
+/// subset its own world happens to reference. Two reasons: `world.wit`
+/// declares every world, so a component can switch role by changing one line
+/// of its Cargo.toml; and the files are the contract crate's own, embedded at
+/// compile time, so a scaffolded project cannot drift from the runtime it will
+/// run against.
+///
+/// It was drift that made scaffolded projects unrunnable: the templates
+/// carried a hand-maintained copy of the WIT whose `data-source` world had
+/// lost `export lifecycle`, so the host refused every generated source with
+/// "not a data-source".
+fn canonical_wit(prefix: &str) -> Vec<TemplateFile> {
+    [
+        ("types.wit", TORVYN_STREAMING_TYPES_WIT),
+        ("source.wit", TORVYN_STREAMING_SOURCE_WIT),
+        ("sink.wit", TORVYN_STREAMING_SINK_WIT),
+        ("processor.wit", TORVYN_STREAMING_PROCESSOR_WIT),
+        ("lifecycle.wit", TORVYN_STREAMING_LIFECYCLE_WIT),
+        (
+            "buffer-allocator.wit",
+            TORVYN_STREAMING_BUFFER_ALLOCATOR_WIT,
+        ),
+        ("world.wit", TORVYN_STREAMING_WORLD_WIT),
+    ]
+    .into_iter()
+    .map(|(name, content)| tf(&format!("{prefix}{name}"), content))
+    .collect()
+}
+
+/// Files for the stateless data transformer template.
 pub fn transform_template() -> Template {
+    let mut files = canonical_wit("wit/torvyn-streaming/");
+    files.extend([
+        tf("Torvyn.toml", TRANSFORM_TORVYN_TOML),
+        tf("Cargo.toml", TRANSFORM_CARGO_TOML),
+        tf("src/lib.rs", TRANSFORM_LIB_RS),
+        tf(".gitignore", COMMON_GITIGNORE),
+        tf("README.md", TRANSFORM_README),
+    ]);
     Template {
         description: "Stateless data transformer".into(),
-        files: vec![
-            tf("Torvyn.toml", TRANSFORM_TORVYN_TOML),
-            tf("Cargo.toml", TRANSFORM_CARGO_TOML),
-            tf("wit/torvyn-streaming/types.wit", TORVYN_STREAMING_TYPES_WIT),
-            tf(
-                "wit/torvyn-streaming/processor.wit",
-                TORVYN_STREAMING_PROCESSOR_WIT,
-            ),
-            tf(
-                "wit/torvyn-streaming/buffer-allocator.wit",
-                TORVYN_STREAMING_BUFFER_ALLOCATOR_WIT,
-            ),
-            tf(
-                "wit/torvyn-streaming/lifecycle.wit",
-                TORVYN_STREAMING_LIFECYCLE_WIT,
-            ),
-            tf(
-                "wit/torvyn-streaming/world.wit",
-                TORVYN_STREAMING_TRANSFORM_WORLD_WIT,
-            ),
-            tf("src/lib.rs", TRANSFORM_LIB_RS),
-            tf(".gitignore", COMMON_GITIGNORE),
-            tf("README.md", TRANSFORM_README),
-        ],
+        files,
     }
 }
 
@@ -71,140 +88,46 @@ crate-type = ["cdylib"]
 wit-bindgen = "0.36"
 
 [package.metadata.component]
-package = "{{project_name}}:component"
+package = "torvyn:streaming"
+
+# cargo-component reads the component's WIT from here. Without an explicit
+# target it looks in `wit/` alone, misses `wit/torvyn-streaming/`, and reports
+# that no package header was found.
+[package.metadata.component.target]
+world = "transform"
+path = "wit/torvyn-streaming"
+
+# An empty [workspace] table makes this component a standalone cargo package.
+# Without it, creating a Torvyn project inside another cargo workspace makes
+# cargo refuse to build the component until it is added to that workspace's
+# members.
+[workspace]
 "#;
 
 // ---------------------------------------------------------------------------
 // Shared Torvyn streaming WIT definitions (bundled with templates)
 // ---------------------------------------------------------------------------
 
-const TORVYN_STREAMING_TYPES_WIT: &str = r#"package torvyn:streaming@0.1.0;
+const TORVYN_STREAMING_TYPES_WIT: &str =
+    include_str!("../../../torvyn-contracts/wit/torvyn-streaming/types.wit");
 
-interface types {
-    resource buffer {
-        size: func() -> u64;
-        content-type: func() -> string;
-        read: func(offset: u64, len: u64) -> list<u8>;
-        read-all: func() -> list<u8>;
-    }
+const TORVYN_STREAMING_PROCESSOR_WIT: &str =
+    include_str!("../../../torvyn-contracts/wit/torvyn-streaming/processor.wit");
 
-    resource mutable-buffer {
-        write: func(offset: u64, bytes: list<u8>) -> result<_, buffer-error>;
-        append: func(bytes: list<u8>) -> result<_, buffer-error>;
-        size: func() -> u64;
-        capacity: func() -> u64;
-        set-content-type: func(content-type: string);
-        freeze: func() -> buffer;
-    }
+const TORVYN_STREAMING_BUFFER_ALLOCATOR_WIT: &str =
+    include_str!("../../../torvyn-contracts/wit/torvyn-streaming/buffer-allocator.wit");
 
-    variant buffer-error {
-        capacity-exceeded,
-        out-of-bounds,
-        allocation-failed(string),
-    }
+const TORVYN_STREAMING_LIFECYCLE_WIT: &str =
+    include_str!("../../../torvyn-contracts/wit/torvyn-streaming/lifecycle.wit");
 
-    resource flow-context {
-        trace-id: func() -> string;
-        span-id: func() -> string;
-        deadline-ns: func() -> u64;
-        flow-id: func() -> string;
-    }
+const TORVYN_STREAMING_SOURCE_WIT: &str =
+    include_str!("../../../torvyn-contracts/wit/torvyn-streaming/source.wit");
 
-    record element-meta {
-        sequence: u64,
-        timestamp-ns: u64,
-        content-type: string,
-    }
+const TORVYN_STREAMING_SINK_WIT: &str =
+    include_str!("../../../torvyn-contracts/wit/torvyn-streaming/sink.wit");
 
-    record stream-element {
-        meta: element-meta,
-        payload: borrow<buffer>,
-        context: borrow<flow-context>,
-    }
-
-    record output-element {
-        meta: element-meta,
-        payload: buffer,
-    }
-
-    variant process-result {
-        emit(output-element),
-        drop,
-    }
-
-    variant process-error {
-        invalid-input(string),
-        unavailable(string),
-        internal(string),
-        deadline-exceeded,
-        fatal(string),
-    }
-
-    enum backpressure-signal {
-        ready,
-        pause,
-    }
-}
-"#;
-
-const TORVYN_STREAMING_PROCESSOR_WIT: &str = r#"package torvyn:streaming@0.1.0;
-
-interface processor {
-    use types.{stream-element, process-result, process-error};
-
-    process: func(input: stream-element) -> result<process-result, process-error>;
-}
-"#;
-
-const TORVYN_STREAMING_BUFFER_ALLOCATOR_WIT: &str = r#"package torvyn:streaming@0.1.0;
-
-interface buffer-allocator {
-    use types.{mutable-buffer, buffer-error, buffer};
-
-    allocate: func(capacity-hint: u64) -> result<mutable-buffer, buffer-error>;
-    clone-into-mutable: func(source: borrow<buffer>) -> result<mutable-buffer, buffer-error>;
-}
-"#;
-
-const TORVYN_STREAMING_LIFECYCLE_WIT: &str = r#"package torvyn:streaming@0.1.0;
-
-interface lifecycle {
-    use types.{process-error};
-
-    init: func(config: string) -> result<_, process-error>;
-    teardown: func();
-}
-"#;
-
-const TORVYN_STREAMING_SOURCE_WIT: &str = r#"package torvyn:streaming@0.1.0;
-
-interface source {
-    use types.{output-element, process-error, backpressure-signal};
-
-    pull: func() -> result<option<output-element>, process-error>;
-    notify-backpressure: func(signal: backpressure-signal);
-}
-"#;
-
-const TORVYN_STREAMING_SINK_WIT: &str = r#"package torvyn:streaming@0.1.0;
-
-interface sink {
-    use types.{stream-element, process-error, backpressure-signal};
-
-    push: func(element: stream-element) -> result<backpressure-signal, process-error>;
-    complete: func() -> result<_, process-error>;
-}
-"#;
-
-const TORVYN_STREAMING_TRANSFORM_WORLD_WIT: &str = r#"package torvyn:streaming@0.1.0;
-
-world transform {
-    import types;
-    import buffer-allocator;
-
-    export processor;
-}
-"#;
+const TORVYN_STREAMING_WORLD_WIT: &str =
+    include_str!("../../../torvyn-contracts/wit/torvyn-streaming/world.wit");
 
 const TRANSFORM_LIB_RS: &str = r#"// Generated by `torvyn init --template transform` on {{date}}
 // Torvyn CLI v{{torvyn_version}}
@@ -267,29 +190,19 @@ torvyn run         # Execute the pipeline locally
 // ---------------------------------------------------------------------------
 
 /// The `source` template: a data producer.
+/// Files for the data producer (no input, one output) template.
 pub fn source_template() -> Template {
+    let mut files = canonical_wit("wit/torvyn-streaming/");
+    files.extend([
+        tf("Torvyn.toml", SOURCE_TORVYN_TOML),
+        tf("Cargo.toml", SOURCE_CARGO_TOML),
+        tf("src/lib.rs", SOURCE_LIB_RS),
+        tf(".gitignore", COMMON_GITIGNORE),
+        tf("README.md", SOURCE_README),
+    ]);
     Template {
         description: "Data producer (no input, one output)".into(),
-        files: vec![
-            tf("Torvyn.toml", SOURCE_TORVYN_TOML),
-            tf("Cargo.toml", SOURCE_CARGO_TOML),
-            tf("wit/torvyn-streaming/types.wit", TORVYN_STREAMING_TYPES_WIT),
-            tf(
-                "wit/torvyn-streaming/source.wit",
-                TORVYN_STREAMING_SOURCE_WIT,
-            ),
-            tf(
-                "wit/torvyn-streaming/buffer-allocator.wit",
-                TORVYN_STREAMING_BUFFER_ALLOCATOR_WIT,
-            ),
-            tf(
-                "wit/torvyn-streaming/world.wit",
-                TORVYN_STREAMING_SOURCE_WORLD_WIT,
-            ),
-            tf("src/lib.rs", SOURCE_LIB_RS),
-            tf(".gitignore", COMMON_GITIGNORE),
-            tf("README.md", SOURCE_README),
-        ],
+        files,
     }
 }
 
@@ -316,17 +229,20 @@ crate-type = ["cdylib"]
 wit-bindgen = "0.36"
 
 [package.metadata.component]
-package = "{{project_name}}:component"
-"#;
+package = "torvyn:streaming"
 
-const TORVYN_STREAMING_SOURCE_WORLD_WIT: &str = r#"package torvyn:streaming@0.1.0;
+# cargo-component reads the component's WIT from here. Without an explicit
+# target it looks in `wit/` alone, misses `wit/torvyn-streaming/`, and reports
+# that no package header was found.
+[package.metadata.component.target]
+world = "data-source"
+path = "wit/torvyn-streaming"
 
-world data-source {
-    import types;
-    import buffer-allocator;
-
-    export source;
-}
+# An empty [workspace] table makes this component a standalone cargo package.
+# Without it, creating a Torvyn project inside another cargo workspace makes
+# cargo refuse to build the component until it is added to that workspace's
+# members.
+[workspace]
 "#;
 
 const SOURCE_LIB_RS: &str = r#"// Generated by `torvyn init --template source` on {{date}}
@@ -341,6 +257,7 @@ wit_bindgen::generate!({
 });
 
 use exports::torvyn::streaming::source::Guest;
+use exports::torvyn::streaming::lifecycle::Guest as LifecycleGuest;
 use torvyn::streaming::types::{OutputElement, ElementMeta, ProcessError, BackpressureSignal};
 use torvyn::streaming::buffer_allocator;
 
@@ -405,22 +322,19 @@ torvyn build       # Compile to WebAssembly
 // ---------------------------------------------------------------------------
 
 /// The `sink` template: a data consumer.
+/// Files for the data consumer (one input, no output) template.
 pub fn sink_template() -> Template {
+    let mut files = canonical_wit("wit/torvyn-streaming/");
+    files.extend([
+        tf("Torvyn.toml", SINK_TORVYN_TOML),
+        tf("Cargo.toml", SINK_CARGO_TOML),
+        tf("src/lib.rs", SINK_LIB_RS),
+        tf(".gitignore", COMMON_GITIGNORE),
+        tf("README.md", SINK_README),
+    ]);
     Template {
         description: "Data consumer (one input, no output)".into(),
-        files: vec![
-            tf("Torvyn.toml", SINK_TORVYN_TOML),
-            tf("Cargo.toml", SINK_CARGO_TOML),
-            tf("wit/torvyn-streaming/types.wit", TORVYN_STREAMING_TYPES_WIT),
-            tf("wit/torvyn-streaming/sink.wit", TORVYN_STREAMING_SINK_WIT),
-            tf(
-                "wit/torvyn-streaming/world.wit",
-                TORVYN_STREAMING_SINK_WORLD_WIT,
-            ),
-            tf("src/lib.rs", SINK_LIB_RS),
-            tf(".gitignore", COMMON_GITIGNORE),
-            tf("README.md", SINK_README),
-        ],
+        files,
     }
 }
 
@@ -433,6 +347,12 @@ contract_version = "{{contract_version}}"
 name = "{{project_name}}"
 path = "."
 language = "rust"
+
+# Components run fully sandboxed by default: no filesystem, no network, no
+# stdio. The sink prints what it receives, so it is granted stdout — and
+# nothing else. Grant keys are flow-node names.
+[security.grants.sink]
+capabilities = ["stdio:stdout"]
 "#;
 
 const SINK_CARGO_TOML: &str = r#"[package]
@@ -447,16 +367,20 @@ crate-type = ["cdylib"]
 wit-bindgen = "0.36"
 
 [package.metadata.component]
-package = "{{project_name}}:component"
-"#;
+package = "torvyn:streaming"
 
-const TORVYN_STREAMING_SINK_WORLD_WIT: &str = r#"package torvyn:streaming@0.1.0;
+# cargo-component reads the component's WIT from here. Without an explicit
+# target it looks in `wit/` alone, misses `wit/torvyn-streaming/`, and reports
+# that no package header was found.
+[package.metadata.component.target]
+world = "data-sink"
+path = "wit/torvyn-streaming"
 
-world data-sink {
-    import types;
-
-    export sink;
-}
+# An empty [workspace] table makes this component a standalone cargo package.
+# Without it, creating a Torvyn project inside another cargo workspace makes
+# cargo refuse to build the component until it is added to that workspace's
+# members.
+[workspace]
 "#;
 
 const SINK_LIB_RS: &str = r#"// Generated by `torvyn init --template sink` on {{date}}
@@ -471,6 +395,7 @@ wit_bindgen::generate!({
 });
 
 use exports::torvyn::streaming::sink::Guest;
+use exports::torvyn::streaming::lifecycle::Guest as LifecycleGuest;
 use torvyn::streaming::types::{StreamElement, ProcessError, BackpressureSignal};
 
 struct {{component_type}};
@@ -510,25 +435,27 @@ torvyn build
 // ---------------------------------------------------------------------------
 
 /// The `filter` template: a content filter/guard.
+/// Files for the content filter or guard template.
 pub fn filter_template() -> Template {
+    let mut files = canonical_wit("wit/torvyn-streaming/");
+    files.extend([
+        tf(
+            "wit/torvyn-streaming/filter.wit",
+            TORVYN_STREAMING_FILTER_WIT,
+        ),
+        tf(
+            "wit/torvyn-streaming/filter-world.wit",
+            TORVYN_STREAMING_FILTER_WORLD_WIT,
+        ),
+        tf("Torvyn.toml", FILTER_TORVYN_TOML),
+        tf("Cargo.toml", FILTER_CARGO_TOML),
+        tf("src/lib.rs", FILTER_LIB_RS),
+        tf(".gitignore", COMMON_GITIGNORE),
+        tf("README.md", FILTER_README),
+    ]);
     Template {
         description: "Content filter/guard".into(),
-        files: vec![
-            tf("Torvyn.toml", FILTER_TORVYN_TOML),
-            tf("Cargo.toml", FILTER_CARGO_TOML),
-            tf("wit/torvyn-streaming/types.wit", TORVYN_STREAMING_TYPES_WIT),
-            tf(
-                "wit/torvyn-streaming/filter.wit",
-                TORVYN_STREAMING_FILTER_WIT,
-            ),
-            tf(
-                "wit/torvyn-streaming/world.wit",
-                TORVYN_STREAMING_FILTER_WORLD_WIT,
-            ),
-            tf("src/lib.rs", FILTER_LIB_RS),
-            tf(".gitignore", COMMON_GITIGNORE),
-            tf("README.md", FILTER_README),
-        ],
+        files,
     }
 }
 
@@ -555,7 +482,20 @@ crate-type = ["cdylib"]
 wit-bindgen = "0.36"
 
 [package.metadata.component]
-package = "{{project_name}}:component"
+package = "torvyn:streaming"
+
+# cargo-component reads the component's WIT from here. Without an explicit
+# target it looks in `wit/` alone, misses `wit/torvyn-streaming/`, and reports
+# that no package header was found.
+[package.metadata.component.target]
+world = "content-filter"
+path = "wit/torvyn-streaming"
+
+# An empty [workspace] table makes this component a standalone cargo package.
+# Without it, creating a Torvyn project inside another cargo workspace makes
+# cargo refuse to build the component until it is added to that workspace's
+# members.
+[workspace]
 "#;
 
 const TORVYN_STREAMING_FILTER_WIT: &str = r#"package torvyn:streaming@0.1.0;
@@ -638,25 +578,27 @@ torvyn build       # Compile to WebAssembly
 // ---------------------------------------------------------------------------
 
 /// The `router` template: multi-output router.
+/// Files for the multi-output router template.
 pub fn router_template() -> Template {
+    let mut files = canonical_wit("wit/torvyn-streaming/");
+    files.extend([
+        tf(
+            "wit/torvyn-streaming/router.wit",
+            TORVYN_STREAMING_ROUTER_WIT,
+        ),
+        tf(
+            "wit/torvyn-streaming/router-world.wit",
+            TORVYN_STREAMING_ROUTER_WORLD_WIT,
+        ),
+        tf("Torvyn.toml", TRANSFORM_TORVYN_TOML),
+        tf("Cargo.toml", TRANSFORM_CARGO_TOML),
+        tf("src/lib.rs", ROUTER_LIB_RS),
+        tf(".gitignore", COMMON_GITIGNORE),
+        tf("README.md", ROUTER_README),
+    ]);
     Template {
         description: "Multi-output router".into(),
-        files: vec![
-            tf("Torvyn.toml", TRANSFORM_TORVYN_TOML),
-            tf("Cargo.toml", TRANSFORM_CARGO_TOML),
-            tf("wit/torvyn-streaming/types.wit", TORVYN_STREAMING_TYPES_WIT),
-            tf(
-                "wit/torvyn-streaming/router.wit",
-                TORVYN_STREAMING_ROUTER_WIT,
-            ),
-            tf(
-                "wit/torvyn-streaming/world.wit",
-                TORVYN_STREAMING_ROUTER_WORLD_WIT,
-            ),
-            tf("src/lib.rs", ROUTER_LIB_RS),
-            tf(".gitignore", COMMON_GITIGNORE),
-            tf("README.md", ROUTER_README),
-        ],
+        files,
     }
 }
 
@@ -737,29 +679,27 @@ torvyn build       # Compile to WebAssembly
 // ---------------------------------------------------------------------------
 
 /// The `aggregator` template: stateful windowed aggregator.
+/// Files for the stateful windowed aggregator template.
 pub fn aggregator_template() -> Template {
+    let mut files = canonical_wit("wit/torvyn-streaming/");
+    files.extend([
+        tf(
+            "wit/torvyn-streaming/aggregator.wit",
+            TORVYN_STREAMING_AGGREGATOR_WIT,
+        ),
+        tf(
+            "wit/torvyn-streaming/aggregator-world.wit",
+            TORVYN_STREAMING_AGGREGATOR_WORLD_WIT,
+        ),
+        tf("Torvyn.toml", TRANSFORM_TORVYN_TOML),
+        tf("Cargo.toml", TRANSFORM_CARGO_TOML),
+        tf("src/lib.rs", AGGREGATOR_LIB_RS),
+        tf(".gitignore", COMMON_GITIGNORE),
+        tf("README.md", AGGREGATOR_README),
+    ]);
     Template {
         description: "Stateful windowed aggregator".into(),
-        files: vec![
-            tf("Torvyn.toml", TRANSFORM_TORVYN_TOML),
-            tf("Cargo.toml", TRANSFORM_CARGO_TOML),
-            tf("wit/torvyn-streaming/types.wit", TORVYN_STREAMING_TYPES_WIT),
-            tf(
-                "wit/torvyn-streaming/buffer-allocator.wit",
-                TORVYN_STREAMING_BUFFER_ALLOCATOR_WIT,
-            ),
-            tf(
-                "wit/torvyn-streaming/aggregator.wit",
-                TORVYN_STREAMING_AGGREGATOR_WIT,
-            ),
-            tf(
-                "wit/torvyn-streaming/world.wit",
-                TORVYN_STREAMING_AGGREGATOR_WORLD_WIT,
-            ),
-            tf("src/lib.rs", AGGREGATOR_LIB_RS),
-            tf(".gitignore", COMMON_GITIGNORE),
-            tf("README.md", AGGREGATOR_README),
-        ],
+        files,
     }
 }
 
@@ -876,67 +816,28 @@ torvyn build       # Compile to WebAssembly
 // ---------------------------------------------------------------------------
 
 /// The `full-pipeline` template: complete multi-component pipeline.
+/// Files for the complete pipeline: source, transform, and sink template.
 pub fn full_pipeline_template() -> Template {
+    let mut files = canonical_wit("components/source/wit/torvyn-streaming/");
+    files.extend(canonical_wit("components/transform/wit/torvyn-streaming/"));
+    files.extend(canonical_wit("components/sink/wit/torvyn-streaming/"));
+    files.extend([
+        tf("Torvyn.toml", FULL_PIPELINE_TORVYN_TOML),
+        // Source component
+        tf("components/source/Cargo.toml", FP_SOURCE_CARGO_TOML),
+        tf("components/source/src/lib.rs", FP_SOURCE_LIB_RS),
+        // Transform component
+        tf("components/transform/Cargo.toml", FP_TRANSFORM_CARGO_TOML),
+        tf("components/transform/src/lib.rs", FP_TRANSFORM_LIB_RS),
+        // Sink component
+        tf("components/sink/Cargo.toml", FP_SINK_CARGO_TOML),
+        tf("components/sink/src/lib.rs", FP_SINK_LIB_RS),
+        tf(".gitignore", COMMON_GITIGNORE),
+        tf("README.md", FP_README),
+    ]);
     Template {
         description: "Complete pipeline with source + transform + sink".into(),
-        files: vec![
-            tf("Torvyn.toml", FULL_PIPELINE_TORVYN_TOML),
-            // Source component
-            tf("components/source/Cargo.toml", FP_SOURCE_CARGO_TOML),
-            tf(
-                "components/source/wit/torvyn-streaming/types.wit",
-                TORVYN_STREAMING_TYPES_WIT,
-            ),
-            tf(
-                "components/source/wit/torvyn-streaming/source.wit",
-                TORVYN_STREAMING_SOURCE_WIT,
-            ),
-            tf(
-                "components/source/wit/torvyn-streaming/buffer-allocator.wit",
-                TORVYN_STREAMING_BUFFER_ALLOCATOR_WIT,
-            ),
-            tf(
-                "components/source/wit/torvyn-streaming/world.wit",
-                TORVYN_STREAMING_SOURCE_WORLD_WIT,
-            ),
-            tf("components/source/src/lib.rs", FP_SOURCE_LIB_RS),
-            // Transform component
-            tf("components/transform/Cargo.toml", FP_TRANSFORM_CARGO_TOML),
-            tf(
-                "components/transform/wit/torvyn-streaming/types.wit",
-                TORVYN_STREAMING_TYPES_WIT,
-            ),
-            tf(
-                "components/transform/wit/torvyn-streaming/processor.wit",
-                TORVYN_STREAMING_PROCESSOR_WIT,
-            ),
-            tf(
-                "components/transform/wit/torvyn-streaming/buffer-allocator.wit",
-                TORVYN_STREAMING_BUFFER_ALLOCATOR_WIT,
-            ),
-            tf(
-                "components/transform/wit/torvyn-streaming/world.wit",
-                TORVYN_STREAMING_TRANSFORM_WORLD_WIT,
-            ),
-            tf("components/transform/src/lib.rs", FP_TRANSFORM_LIB_RS),
-            // Sink component
-            tf("components/sink/Cargo.toml", FP_SINK_CARGO_TOML),
-            tf(
-                "components/sink/wit/torvyn-streaming/types.wit",
-                TORVYN_STREAMING_TYPES_WIT,
-            ),
-            tf(
-                "components/sink/wit/torvyn-streaming/sink.wit",
-                TORVYN_STREAMING_SINK_WIT,
-            ),
-            tf(
-                "components/sink/wit/torvyn-streaming/world.wit",
-                TORVYN_STREAMING_SINK_WORLD_WIT,
-            ),
-            tf("components/sink/src/lib.rs", FP_SINK_LIB_RS),
-            tf(".gitignore", COMMON_GITIGNORE),
-            tf("README.md", FP_README),
-        ],
+        files,
     }
 }
 
@@ -983,6 +884,12 @@ to = { node = "transform", port = "input" }
 [[flow.main.edges]]
 from = { node = "transform", port = "output" }
 to = { node = "sink", port = "input" }
+
+# Components run fully sandboxed by default: no filesystem, no network, no
+# stdio. The sink prints what it receives, so it is granted stdout — and
+# nothing else. Grant keys are flow-node names.
+[security.grants.sink]
+capabilities = ["stdio:stdout"]
 "#;
 
 const FP_SOURCE_CARGO_TOML: &str = r#"[package]
@@ -997,7 +904,20 @@ crate-type = ["cdylib"]
 wit-bindgen = "0.36"
 
 [package.metadata.component]
-package = "source:component"
+package = "torvyn:streaming"
+
+# cargo-component reads the component's WIT from here. Without an explicit
+# target it looks in `wit/` alone, misses `wit/torvyn-streaming/`, and reports
+# that no package header was found.
+[package.metadata.component.target]
+world = "data-source"
+path = "wit/torvyn-streaming"
+
+# An empty [workspace] table makes this component a standalone cargo package.
+# Without it, creating a Torvyn project inside another cargo workspace makes
+# cargo refuse to build the component until it is added to that workspace's
+# members.
+[workspace]
 "#;
 
 const FP_SOURCE_LIB_RS: &str = r#"// Source component for the {{project_name}} pipeline
@@ -1009,12 +929,25 @@ wit_bindgen::generate!({
 });
 
 use exports::torvyn::streaming::source::Guest;
+use exports::torvyn::streaming::lifecycle::Guest as LifecycleGuest;
 use torvyn::streaming::types::{OutputElement, ElementMeta, ProcessError, BackpressureSignal};
 use torvyn::streaming::buffer_allocator;
 
 struct Source;
 
 static mut COUNTER: u64 = 0;
+
+// The `data-source` and `data-sink` worlds export `lifecycle` as well as their
+// role interface, and the host calls `lifecycle.init` on every component
+// before the pipeline starts. A component that exports only its role
+// interface does not satisfy its world, and the runtime declines to run it.
+impl LifecycleGuest for Source {
+    fn init(_config: String) -> Result<(), ProcessError> {
+        Ok(())
+    }
+
+    fn teardown() {}
+}
 
 impl Guest for Source {
     fn pull() -> Result<Option<OutputElement>, ProcessError> {
@@ -1061,7 +994,20 @@ crate-type = ["cdylib"]
 wit-bindgen = "0.36"
 
 [package.metadata.component]
-package = "transform:component"
+package = "torvyn:streaming"
+
+# cargo-component reads the component's WIT from here. Without an explicit
+# target it looks in `wit/` alone, misses `wit/torvyn-streaming/`, and reports
+# that no package header was found.
+[package.metadata.component.target]
+world = "transform"
+path = "wit/torvyn-streaming"
+
+# An empty [workspace] table makes this component a standalone cargo package.
+# Without it, creating a Torvyn project inside another cargo workspace makes
+# cargo refuse to build the component until it is added to that workspace's
+# members.
+[workspace]
 "#;
 
 const FP_TRANSFORM_LIB_RS: &str = r#"// Transform component for the {{project_name}} pipeline
@@ -1115,7 +1061,20 @@ crate-type = ["cdylib"]
 wit-bindgen = "0.36"
 
 [package.metadata.component]
-package = "sink:component"
+package = "torvyn:streaming"
+
+# cargo-component reads the component's WIT from here. Without an explicit
+# target it looks in `wit/` alone, misses `wit/torvyn-streaming/`, and reports
+# that no package header was found.
+[package.metadata.component.target]
+world = "data-sink"
+path = "wit/torvyn-streaming"
+
+# An empty [workspace] table makes this component a standalone cargo package.
+# Without it, creating a Torvyn project inside another cargo workspace makes
+# cargo refuse to build the component until it is added to that workspace's
+# members.
+[workspace]
 "#;
 
 const FP_SINK_LIB_RS: &str = r#"// Sink component for the {{project_name}} pipeline
@@ -1127,9 +1086,22 @@ wit_bindgen::generate!({
 });
 
 use exports::torvyn::streaming::sink::Guest;
+use exports::torvyn::streaming::lifecycle::Guest as LifecycleGuest;
 use torvyn::streaming::types::{StreamElement, ProcessError, BackpressureSignal};
 
 struct Sink;
+
+// The `data-source` and `data-sink` worlds export `lifecycle` as well as their
+// role interface, and the host calls `lifecycle.init` on every component
+// before the pipeline starts. A component that exports only its role
+// interface does not satisfy its world, and the runtime declines to run it.
+impl LifecycleGuest for Sink {
+    fn init(_config: String) -> Result<(), ProcessError> {
+        Ok(())
+    }
+
+    fn teardown() {}
+}
 
 impl Guest for Sink {
     fn push(element: StreamElement) -> Result<BackpressureSignal, ProcessError> {
@@ -1161,7 +1133,7 @@ A complete Torvyn streaming pipeline with three components:
 torvyn check              # Validate contracts and manifest
 torvyn build              # Compile all components to WebAssembly
 torvyn run                # Run the pipeline
-torvyn run --limit 10     # Run with element limit
+torvyn run                # Run the pipeline
 ```
 
 ## Project Structure
@@ -1177,6 +1149,7 @@ torvyn run --limit 10     # Run with element limit
 // ---------------------------------------------------------------------------
 
 /// The `empty` template: minimal skeleton.
+/// Files for the minimal skeleton template.
 pub fn empty_template() -> Template {
     Template {
         description: "Minimal skeleton for experienced users".into(),

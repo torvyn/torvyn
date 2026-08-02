@@ -1,5 +1,13 @@
 # Token Streaming Pipeline
 
+> **Status: not yet runnable.** This example uses the `torvyn:filtering/filter`
+> and aggregation interfaces, which the runtime does not implement yet — they
+> are Phase 1 items on the [roadmap](../../documents/ROADMAP.md). `torvyn build`
+> compiles its components, but `torvyn run` fails at instantiation because the
+> host's linker provides no implementation for those worlds. The other three
+> examples run today.
+
+
 An AI-oriented pipeline: a simulated LLM token source emits tokens one at a time, a content policy filter rejects tokens matching a block list, a token aggregator collects tokens into complete sentences, and an output sink writes the assembled text.
 
 ## What It Demonstrates

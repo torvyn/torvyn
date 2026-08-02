@@ -17,7 +17,7 @@ use tracing::{info, warn};
 use torvyn_config::FlowDef;
 use torvyn_engine::{WasmtimeEngine, WasmtimeInvoker};
 use torvyn_observability::ObservabilityCollector;
-use torvyn_pipeline::{flow_def_to_topology, instantiate_pipeline};
+use torvyn_pipeline::{flow_def_to_topology, instantiate_pipeline, ComponentIndex};
 use torvyn_reactor::{cancellation::CancellationReason, ReactorHandle};
 use torvyn_types::{ComponentId, ComponentRole, FlowId, FlowState};
 
@@ -171,6 +171,12 @@ pub struct TorvynHost {
     /// builder.
     flow_defs: BTreeMap<String, FlowDef>,
 
+    /// Declared components, for resolving a flow node's `component` name to
+    /// the artifact `torvyn build` produced. Empty when the host was built
+    /// without a manifest, in which case nodes must reference components by
+    /// URI.
+    components: ComponentIndex,
+
     /// Observability collector wired into the reactor as its event sink.
     /// Records per-flow invocations, latencies, throughput, and errors as
     /// flows run, and is the handle through which metrics are inspected.
@@ -190,6 +196,22 @@ impl std::fmt::Debug for TorvynHost {
     }
 }
 
+/// The wired-up subsystems [`HostBuilder`](crate::HostBuilder) hands to
+/// [`TorvynHost::new`].
+///
+/// A struct rather than a parameter list: the host owns eight collaborators,
+/// and naming them at the call site is what keeps the wiring readable.
+pub(crate) struct HostParts {
+    pub(crate) config: HostConfig,
+    pub(crate) engine: Arc<WasmtimeEngine>,
+    pub(crate) invoker: Arc<WasmtimeInvoker>,
+    pub(crate) reactor: ReactorHandle,
+    pub(crate) coordinator_join: Option<JoinHandle<()>>,
+    pub(crate) flow_defs: BTreeMap<String, FlowDef>,
+    pub(crate) observability: Arc<ObservabilityCollector>,
+    pub(crate) components: ComponentIndex,
+}
+
 impl TorvynHost {
     /// Construct a new host. Called by `HostBuilder::build()`.
     ///
@@ -200,15 +222,17 @@ impl TorvynHost {
     /// - `engine` is initialized and ready.
     /// - All subsystem handles (reactor, resources, security, observability)
     ///   are initialized. Currently commented out pending cross-crate integration.
-    pub(crate) fn new(
-        config: HostConfig,
-        engine: Arc<WasmtimeEngine>,
-        invoker: Arc<WasmtimeInvoker>,
-        reactor: ReactorHandle,
-        coordinator_join: Option<JoinHandle<()>>,
-        flow_defs: BTreeMap<String, FlowDef>,
-        observability: Arc<ObservabilityCollector>,
-    ) -> Self {
+    pub(crate) fn new(parts: HostParts) -> Self {
+        let HostParts {
+            config,
+            engine,
+            invoker,
+            reactor,
+            coordinator_join,
+            flow_defs,
+            observability,
+            components,
+        } = parts;
         Self {
             config,
             engine,
@@ -219,6 +243,7 @@ impl TorvynHost {
             status: HostStatus::Ready,
             flow_defs,
             observability,
+            components,
         }
     }
 
@@ -297,8 +322,8 @@ impl TorvynHost {
         // Build the validated topology, resolving each component's capability
         // grants into its WASI sandbox.
         let topology =
-            flow_def_to_topology(flow_name, flow_def, &self.config.security).map_err(|errors| {
-                StartupError::FlowStartup {
+            flow_def_to_topology(flow_name, flow_def, &self.config.security, &self.components)
+                .map_err(|errors| StartupError::FlowStartup {
                     flow_name: flow_name.to_owned(),
                     stage: StartupStage::TopologyConstruction,
                     reason: errors
@@ -306,8 +331,7 @@ impl TorvynHost {
                         .map(ToString::to_string)
                         .collect::<Vec<_>>()
                         .join("; "),
-                }
-            })?;
+                })?;
 
         // Compile, instantiate, run `lifecycle.init`, and register the flow
         // with the reactor. The reactor assigns the canonical flow identifier.

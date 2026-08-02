@@ -9,6 +9,7 @@ use torvyn_types::ComponentRole;
 
 use crate::builder::PipelineTopologyBuilder;
 use crate::error::PipelineError;
+use crate::resolve::ComponentIndex;
 use crate::topology::{EdgeConfig, NodeConfig, PipelineTopology};
 
 /// Convert a `FlowDef` (from config) into a `PipelineTopology`.
@@ -27,6 +28,7 @@ pub fn flow_def_to_topology(
     flow_name: &str,
     flow_def: &FlowDef,
     security: &SecurityConfig,
+    components: &ComponentIndex,
 ) -> Result<PipelineTopology, Vec<PipelineError>> {
     let mut builder = PipelineTopologyBuilder::new(flow_name).description(&flow_def.description);
 
@@ -50,10 +52,20 @@ pub fn flow_def_to_topology(
                 })?;
         }
 
+        // Join the node's `component` value to the manifest's `[[component]]`
+        // declarations. A bare name becomes the artifact `torvyn build`
+        // produced; a `file://` or `mock://` reference passes through.
+        let component_ref = components.resolve(&node_def.component).map_err(|e| {
+            vec![PipelineError::Subsystem {
+                subsystem: "config",
+                reason: format!("flow '{flow_name}', node '{node_name}': {e}"),
+            }]
+        })?;
+
         builder = builder.add_node_with_interface(
             node_name,
             role,
-            &node_def.component,
+            &component_ref,
             &node_def.interface,
             config,
         );
@@ -203,7 +215,13 @@ mod tests {
     #[test]
     fn test_flow_def_to_topology_basic() {
         let flow = make_flow_def();
-        let topo = flow_def_to_topology("test", &flow, &SecurityConfig::default()).unwrap();
+        let topo = flow_def_to_topology(
+            "test",
+            &flow,
+            &SecurityConfig::default(),
+            &ComponentIndex::empty(),
+        )
+        .unwrap();
 
         assert_eq!(topo.node_count(), 2);
         assert_eq!(topo.edge_count(), 1);
@@ -236,7 +254,8 @@ mod tests {
             ..SecurityConfig::default()
         };
 
-        let topo = flow_def_to_topology("test", &flow, &security).unwrap();
+        let topo =
+            flow_def_to_topology("test", &flow, &security, &ComponentIndex::empty()).unwrap();
         let source = topo
             .nodes()
             .iter()
@@ -277,7 +296,8 @@ mod tests {
             ..SecurityConfig::default()
         };
 
-        let errors = flow_def_to_topology("test", &flow, &security).unwrap_err();
+        let errors =
+            flow_def_to_topology("test", &flow, &security, &ComponentIndex::empty()).unwrap_err();
         assert!(errors
             .iter()
             .any(|e| matches!(e, PipelineError::SandboxConfigFailed { .. })));

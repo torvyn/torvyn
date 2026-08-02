@@ -51,3 +51,13 @@ to = { node = "aggregator", port = "input" }
 [[flow.main.edges]]
 from = { node = "aggregator", port = "output" }
 to = { node = "sink", port = "input" }
+
+# Components run fully sandboxed by default: no filesystem, no network, no
+# stdio. The nodes below print what they process, so each is granted stdout —
+# and nothing else. Grant keys are flow-node names.
+[security.grants.filter]
+capabilities = ["stdio:stdout"]
+
+[security.grants.sink]
+capabilities = ["stdio:stdout"]
+

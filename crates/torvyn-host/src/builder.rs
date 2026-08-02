@@ -23,6 +23,7 @@ use tracing::info;
 use torvyn_config::{load_pipeline, FlowDef, ObservabilityConfig, RuntimeConfig, SecurityConfig};
 use torvyn_engine::{WasmtimeEngine, WasmtimeEngineConfig, WasmtimeInvoker};
 use torvyn_observability::ObservabilityCollector;
+use torvyn_pipeline::ComponentIndex;
 use torvyn_reactor::{
     coordinator::ReactorCoordinator,
     events::{ReactorCommand, ReactorEvent},
@@ -156,6 +157,11 @@ pub struct HostBuilder {
     /// control the configuration file does not expose — `torvyn trace` uses
     /// it to run at Diagnostic level with a span buffer sized for the run.
     collector_config: Option<torvyn_observability::ObservabilityConfig>,
+    /// Declared components, for resolving a flow node's `component` name to a
+    /// built artifact. Populated from the manifest; empty for a host driven
+    /// entirely by programmatic flow definitions, whose nodes reference
+    /// components by URI.
+    components: ComponentIndex,
     /// Flow definitions registered programmatically. Merged with any flows
     /// loaded from the configuration file during [`build()`](Self::build);
     /// programmatic definitions take precedence on name conflicts.
@@ -172,6 +178,7 @@ impl HostBuilder {
             config: HostConfig::default(),
             config_path: None,
             collector_config: None,
+            components: ComponentIndex::empty(),
             flow_definitions: BTreeMap::new(),
         }
     }
@@ -325,6 +332,16 @@ impl HostBuilder {
             for (name, flow) in parsed.flows {
                 self.flow_definitions.entry(name).or_insert(flow);
             }
+
+            // Index the manifest's component declarations so a flow node that
+            // names a component resolves to the artifact `torvyn build`
+            // produced. Paths in the manifest are relative to the directory
+            // holding it, which is the project root.
+            let project_root = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+            self.components = ComponentIndex::new(project_root, &parsed.components);
         }
 
         // Step 2: Validate
@@ -407,15 +424,16 @@ impl HostBuilder {
         info!("Reactor coordinator spawned");
 
         // Step 4: Construct host with all subsystem handles wired in.
-        Ok(TorvynHost::new(
-            self.config,
+        Ok(TorvynHost::new(crate::host::HostParts {
+            config: self.config,
             engine,
             invoker,
             reactor,
-            Some(coordinator_join),
-            self.flow_definitions,
+            coordinator_join: Some(coordinator_join),
+            flow_defs: self.flow_definitions,
             observability,
-        ))
+            components: self.components,
+        }))
     }
 }
 
@@ -632,6 +650,7 @@ mod tests {
             config,
             config_path: None,
             collector_config: None,
+            components: ComponentIndex::empty(),
             flow_definitions: BTreeMap::new(),
         };
 

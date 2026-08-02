@@ -53,8 +53,26 @@ impl HumanRenderable for CheckResult {
             );
             terminal::print_success(ctx, "World definition resolves correctly");
             terminal::print_success(ctx, "Capability declarations consistent");
+
+            // Warnings do not fail the check without `--strict`, but they are
+            // still findings and must be shown. Printing only the successes
+            // is how a project that validated nothing could read as healthy.
+            for d in self.diagnostics.iter().filter(|d| d.severity == "warning") {
+                terminal::print_warning(ctx, &format!("[{}] {}", d.code, d.message));
+                if let Some(help) = &d.help {
+                    eprintln!("        {help}");
+                }
+            }
+
             eprintln!();
-            eprintln!("  All checks passed.");
+            if self.warning_count == 0 {
+                eprintln!("  All checks passed.");
+            } else {
+                eprintln!(
+                    "  All checks passed with {} warning(s).",
+                    self.warning_count
+                );
+            }
         } else {
             for d in &self.diagnostics {
                 let prefix = if d.severity == "error" {
@@ -126,12 +144,18 @@ pub async fn execute(
         path: Some(manifest_path.display().to_string()),
     })?;
 
+    let mut declared_components: Vec<String> = Vec::new();
     match torvyn_config::ComponentManifest::from_toml_str(
         &manifest_content,
         manifest_path.to_str().unwrap_or("Torvyn.toml"),
     ) {
-        Ok(_manifest) => {
+        Ok(manifest) => {
             ctx.print_debug("Manifest parsed successfully");
+            declared_components = manifest
+                .components
+                .iter()
+                .map(|decl| decl.path.clone())
+                .collect();
         }
         Err(errors) => {
             for err in &errors {
@@ -150,59 +174,50 @@ pub async fn execute(
         }
     }
 
-    // Step 2: Find and validate WIT files via torvyn-contracts
+    // Step 2: Find and validate WIT files via torvyn-contracts.
+    //
+    // A project keeps its contracts in one of two shapes: a single-component
+    // project has `wit/` at its root, while a multi-component project gives
+    // each declared component its own. Checking only the root meant a
+    // scaffolded pipeline reported "0 file(s), 0 errors" and passed, having
+    // read none of the contracts it shipped.
     let project_dir = manifest_path.parent().unwrap_or(Path::new("."));
-    let wit_dir = project_dir.join("wit");
+    let wit_parser = torvyn_contracts::WitParserImpl::new();
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
 
-    if wit_dir.exists() {
-        // Count WIT files
-        if let Ok(entries) = std::fs::read_dir(&wit_dir) {
-            for entry in entries.flatten() {
-                if entry
-                    .path()
-                    .extension()
-                    .map(|e| e == "wit")
-                    .unwrap_or(false)
-                {
-                    wit_files_parsed += 1;
-                }
-            }
-        }
-
-        // Validate using torvyn-contracts with real WIT parser
-        let wit_parser = torvyn_contracts::WitParserImpl::new();
+    // A single-component project keeps its contracts at the root, next to the
+    // manifest. `validate_component` checks both together.
+    if project_dir.join("wit").is_dir() {
+        roots.push(project_dir.join("wit"));
+        wit_files_parsed += count_wit_files(&project_dir.join("wit"));
         let result = torvyn_contracts::validate_component(project_dir, &wit_parser);
-        for diag in &result.diagnostics {
-            let severity = match diag.severity {
-                torvyn_contracts::Severity::Error => "error",
-                torvyn_contracts::Severity::Warning => "warning",
-                torvyn_contracts::Severity::Hint => "warning",
-            };
+        push_contract_diagnostics(&mut diagnostics, &result);
+    }
 
-            let location = diag.locations.first().map(|l| {
-                format!(
-                    "{}:{}:{}",
-                    l.location.file.display(),
-                    l.location.line,
-                    l.location.column
-                )
-            });
-
-            diagnostics.push(CheckDiagnostic {
-                severity: severity.into(),
-                code: format!("{}", diag.code),
-                message: diag.message.clone(),
-                location,
-                help: diag.help.clone(),
-            });
+    // A multi-component project gives each declared component its own `wit/`
+    // and has no per-component manifest, so those are parsed on their own.
+    for component_path in &declared_components {
+        let wit_dir = project_dir.join(component_path).join("wit");
+        if !wit_dir.is_dir() {
+            continue;
         }
-    } else {
+        roots.push(wit_dir.clone());
+        wit_files_parsed += count_wit_files(&wit_dir);
+        if let Err(result) = parse_wit_tree(&wit_dir, &wit_parser) {
+            push_contract_diagnostics(&mut diagnostics, &result);
+        }
+    }
+
+    if roots.is_empty() {
         diagnostics.push(CheckDiagnostic {
             severity: "warning".into(),
             code: "E0100".into(),
-            message: "No wit/ directory found".into(),
+            message: "No WIT contracts found to validate".into(),
             location: Some(project_dir.display().to_string()),
-            help: Some("Create a wit/ directory with your component's world definition.".into()),
+            help: Some(
+                "Expected a wit/ directory at the project root, or one inside each directory a                  [[component]] entry points at. Without contracts there is nothing to check."
+                    .into(),
+            ),
         });
     }
 
@@ -244,4 +259,85 @@ pub async fn execute(
         data: result,
         warnings: vec![],
     })
+}
+
+/// Count `.wit` files under a directory, including package subdirectories.
+///
+/// The conventional layout nests them one level deep
+/// (`wit/torvyn-streaming/*.wit`), which is why this recurses rather than
+/// listing a single directory.
+fn count_wit_files(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut count = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            count += count_wit_files(&path);
+        } else if path.extension().is_some_and(|e| e == "wit") {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Parse a component's WIT tree, trying the directory itself and then each
+/// package subdirectory — the same fallback `validate_component` uses, since
+/// `wit-parser` wants to be pointed at a directory holding a `package`
+/// declaration.
+fn parse_wit_tree(
+    wit_dir: &Path,
+    parser: &dyn torvyn_contracts::WitParser,
+) -> Result<(), torvyn_contracts::ValidationResult> {
+    if let Ok(packages) = parser.parse_directory(wit_dir) {
+        if !packages.is_empty() {
+            return Ok(());
+        }
+    }
+
+    let mut last_failure = None;
+    if let Ok(entries) = std::fs::read_dir(wit_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            match parser.parse_directory(&path) {
+                Ok(packages) if !packages.is_empty() => return Ok(()),
+                Ok(_) => {}
+                Err(result) => last_failure = Some(result),
+            }
+        }
+    }
+
+    last_failure.map_or(Ok(()), Err)
+}
+
+/// Translate contract diagnostics into the CLI's own shape.
+fn push_contract_diagnostics(
+    diagnostics: &mut Vec<CheckDiagnostic>,
+    result: &torvyn_contracts::ValidationResult,
+) {
+    for diag in &result.diagnostics {
+        let severity = match diag.severity {
+            torvyn_contracts::Severity::Error => "error",
+            torvyn_contracts::Severity::Warning | torvyn_contracts::Severity::Hint => "warning",
+        };
+        let location = diag.locations.first().map(|l| {
+            format!(
+                "{}:{}:{}",
+                l.location.file.display(),
+                l.location.line,
+                l.location.column
+            )
+        });
+        diagnostics.push(CheckDiagnostic {
+            severity: severity.into(),
+            code: format!("{}", diag.code),
+            message: diag.message.clone(),
+            location,
+            help: diag.help.clone(),
+        });
+    }
 }

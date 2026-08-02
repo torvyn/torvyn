@@ -1,4 +1,6 @@
 **/target
+# `torvyn build` output and `torvyn bench` reports.
+.torvyn/
 examples/**/bindings.rs
 _site/
 docs/book/

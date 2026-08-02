@@ -218,6 +218,13 @@ pub enum Command {
     /// schema, resolves references, and checks capability declarations.
     Check(CheckArgs),
 
+    /// Compile the project's components to WebAssembly.
+    ///
+    /// Builds every component declared in the manifest with the toolchain for
+    /// its language and places the artifacts where `torvyn run` looks for
+    /// them.
+    Build(BuildArgs),
+
     /// Verify component composition compatibility.
     ///
     /// Given a pipeline configuration, verifies that all component interfaces
@@ -342,6 +349,23 @@ pub struct LinkArgs {
     pub detail: bool,
 }
 
+/// Arguments for `torvyn build`.
+#[derive(Parser, Debug)]
+pub struct BuildArgs {
+    /// Path to Torvyn.toml.
+    #[arg(long, default_value = "./Torvyn.toml")]
+    pub manifest: PathBuf,
+
+    /// Build only this component (default: every declared component).
+    #[arg(long)]
+    pub component: Option<String>,
+
+    /// Build without optimisations, overriding `release` in the `[build]`
+    /// table. Faster to compile, slower to run.
+    #[arg(long)]
+    pub debug: bool,
+}
+
 /// Arguments for `torvyn run`.
 #[derive(Parser, Debug)]
 pub struct RunArgs {
@@ -373,7 +397,8 @@ pub struct RunArgs {
     #[arg(long, value_name = "KEY=VALUE")]
     pub config: Vec<String>,
 
-    /// Log verbosity.
+    /// Log verbosity. Not yet wired: the CLI installs no log subscriber, so
+    /// this currently has no effect on what is printed.
     #[arg(long, default_value = "info")]
     pub log_level: String,
 }

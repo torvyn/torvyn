@@ -3,6 +3,7 @@
 //! Routes parsed CLI commands to their implementations.
 
 pub mod bench;
+pub mod build;
 pub mod check;
 pub mod doctor;
 pub mod init;
@@ -32,6 +33,10 @@ pub async fn execute_command(
         }
         Command::Check(args) => {
             let result = check::execute(args, ctx).await?;
+            ctx.render(&result);
+        }
+        Command::Build(args) => {
+            let result = build::execute(args, ctx)?;
             ctx.render(&result);
         }
         Command::Link(args) => {

@@ -44,6 +44,16 @@ torvyn-host.workspace = true
 torvyn-observability.workspace = true
 torvyn-packaging.workspace = true
 torvyn-linker.workspace = true
+torvyn-pipeline.workspace = true
+
+[features]
+# Gates `tests/scaffold_end_to_end_tests.rs`, which scaffolds a project and
+# runs `init -> check -> build -> run` end to end. It needs the WebAssembly
+# component toolchain:
+#   rustup target add wasm32-wasip2
+#   cargo install cargo-component --locked
+# CI's `wasm-e2e` job already installs both and enables this.
+scaffold-e2e = []
 
 [dev-dependencies]
 assert_cmd = "2"
@@ -57,3 +67,7 @@ path = "src/lib.rs"
 
 [lints]
 workspace = true
+
+[[test]]
+name = "scaffold_end_to_end_tests"
+required-features = ["scaffold-e2e"]

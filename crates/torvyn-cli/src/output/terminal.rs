@@ -23,6 +23,19 @@ pub fn print_failure(ctx: &OutputContext, message: &str) {
     }
 }
 
+/// Print a warning marker with a message.
+///
+/// Warnings are findings that do not fail a command. They still have to be
+/// visible: a command that collects a warning and prints only its successes
+/// tells the user everything is fine when it is not.
+pub fn print_warning(ctx: &OutputContext, message: &str) {
+    if ctx.color_enabled {
+        eprintln!("{} {message}", console::style("\u{26a0}").yellow().bold());
+    } else {
+        eprintln!("[warn] {message}");
+    }
+}
+
 /// Print a header line (e.g., "── Throughput ───────").
 #[allow(dead_code)]
 pub fn print_header(ctx: &OutputContext, title: &str) {

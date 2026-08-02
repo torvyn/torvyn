@@ -5,6 +5,9 @@
 //! - **Builder**: [`PipelineTopologyBuilder`] — fluent API for programmatic construction
 //! - **Validation**: [`validate::validate_topology`] — DAG, connectedness, role checks
 //! - **Config conversion**: [`convert::flow_def_to_topology`]
+//! - **Component resolution**: [`resolve::ComponentIndex`] — joins a flow
+//!   node's `component` name to the `[[component]]` declaration that says
+//!   where it lives
 //! - **Instantiation**: [`instantiate::instantiate_pipeline`]
 //! - **Shutdown**: [`shutdown::shutdown_pipeline`]
 //! - **Handle**: [`PipelineHandle`] — runtime handle for a running flow
@@ -24,6 +27,7 @@ pub mod convert;
 pub mod error;
 pub mod handle;
 pub mod instantiate;
+pub mod resolve;
 pub mod shutdown;
 pub mod topology;
 pub mod validate;
@@ -34,6 +38,7 @@ pub use convert::flow_def_to_topology;
 pub use error::{PipelineError, ValidationReport};
 pub use handle::PipelineHandle;
 pub use instantiate::instantiate_pipeline;
+pub use resolve::{artifact_path, ComponentIndex, ResolveError, BUILD_DIR};
 pub use shutdown::shutdown_pipeline;
 pub use topology::{
     EdgeConfig, ErrorPolicy, NodeConfig, PipelineTopology, TopologyEdge, TopologyNode,
