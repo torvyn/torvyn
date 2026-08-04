@@ -1,15 +1,16 @@
 //! End-to-end test for the first-ten-minutes experience.
 //!
-//! This test exercises: init -> check -> doctor -> pack.
-//! Full pipeline execution (run, bench, trace) requires compiled components
-//! and is tested separately with pre-built fixtures.
+//! This test exercises: init -> check -> doctor -> link, and the precondition
+//! `pack` enforces. Commands that need compiled Wasm (`build`, `pack`, `run`,
+//! `inspect`) are covered by `scaffold_end_to_end_tests.rs`, which runs behind
+//! the `scaffold-e2e` feature because it needs the component toolchain.
 
 use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
 #[test]
-fn test_first_ten_minutes_init_check_pack() {
+fn test_first_ten_minutes_init_check_link() {
     let workspace = TempDir::new().unwrap();
 
     // Step 1: torvyn init
@@ -34,31 +35,60 @@ fn test_first_ten_minutes_init_check_pack() {
         .assert()
         .success();
 
-    // Step 3: torvyn doctor
+    // Step 3: torvyn doctor. Its own toolchain probes must pass on a machine
+    // that can build this project — it used to run `--version` as though that
+    // were a program name, so every tool it checked reported "NOT found".
     Command::cargo_bin("torvyn")
         .unwrap()
         .args(["doctor"])
         .current_dir(&project_dir)
         .assert()
-        .success();
+        .success()
+        .stderr(
+            predicate::str::contains("rustc").and(
+                predicate::str::contains("rustc NOT found")
+                    .not()
+                    .and(predicate::str::contains("cargo NOT found").not()),
+            ),
+        );
 
-    // Step 4: torvyn pack
+    // Step 4: torvyn link — a static topology check over the manifest, so it
+    // needs no compiled Wasm. It used to reject every project with
+    // "invalid type: map, expected a string in `edges.from`", because it parsed
+    // the manifest with a private schema that had drifted from the real one.
+    Command::cargo_bin("torvyn")
+        .unwrap()
+        .args(["link"])
+        .current_dir(&project_dir)
+        .assert()
+        .success()
+        // The counts prove the real manifest was read: the full-pipeline
+        // template declares exactly three components joined by two edges.
+        .stderr(predicate::str::contains("3 components").and(predicate::str::contains("2 edges")));
+
+    // Step 5: torvyn pack, before anything is built. It must say what is
+    // missing and what to do about it.
     Command::cargo_bin("torvyn")
         .unwrap()
         .args(["pack"])
         .current_dir(&project_dir)
         .assert()
-        .success()
-        .stderr(predicate::str::contains("Packed"));
+        .failure()
+        .stderr(
+            // Names every component that is missing, not just the first, and
+            // says what to run. `pack` used to write 57 bytes of JSON named
+            // `.tar` and report success.
+            predicate::str::contains("not been built")
+                .and(predicate::str::contains("torvyn build"))
+                .and(predicate::str::contains("source"))
+                .and(predicate::str::contains("transform"))
+                .and(predicate::str::contains("sink")),
+        );
 
-    // Verify artifact
-    let artifacts_dir = project_dir.join(".torvyn").join("artifacts");
-    assert!(artifacts_dir.exists());
-    let artifacts: Vec<_> = std::fs::read_dir(&artifacts_dir)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .collect();
-    assert!(!artifacts.is_empty(), "pack should create an artifact");
+    assert!(
+        !project_dir.join(".torvyn/artifacts").exists(),
+        "a failed pack must not leave artifacts behind"
+    );
 }
 
 #[test]

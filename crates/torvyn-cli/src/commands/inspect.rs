@@ -1,4 +1,12 @@
 //! `torvyn inspect` — inspect a component or artifact.
+//!
+//! Reports what a component binary declares, read from its Component Model
+//! type section, alongside the metadata a packaged artifact carries.
+//!
+//! The interface lists used to be empty for everything — a contract-first
+//! runtime reporting that a component has no interfaces. They are now read
+//! from the binary itself, so they describe what the component genuinely
+//! imports and exports rather than what a manifest says about it.
 
 use crate::errors::CliError;
 use crate::output::terminal;
@@ -116,13 +124,19 @@ pub async fn execute(
         // Delegate to torvyn-packaging for artifact inspection
         match torvyn_packaging::inspect(target_path) {
             Ok(inspection) => {
+                // Read the packaged component's own interface surface.
+                let interfaces = torvyn_packaging::unpack(target_path)
+                    .ok()
+                    .map(|contents| describe_wasm(&contents.wasm_bytes))
+                    .unwrap_or_default();
+
                 let result = InspectResult {
                     name: inspection.name,
                     version: inspection.version,
                     size_wasm_bytes: inspection.wasm_size_bytes as u64,
                     size_packaged_bytes: Some(file_size),
-                    exports: vec![],
-                    imports: vec![],
+                    exports: interfaces.exports,
+                    imports: interfaces.imports,
                     capabilities_required: inspection.capabilities_required,
                     contract_version: if inspection.min_torvyn_version.is_empty() {
                         None
@@ -149,14 +163,19 @@ pub async fn execute(
         }
     }
 
-    // Basic file inspection (for .wasm files or fallback)
+    // A bare `.wasm` carries no manifest, so identity comes from the file name
+    // and everything else that can be known comes from the binary itself.
+    let interfaces = std::fs::read(target_path)
+        .map(|bytes| describe_wasm(&bytes))
+        .unwrap_or_default();
+
     let result = InspectResult {
         name,
-        version: "0.1.0".into(),
+        version: "unknown".into(),
         size_wasm_bytes: file_size,
         size_packaged_bytes: None,
-        exports: vec![],
-        imports: vec![],
+        exports: interfaces.exports,
+        imports: interfaces.imports,
         capabilities_required: vec![],
         contract_version: None,
         build_info: None,
@@ -168,4 +187,18 @@ pub async fn execute(
         data: result,
         warnings: vec![],
     })
+}
+
+/// Read a component binary's declared imports and exports.
+///
+/// Compiling to inspect is heavier than parsing the type section alone, but it
+/// reuses the very engine that will run the component — so what is reported is
+/// exactly what the runtime sees, and a binary the runtime would reject cannot
+/// be reported as valid. Returns empty lists for anything that is not a
+/// Component Model binary.
+fn describe_wasm(bytes: &[u8]) -> torvyn_engine::ComponentInterfaces {
+    torvyn_engine::WasmtimeEngine::new(torvyn_engine::WasmtimeEngineConfig::default())
+        .ok()
+        .and_then(|engine| engine.describe_bytes(bytes).ok())
+        .unwrap_or_default()
 }

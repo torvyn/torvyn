@@ -64,8 +64,8 @@ pub use traits::{ComponentInvoker, WasmEngine};
 // sandbox configuration without depending on `torvyn-security` directly.
 pub use torvyn_security::WasiConfiguration;
 pub use types::{
-    CompiledComponent, ComponentInstance, ImportBindings, InvocationResult, OutputElement,
-    ProcessResult, StreamElement,
+    CompiledComponent, ComponentInstance, ComponentInterfaces, ImportBindings, InvocationResult,
+    OutputElement, ProcessResult, StreamElement,
 };
 
 #[cfg(feature = "wasmtime-backend")]

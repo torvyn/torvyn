@@ -1,15 +1,27 @@
 //! `torvyn link` — verify component composition compatibility.
 //!
-//! Delegates to `torvyn-linker` for topology validation and
-//! interface compatibility checking.
+//! Delegates to `torvyn-linker` for topology validation and interface
+//! compatibility checking.
+//!
+//! # One schema, one definition
+//!
+//! Flow definitions are read through `torvyn_config`, the same types the host
+//! uses when it starts a flow. This command previously declared its own
+//! `FlowDef`, `NodeDef`, and `EdgeDef` privately, with an edge written as the
+//! string `"node:port"`. The canonical schema writes an edge as a table —
+//! `from = { node = "source", port = "output" }` — which is what every
+//! manifest in this repository uses, so `link` failed on all of them with
+//! "invalid type: map, expected a string". Two definitions of one schema will
+//! drift; this file no longer keeps a second.
 
 use crate::cli::LinkArgs;
 use crate::errors::CliError;
 use crate::output::terminal;
 use crate::output::{CommandResult, HumanRenderable, OutputContext};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde::Serialize;
 use std::path::{Path, PathBuf};
+use torvyn_config::{FlowDef, NodeDef};
+use torvyn_pipeline::ComponentIndex;
 
 /// Result of `torvyn link`.
 #[derive(Debug, Serialize)]
@@ -96,7 +108,14 @@ pub async fn execute(
         });
     }
 
-    let _project_dir = manifest_path.parent().unwrap_or(Path::new("."));
+    let project_dir = manifest_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    // Resolve node component names the same way the host does, so `link`
+    // checks the artifacts a run would actually load.
+    let components = ComponentIndex::new(project_dir, &manifest.components);
+
     let mut flow_results = Vec::new();
     let mut all_linked = true;
 
@@ -113,7 +132,7 @@ pub async fn execute(
 
         ctx.print_debug(&format!("Linking flow: {flow_name}"));
 
-        // Deserialize the toml::Value into our local FlowDef
+        // Deserialize into the canonical flow definition.
         let flow_def: FlowDef = flow_value
             .clone()
             .try_into()
@@ -128,34 +147,36 @@ pub async fn execute(
 
         // Add nodes from the flow definition
         for (node_name, node_def) in &flow_def.nodes {
-            let role = match node_def.interface.as_deref() {
-                Some(iface) if iface.contains("source") => torvyn_types::ComponentRole::Source,
-                Some(iface) if iface.contains("sink") => torvyn_types::ComponentRole::Sink,
-                Some(iface) if iface.contains("filter") => torvyn_types::ComponentRole::Filter,
-                Some(iface) if iface.contains("router") => torvyn_types::ComponentRole::Router,
-                _ => torvyn_types::ComponentRole::Processor,
-            };
-
             topo.add_node(torvyn_linker::TopologyNode {
                 name: node_name.clone(),
-                role,
-                artifact_path: PathBuf::from(&node_def.component),
+                role: role_of(node_def),
+                // A node names its component; the index turns that into the
+                // artifact a run would load. A component that is declared but
+                // not yet built has no artifact, and linking is a static check
+                // that should still run, so the declared name is kept as the
+                // path in that case rather than failing.
+                artifact_path: components.resolve(&node_def.component).map_or_else(
+                    |_| PathBuf::from(&node_def.component),
+                    |uri| PathBuf::from(uri.strip_prefix("file://").unwrap_or(&uri)),
+                ),
                 config: node_def.config.clone(),
-                capability_grants: vec![],
+                capability_grants: grants_for(&manifest, node_name),
             });
         }
 
         // Add edges from the flow definition
         for edge_def in &flow_def.edges {
-            let (from_node, from_port) = parse_port_ref(&edge_def.from);
-            let (to_node, to_port) = parse_port_ref(&edge_def.to);
-
             topo.add_edge(torvyn_linker::TopologyEdge {
-                from_node,
-                from_port,
-                to_node,
-                to_port,
-                queue_depth: 64,
+                from_node: edge_def.from.node.clone(),
+                from_port: edge_def.from.port.clone(),
+                to_node: edge_def.to.node.clone(),
+                to_port: edge_def.to.port.clone(),
+                queue_depth: edge_def
+                    .queue_depth
+                    .and_then(|d| u32::try_from(d).ok())
+                    .unwrap_or_else(|| {
+                        u32::try_from(torvyn_types::DEFAULT_QUEUE_DEPTH).unwrap_or(64)
+                    }),
                 backpressure_policy: Default::default(),
             });
         }
@@ -221,43 +242,163 @@ pub async fn execute(
     })
 }
 
-/// Local flow definition, deserialized from `toml::Value`.
-#[derive(Debug, Deserialize)]
-struct FlowDef {
-    /// Nodes keyed by name.
-    #[serde(default)]
-    nodes: HashMap<String, NodeDef>,
-    /// Edges connecting nodes.
-    #[serde(default)]
-    edges: Vec<EdgeDef>,
+/// The role a node plays, inferred from the interface it declares.
+///
+/// Matching on the interface *path* rather than a bare substring keeps
+/// `torvyn:streaming/processor` from being read as a source just because the
+/// package name contains "s". Nodes that declare no interface are processors,
+/// which is the only role that both consumes and produces.
+fn role_of(node: &NodeDef) -> torvyn_types::ComponentRole {
+    Some(node.interface.as_str())
+        .filter(|iface| !iface.is_empty())
+        .and_then(|iface| match iface.rsplit('/').next() {
+            Some("source") => Some(torvyn_types::ComponentRole::Source),
+            Some("sink") => Some(torvyn_types::ComponentRole::Sink),
+            Some("filter") => Some(torvyn_types::ComponentRole::Filter),
+            Some("router") => Some(torvyn_types::ComponentRole::Router),
+            Some("processor") => Some(torvyn_types::ComponentRole::Processor),
+            _ => None,
+        })
+        .unwrap_or(torvyn_types::ComponentRole::Processor)
 }
 
-/// A single node in a flow definition.
-#[derive(Debug, Deserialize)]
-struct NodeDef {
-    /// Path to the component artifact.
-    component: String,
-    /// Interface type hint (e.g. "torvyn:streaming/source").
-    #[serde(default)]
-    interface: Option<String>,
-    /// TOML config string for the component.
-    #[serde(default)]
-    config: Option<String>,
+/// Capability grants the manifest gives a flow node.
+///
+/// The linker checks a node's declared grants against what its component
+/// requires, so dropping them — as this command used to, passing an empty
+/// vector — meant the capability half of "verify interface compatibility and
+/// capability grants" never ran.
+fn grants_for(
+    manifest: &torvyn_config::ComponentManifest,
+    node_name: &str,
+) -> Vec<torvyn_linker::CapabilityGrant> {
+    manifest
+        .security
+        .grants
+        .get(node_name)
+        .map(|grant| {
+            grant
+                .capabilities
+                .iter()
+                .map(|capability| {
+                    // Canonical form is `<domain>:<action>[:<scope>]`; the
+                    // linker models a grant as a name and a detail, so the
+                    // scope becomes the detail where one is present.
+                    let (name, detail) = match capability.split_once(':') {
+                        Some((domain, rest)) => match rest.split_once(':') {
+                            Some((action, scope)) => {
+                                (format!("{domain}:{action}"), scope.to_owned())
+                            }
+                            None => (capability.clone(), String::new()),
+                        },
+                        None => (capability.clone(), String::new()),
+                    };
+                    torvyn_linker::CapabilityGrant { name, detail }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
-/// A single edge in a flow definition.
-#[derive(Debug, Deserialize)]
-struct EdgeDef {
-    /// Source in "node:port" format.
-    from: String,
-    /// Destination in "node:port" format.
-    to: String,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use torvyn_types::ComponentRole;
 
-/// Parse a "node:port" reference into (node, port) parts.
-fn parse_port_ref(s: &str) -> (String, String) {
-    match s.split_once(':') {
-        Some((node, port)) => (node.to_string(), port.to_string()),
-        None => (s.to_string(), "default".to_string()),
+    fn node(interface: &str) -> NodeDef {
+        NodeDef {
+            interface: interface.to_owned(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn infers_a_role_from_the_interface_path() {
+        assert_eq!(
+            role_of(&node("torvyn:streaming/source")),
+            ComponentRole::Source
+        );
+        assert_eq!(role_of(&node("torvyn:streaming/sink")), ComponentRole::Sink);
+        assert_eq!(
+            role_of(&node("torvyn:streaming/processor")),
+            ComponentRole::Processor
+        );
+        assert_eq!(
+            role_of(&node("torvyn:streaming/filter")),
+            ComponentRole::Filter
+        );
+        assert_eq!(
+            role_of(&node("torvyn:streaming/router")),
+            ComponentRole::Router
+        );
+    }
+
+    /// A versioned interface is what a real manifest carries once contracts are
+    /// pinned, and the last path segment is what identifies the role.
+    #[test]
+    fn matches_on_the_path_segment_not_a_substring() {
+        // `torvyn:streaming` contains "s"; naive substring matching read every
+        // node as a source.
+        assert_eq!(
+            role_of(&node("torvyn:streaming/processor")),
+            ComponentRole::Processor
+        );
+        // An unrecognised interface, and a node that declares none, both fall
+        // back to the role that consumes and produces.
+        assert_eq!(
+            role_of(&node("acme:custom/widget")),
+            ComponentRole::Processor
+        );
+        assert_eq!(role_of(&node("")), ComponentRole::Processor);
+    }
+
+    fn manifest_granting(
+        node_name: &str,
+        capabilities: &[&str],
+    ) -> torvyn_config::ComponentManifest {
+        let mut manifest = torvyn_config::ComponentManifest::default();
+        manifest.security.grants.insert(
+            node_name.to_owned(),
+            torvyn_config::CapabilityGrant {
+                capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
+            },
+        );
+        manifest
+    }
+
+    #[test]
+    fn reads_a_two_part_grant_as_a_name_with_no_detail() {
+        let manifest = manifest_granting("sink", &["stdio:stdout"]);
+        let grants = grants_for(&manifest, "sink");
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0].name, "stdio:stdout");
+        assert_eq!(grants[0].detail, "");
+    }
+
+    #[test]
+    fn splits_a_scoped_grant_into_name_and_detail() {
+        let manifest = manifest_granting("reader", &["fs:read:/var/data"]);
+        let grants = grants_for(&manifest, "reader");
+        assert_eq!(grants[0].name, "fs:read");
+        assert_eq!(grants[0].detail, "/var/data");
+    }
+
+    /// The linker checks a node's grants against what its component requires.
+    /// This command used to pass an empty vector for every node, so the
+    /// capability half of the check never ran; a node with no grant entry must
+    /// still yield an empty list rather than panicking.
+    #[test]
+    fn a_node_with_no_grants_gets_an_empty_list() {
+        let manifest = manifest_granting("sink", &["stdio:stdout"]);
+        assert!(grants_for(&manifest, "source").is_empty());
+        assert!(grants_for(&torvyn_config::ComponentManifest::default(), "sink").is_empty());
+    }
+
+    #[test]
+    fn keeps_a_grant_with_no_separator_intact() {
+        let manifest = manifest_granting("odd", &["clock"]);
+        let grants = grants_for(&manifest, "odd");
+        assert_eq!(grants[0].name, "clock");
+        assert_eq!(grants[0].detail, "");
     }
 }

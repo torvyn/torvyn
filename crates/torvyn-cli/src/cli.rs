@@ -498,7 +498,7 @@ pub struct PackArgs {
     #[arg(long)]
     pub tag: Option<String>,
 
-    /// Include source WIT contracts in artifact metadata.
+    /// No effect: WIT contracts are always included in an artifact.
     #[arg(long)]
     pub include_source: bool,
 

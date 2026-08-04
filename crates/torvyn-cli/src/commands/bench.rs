@@ -3,6 +3,15 @@
 //! Runs a pipeline under sustained load with warmup period, then produces
 //! a performance report with latency percentiles, throughput, resource
 //! usage, and scheduling statistics.
+//!
+//! A benchmark assumes an unbounded source. A *finite* flow — the shape every
+//! example and the scaffolded project ships — completes in milliseconds, long
+//! before the default five-second warmup ends, so the measurement window that
+//! followed observed a flow that had already stopped. The report was a page of
+//! zeros: no elements, no copies, no latency, presented as a successful
+//! benchmark. Both phases now watch the flow's state, end as soon as it
+//! reaches a terminal state, and report what the run actually did over the
+//! time it actually ran.
 
 use crate::cli::BenchArgs;
 use crate::commands::run::parse_duration;
@@ -36,6 +45,10 @@ pub struct BenchReport {
     pub resources: ResourceReport,
     /// Scheduling section.
     pub scheduling: SchedulingReport,
+    /// Set when the flow finished on its own rather than being measured under
+    /// sustained load, explaining what the figures above therefore describe.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_note: Option<String>,
     /// File where results were saved (if any).
     pub saved_to: Option<PathBuf>,
 }
@@ -105,7 +118,16 @@ pub struct SchedulingReport {
 
 impl HumanRenderable for BenchReport {
     fn render_human(&self, ctx: &OutputContext) {
+        if let Some(note) = &self.completion_note {
+            terminal::print_warning(ctx, note);
+        }
+
         terminal::print_header(ctx, "Throughput");
+        terminal::print_kv(
+            ctx,
+            "Measured over",
+            &format!("{:.3}s", self.measurement_secs),
+        );
         terminal::print_kv(
             ctx,
             "Elements/s",
@@ -276,36 +298,80 @@ pub async fn execute(
             context: Some(flow_name.clone()),
         })?;
 
+    // The flow's counters at t=0, so a flow that finishes during warmup can
+    // still be reported over its whole life rather than over an empty window.
+    let baseline_snapshot = host.observability().snapshot(flow_id);
+
     // Warmup phase — let the pipeline reach steady state, then snapshot so the
-    // measurement excludes warmup.
-    tokio::time::sleep(warmup_dur).await;
+    // measurement excludes warmup. Ends early if the flow finishes: there is
+    // nothing to warm up once the source is exhausted, and waiting out the
+    // remaining seconds only delays the report.
+    let warmup_start = Instant::now();
+    let finished_in_warmup = await_phase(&host, flow_id, warmup_dur).await;
+    let warmup_elapsed = warmup_start.elapsed();
     let warmup_snapshot = host.observability().snapshot(flow_id);
 
-    // Measurement phase.
+    // Measurement phase — skipped entirely when the flow has already finished.
     let bench_start = Instant::now();
-    tokio::time::sleep(bench_dur).await;
+    let finished_in_measurement = if finished_in_warmup {
+        true
+    } else {
+        await_phase(&host, flow_id, bench_dur).await
+    };
     let bench_elapsed = bench_start.elapsed();
     let end_snapshot = host.observability().snapshot(flow_id);
 
     // Shutdown.
     host.shutdown().await.ok();
 
-    // Build the report from the metrics recorded over the measurement window.
-    // Counters (elements, copies, bytes) are the delta after warmup; latency
-    // percentiles and peaks come from the end snapshot.
-    let report = match (warmup_snapshot, end_snapshot) {
+    // A flow that ended during warmup was never measured under load. Report its
+    // whole run instead — the counters from flow start to completion, over the
+    // time it actually ran — rather than the empty window that followed it.
+    let (window_start, reported_warmup_secs, window_secs, completion_note) = if finished_in_warmup {
+        (
+            baseline_snapshot,
+            // No warmup was excluded — the reported window is the whole run.
+            0.0,
+            warmup_elapsed.as_secs_f64(),
+            Some(format!(
+                "Flow \"{flow_name}\" completed during warmup, after {:.3}s. It has a finite \
+                 source, so there was no sustained load to measure; the figures below cover the \
+                 whole run. Use `--warmup 0s` to drop the warmup, or benchmark a flow whose \
+                 source does not terminate.",
+                warmup_elapsed.as_secs_f64()
+            )),
+        )
+    } else {
+        let note = finished_in_measurement.then(|| {
+            format!(
+                "Flow \"{flow_name}\" completed after {:.3}s of the {:.0}s measurement window. \
+                 The window was truncated at that point, so throughput reflects the time the \
+                 flow was running rather than the full requested duration.",
+                bench_elapsed.as_secs_f64(),
+                bench_dur.as_secs_f64()
+            )
+        });
+        (
+            warmup_snapshot,
+            warmup_elapsed.as_secs_f64(),
+            bench_elapsed.as_secs_f64(),
+            note,
+        )
+    };
+
+    // Build the report from the metrics recorded over the measured window.
+    // Counters (elements, copies, bytes) are a delta; latency percentiles and
+    // peaks come from the end snapshot.
+    let mut report = match (window_start, end_snapshot) {
         (Some(start_snap), Some(end_snap)) => build_bench_report(
             flow_name.clone(),
-            warmup_dur.as_secs_f64(),
-            bench_elapsed.as_secs_f64(),
+            reported_warmup_secs,
+            window_secs,
             &torvyn_observability::metrics::delta(&start_snap, &end_snap),
         ),
-        _ => empty_bench_report(
-            flow_name.clone(),
-            warmup_dur.as_secs_f64(),
-            bench_elapsed.as_secs_f64(),
-        ),
+        _ => empty_bench_report(flow_name.clone(), reported_warmup_secs, window_secs),
     };
+    report.completion_note = completion_note.clone();
 
     // Save report to .torvyn/bench/
     let project_dir = manifest_path.parent().unwrap_or(std::path::Path::new("."));
@@ -325,15 +391,45 @@ pub async fn execute(
         None
     };
 
-    let mut final_report = report;
-    final_report.saved_to = saved_to;
+    report.saved_to = saved_to;
 
     Ok(CommandResult {
         success: true,
         command: "bench".into(),
-        data: final_report,
-        warnings: vec![],
+        data: report,
+        warnings: completion_note.into_iter().collect(),
     })
+}
+
+/// How often the benchmark checks whether the flow has finished.
+///
+/// The check is one lock acquisition on the flow registry, so 10 ms costs a
+/// negligible fraction of a benchmark while bounding how long a completed flow
+/// goes unnoticed.
+const FLOW_STATE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// Wait up to `duration`, returning early once the flow reaches a terminal
+/// state.
+///
+/// Returns `true` if the flow finished before the duration elapsed.
+///
+/// COLD PATH — the benchmark's own timing loop, not the pipeline's.
+async fn await_phase(
+    host: &torvyn_host::TorvynHost,
+    flow_id: torvyn_types::FlowId,
+    duration: std::time::Duration,
+) -> bool {
+    let deadline = Instant::now() + duration;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        if matches!(host.flow_state(flow_id).await, Ok(state) if state.is_terminal()) {
+            return true;
+        }
+        tokio::time::sleep(remaining.min(FLOW_STATE_POLL_INTERVAL)).await;
+    }
 }
 
 /// Assemble a benchmark report from the metrics recorded over the measurement
@@ -416,6 +512,7 @@ fn build_bench_report(
             queue_peak,
             queue_capacity: DEFAULT_QUEUE_CAPACITY,
         },
+        completion_note: None,
         saved_to: None,
     }
 }
@@ -452,6 +549,7 @@ fn empty_bench_report(flow_name: String, warmup_secs: f64, measurement_secs: f64
             queue_peak: 0,
             queue_capacity: DEFAULT_QUEUE_CAPACITY,
         },
+        completion_note: None,
         saved_to: None,
     }
 }

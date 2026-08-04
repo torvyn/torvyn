@@ -124,7 +124,21 @@ pub struct ArtifactContents {
 ///
 /// COLD PATH — called once per `torvyn pack` invocation.
 pub fn pack(input: &PackInput, output_dir: &Path) -> Result<PackOutput, ArtifactError> {
-    // 1. Validate inputs exist
+    // Validate the paths before reading the manifest, so a missing binary is
+    // reported as a missing binary rather than as whatever the manifest read
+    // happens to fail with.
+    validate_input_paths(input)?;
+
+    let manifest_bytes = std::fs::read(&input.manifest_path).map_err(|e| ArtifactError::Io {
+        path: input.manifest_path.clone(),
+        source: e,
+    })?;
+    let manifest_toml = String::from_utf8_lossy(&manifest_bytes).into_owned();
+    pack_with_manifest(input, &manifest_toml, output_dir)
+}
+
+/// Check that the inputs an artifact is assembled from are present.
+fn validate_input_paths(input: &PackInput) -> Result<(), ArtifactError> {
     if !input.wasm_path.exists() {
         return Err(ArtifactError::WasmBinaryNotFound {
             path: input.wasm_path.clone(),
@@ -135,14 +149,36 @@ pub fn pack(input: &PackInput, output_dir: &Path) -> Result<PackOutput, Artifact
             path: input.wit_dir.clone(),
         });
     }
+    Ok(())
+}
 
-    // 2. Read the manifest and validate it
-    let manifest_bytes = std::fs::read(&input.manifest_path).map_err(|e| ArtifactError::Io {
-        path: input.manifest_path.clone(),
-        source: e,
-    })?;
-    let manifest_str = String::from_utf8_lossy(&manifest_bytes);
-    let manifest = ArtifactManifest::from_toml_str(&manifest_str).map_err(|e| {
+/// Assemble an artifact using an artifact manifest supplied in memory.
+///
+/// [`pack`] reads the manifest from [`PackInput::manifest_path`]; this variant
+/// takes its TOML directly, and the supplied text is what gets embedded in the
+/// archive as `Torvyn.toml`.
+///
+/// The distinction exists because an *artifact* manifest and a *project*
+/// manifest are different documents. A project's `Torvyn.toml` describes a
+/// workspace — its components, flows, and security grants — while an artifact
+/// manifest describes one packaged component. A CLI packing a project derives
+/// the latter from the former per component, and has no reason to write that
+/// derivation to disk first.
+///
+/// # Errors
+/// Same as [`pack`], plus [`ArtifactError::CorruptedArtifact`] if
+/// `manifest_toml` is not a valid artifact manifest.
+pub fn pack_with_manifest(
+    input: &PackInput,
+    manifest_toml: &str,
+    output_dir: &Path,
+) -> Result<PackOutput, ArtifactError> {
+    // 1. Validate inputs exist
+    validate_input_paths(input)?;
+
+    // 2. Validate the manifest
+    let manifest_bytes = manifest_toml.as_bytes().to_vec();
+    let manifest = ArtifactManifest::from_toml_str(manifest_toml).map_err(|e| {
         ArtifactError::CorruptedArtifact {
             path: input.manifest_path.clone(),
             reason: e.to_string(),
@@ -190,6 +226,16 @@ pub fn pack(input: &PackInput, output_dir: &Path) -> Result<PackOutput, Artifact
         "provenance.json".to_owned(),
         ContentDigest::of_bytes(provenance_json.as_bytes()),
     );
+    // The WIT contracts are what make the artifact verifiable — a consumer
+    // checks a component against them before trusting it — so they need
+    // digests too. Keyed by the path they occupy in the archive, so a digest
+    // can be matched to an entry without unpacking.
+    for (name, content) in &wit_files {
+        layer_digests.insert(
+            format!("wit/{name}"),
+            ContentDigest::of_bytes(content.as_bytes()),
+        );
+    }
 
     // 8. Build the tar.gz archive
     let artifact_name = format!("{}-{}.torvyn", manifest.name(), manifest.version());
@@ -368,6 +414,14 @@ pub fn unpack(artifact_path: &Path) -> Result<ArtifactContents, ArtifactError> {
     if let Some(ref pb) = provenance_bytes {
         layer_digests.insert("provenance.json".to_owned(), ContentDigest::of_bytes(pb));
     }
+    // Keyed exactly as `pack` keys them, so a round trip can be verified layer
+    // by layer rather than only on the component binary.
+    for (name, content) in &wit_files {
+        layer_digests.insert(
+            format!("wit/{name}"),
+            ContentDigest::of_bytes(content.as_bytes()),
+        );
+    }
 
     Ok(ArtifactContents {
         manifest,
@@ -489,6 +543,23 @@ fn validate_wasm_component(data: &[u8], path: &Path) -> Result<(), ArtifactError
 /// COLD PATH.
 fn collect_wit_files(dir: &Path) -> Result<BTreeMap<String, String>, ArtifactError> {
     let mut files = BTreeMap::new();
+    collect_wit_files_into(dir, Path::new(""), &mut files)?;
+    Ok(files)
+}
+
+/// Walk a WIT tree, keying each file by its path relative to the tree root.
+///
+/// The conventional layout nests contracts one level deep under their package
+/// name — `wit/torvyn-streaming/types.wit` — so a flat listing of `wit/` finds
+/// nothing and reports the component as having no contracts. Keeping the
+/// relative path as the key preserves the package structure through pack and
+/// unpack, which matters because `wit-parser` resolves a package from the
+/// directory that holds its files.
+fn collect_wit_files_into(
+    dir: &Path,
+    relative: &Path,
+    files: &mut BTreeMap<String, String>,
+) -> Result<(), ArtifactError> {
     let entries = std::fs::read_dir(dir).map_err(|e| ArtifactError::Io {
         path: dir.to_owned(),
         source: e,
@@ -499,20 +570,26 @@ fn collect_wit_files(dir: &Path) -> Result<BTreeMap<String, String>, ArtifactErr
             source: e,
         })?;
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("wit") {
-            let filename = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
+        let name = entry.file_name();
+        let child_relative = relative.join(&name);
+
+        if path.is_dir() {
+            collect_wit_files_into(&path, &child_relative, files)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("wit") {
             let content = std::fs::read_to_string(&path).map_err(|e| ArtifactError::Io {
                 path: path.clone(),
                 source: e,
             })?;
-            files.insert(filename, content);
+            // Archive paths are always `/`-separated, whatever the host uses.
+            let key = child_relative
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            files.insert(key, content);
         }
     }
-    Ok(files)
+    Ok(())
 }
 
 /// Append a byte slice as a file entry in a tar archive.
@@ -786,5 +863,39 @@ min-torvyn-version = "0.1.0"
             pack_result.layer_digests["component.wasm"], contents.layer_digests["component.wasm"],
             "wasm layer digest should be identical"
         );
+
+        // And so should every other layer, under the same key. `pack` used to
+        // digest only the wasm, manifest, and provenance, leaving the WIT
+        // contracts — the thing a consumer checks a component against — with no
+        // recorded digest at all.
+        assert_eq!(
+            pack_result.layer_digests, contents.layer_digests,
+            "a round trip must reproduce every layer digest, not just the wasm"
+        );
+    }
+
+    /// Every file the archive carries must have a recorded digest, or the
+    /// artifact is only partly content-addressable.
+    #[test]
+    fn layer_digests_cover_the_wit_contracts() {
+        let dir = TempDir::new().unwrap();
+        let input = create_test_fixture(dir.path());
+        let output_dir = dir.path().join("output");
+
+        let pack_result = pack(&input, &output_dir).unwrap();
+        let contents = unpack(&pack_result.artifact_path).unwrap();
+
+        assert!(
+            !contents.wit_files.is_empty(),
+            "the fixture ships WIT contracts"
+        );
+        for name in contents.wit_files.keys() {
+            let key = format!("wit/{name}");
+            assert!(
+                pack_result.layer_digests.contains_key(&key),
+                "no digest recorded for {key}; recorded: {:?}",
+                pack_result.layer_digests.keys().collect::<Vec<_>>()
+            );
+        }
     }
 }

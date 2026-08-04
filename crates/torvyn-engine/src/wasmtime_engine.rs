@@ -24,7 +24,7 @@ use crate::host_state::{self, HostState};
 use crate::traits::WasmEngine;
 use crate::types::{
     CompiledComponent, CompiledComponentInner, ComponentInstance, ComponentInstanceInner,
-    ImportBindings, ImportBindingsInner, WasmtimeInstanceState, WitBindings,
+    ComponentInterfaces, ImportBindings, ImportBindingsInner, WasmtimeInstanceState, WitBindings,
 };
 use crate::wit_bindings;
 
@@ -169,6 +169,48 @@ impl WasmtimeEngine {
     #[inline]
     pub fn config(&self) -> &WasmtimeEngineConfig {
         &self.config
+    }
+
+    /// Describe a compiled component's interface surface without running it.
+    ///
+    /// Reads the Component Model type section, so it reports what the binary
+    /// actually declares rather than what a manifest claims about it. This is
+    /// how a component's contract can be verified before it is trusted enough
+    /// to instantiate.
+    ///
+    /// Names are as they appear in the component's type section — interface
+    /// imports and exports carry their fully-qualified WIT name, such as
+    /// `torvyn:streaming/source@0.1.0`.
+    ///
+    /// # COLD PATH — inspection tooling.
+    #[must_use]
+    pub fn describe(&self, compiled: &CompiledComponent) -> ComponentInterfaces {
+        let Some(component) = compiled.as_wasmtime() else {
+            return ComponentInterfaces::default();
+        };
+        let ty = component.component_type();
+        ComponentInterfaces {
+            imports: ty
+                .imports(&self.engine)
+                .map(|(name, _)| name.to_owned())
+                .collect(),
+            exports: ty
+                .exports(&self.engine)
+                .map(|(name, _)| name.to_owned())
+                .collect(),
+        }
+    }
+
+    /// Compile a component binary and describe its interface surface.
+    ///
+    /// # Errors
+    /// Returns [`EngineError::CompilationFailed`] if the bytes are not a valid
+    /// Component Model binary.
+    ///
+    /// # COLD PATH — inspection tooling.
+    pub fn describe_bytes(&self, bytes: &[u8]) -> Result<ComponentInterfaces, EngineError> {
+        let compiled = self.compile_component(bytes)?;
+        Ok(self.describe(&compiled))
     }
 
     /// Create a new `Store` configured for a specific component instance.
@@ -650,5 +692,42 @@ mod tests {
         let config = WasmtimeEngineConfig::default();
         let engine = WasmtimeEngine::new(config).unwrap();
         let _ = engine;
+    }
+
+    /// A component's imports and exports must be read from the binary, so
+    /// tooling reports what a component genuinely declares rather than what a
+    /// manifest claims about it. `torvyn inspect` printed empty lists for both.
+    #[test]
+    fn describe_reads_declared_interfaces() {
+        let engine = WasmtimeEngine::new(WasmtimeEngineConfig::default()).unwrap();
+
+        // Re-exporting an imported instance is the smallest component that has
+        // both an import and an export.
+        let wat = r#"
+            (component
+              (import "torvyn:test/dep" (instance $dep))
+              (export "torvyn:test/reexport" (instance $dep))
+            )
+        "#;
+        let described = engine.describe_bytes(wat.as_bytes()).expect("describe");
+        assert_eq!(described.imports, vec!["torvyn:test/dep".to_owned()]);
+        assert_eq!(described.exports, vec!["torvyn:test/reexport".to_owned()]);
+    }
+
+    #[test]
+    fn describe_reports_nothing_for_a_component_with_no_interfaces() {
+        let engine = WasmtimeEngine::new(WasmtimeEngineConfig::default()).unwrap();
+        let described = engine.describe_bytes(b"(component)").expect("describe");
+        assert!(described.imports.is_empty());
+        assert!(described.exports.is_empty());
+    }
+
+    #[test]
+    fn describe_rejects_bytes_that_are_not_a_component() {
+        let engine = WasmtimeEngine::new(WasmtimeEngineConfig::default()).unwrap();
+        assert!(matches!(
+            engine.describe_bytes(b"not a wasm component"),
+            Err(EngineError::CompilationFailed { .. })
+        ));
     }
 }

@@ -39,7 +39,7 @@ pub mod resolution;
 pub mod signing;
 
 // Re-exports for convenience
-pub use artifact::{pack, unpack, ArtifactContents, PackInput, PackOutput};
+pub use artifact::{pack, pack_with_manifest, unpack, ArtifactContents, PackInput, PackOutput};
 pub use cache::{ArtifactCache, CacheConfig};
 pub use digest::ContentDigest;
 pub use error::PackagingDetailError;

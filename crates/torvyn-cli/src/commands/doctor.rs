@@ -155,29 +155,51 @@ pub async fn execute(
     })
 }
 
-/// Check if a command exists and get its version.
-fn check_command_version(category: &str, name: &str, args: &[&str]) -> DoctorCheck {
-    match std::process::Command::new(args[0])
-        .args(&args[1..])
-        .output()
-    {
-        Ok(output) => {
+/// Check that a program is on `PATH` and report the version it prints.
+///
+/// `program` is the executable to run and `args` are the arguments to pass it.
+/// The distinction matters: this used to take a combined slice and run
+/// `args[0]` as the program, while its one caller passed the program
+/// separately as `name` and only `["--version"]` as `args`. The result was an
+/// attempt to execute a program literally called `--version`, so `torvyn
+/// doctor` reported `rustc NOT found` on every machine — including ones that
+/// had just compiled it.
+///
+/// A non-zero exit is also a failure. Spawning successfully only proves the
+/// binary exists, not that it works.
+fn check_command_version(category: &str, program: &str, args: &[&str]) -> DoctorCheck {
+    let failure = |detail: String| DoctorCheck {
+        category: category.into(),
+        name: program.into(),
+        passed: false,
+        detail,
+        fix: Some(format!("Install {program} and make sure it is on PATH")),
+    };
+
+    match std::process::Command::new(program).args(args).output() {
+        Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             DoctorCheck {
                 category: category.into(),
-                name: name.into(),
+                name: program.into(),
                 passed: true,
-                detail: version,
+                detail: if version.is_empty() {
+                    "found".to_owned()
+                } else {
+                    version
+                },
                 fix: None,
             }
         }
-        Err(_) => DoctorCheck {
-            category: category.into(),
-            name: name.into(),
-            passed: false,
-            detail: "NOT found".into(),
-            fix: Some(format!("Install {name}")),
-        },
+        Ok(output) => failure(format!(
+            "found but `{program} {}` exited with {}",
+            args.join(" "),
+            output
+                .status
+                .code()
+                .map_or_else(|| "a signal".to_owned(), |c| format!("status {c}"))
+        )),
+        Err(_) => failure("NOT found".into()),
     }
 }
 
@@ -286,5 +308,55 @@ fn check_wasm_target(attempt_fix: bool) -> DoctorCheck {
             detail: "NOT installed".into(),
             fix: Some("Run `rustup target add wasm32-wasip2`".into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The probe used to run `args[0]` as the program and pass `program` as an
+    /// argument, so every call executed a binary literally named `--version`
+    /// and every tool was reported missing on every machine.
+    #[test]
+    fn finds_a_program_that_is_on_path() {
+        // `rustc` is present wherever this test suite can be compiled.
+        let check = check_command_version("Toolchain", "rustc", &["--version"]);
+        assert!(check.passed, "rustc was not found: {}", check.detail);
+        assert_eq!(check.name, "rustc");
+        assert!(
+            check.detail.contains("rustc"),
+            "detail should carry the version string, got: {}",
+            check.detail
+        );
+        assert!(check.fix.is_none(), "a passing check needs no fix");
+    }
+
+    #[test]
+    fn reports_a_program_that_is_not_installed() {
+        let check = check_command_version(
+            "Toolchain",
+            "torvyn-no-such-program-exists-here",
+            &["--version"],
+        );
+        assert!(!check.passed);
+        assert!(check.detail.contains("NOT found"), "{}", check.detail);
+        assert!(
+            check.fix.is_some(),
+            "a failing check must say how to fix it"
+        );
+    }
+
+    /// Spawning successfully only proves the binary exists. A tool that runs
+    /// but exits non-zero is not usable, and saying "found" would be wrong.
+    #[test]
+    fn reports_a_program_that_exits_non_zero() {
+        let check = check_command_version("Toolchain", "rustc", &["--definitely-not-a-flag"]);
+        assert!(!check.passed);
+        assert!(
+            check.detail.contains("exited with"),
+            "detail should say the command failed, got: {}",
+            check.detail
+        );
     }
 }

@@ -57,6 +57,34 @@ pub struct MockCompiledComponent {
     pub(crate) id: u64,
 }
 
+impl CompiledComponent {
+    /// The underlying Wasmtime component, when this was compiled by the
+    /// Wasmtime backend.
+    ///
+    /// Returns `None` for mock components, which carry no type information.
+    #[cfg(feature = "wasmtime-backend")]
+    #[inline]
+    pub(crate) fn as_wasmtime(&self) -> Option<&wasmtime::component::Component> {
+        match &self.inner {
+            CompiledComponentInner::Wasmtime(component) => Some(component),
+            _ => None,
+        }
+    }
+}
+
+/// A component's declared interface surface, read from its type section.
+///
+/// Both lists are as the Component Model records them: an interface appears
+/// under its fully-qualified WIT name, such as
+/// `torvyn:streaming/source@0.1.0`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ComponentInterfaces {
+    /// Interfaces and functions the component imports from its host.
+    pub imports: Vec<String>,
+    /// Interfaces and functions the component exports.
+    pub exports: Vec<String>,
+}
+
 impl std::fmt::Debug for CompiledComponent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "CompiledComponent")

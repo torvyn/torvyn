@@ -317,6 +317,8 @@ Expected output:
 
 The benchmark report includes latency percentiles (not just averages — tail latency matters), per-component breakdowns, resource usage including buffer allocation behavior and copy counts, and scheduling metrics like backpressure events and queue utilization. The 2-second warmup period is excluded from measurements to avoid cold-start effects.
 
+The pipeline built here has a finite source: it emits its elements and completes, in well under the warmup period. `torvyn bench` detects that, ends both phases at the point the flow finishes, and reports the run that actually happened rather than the empty window that would otherwise follow it. Benchmarking under sustained load needs a source that does not terminate.
+
 > **Note:** The numbers shown above are illustrative. Actual performance depends on your hardware, the complexity of your component logic, and the data being processed. Torvyn's benchmarking methodology is designed to produce reproducible results — run the same benchmark multiple times and compare.
 
 ## Step 10: Package the Component
@@ -330,18 +332,47 @@ torvyn pack
 Expected output:
 
 ```
-  ✓ Contracts valid ✓
-  ✓ Packed: my-transform-0.1.0.tar (12.4 KiB)
+▶ Packing my-transform
+[ok] Packed my-transform:0.1.0
+    Artifact:  ./.torvyn/artifacts/my-transform-0.1.0.torvyn
+    Size:  35.2 KiB
+    Digest:  sha256:8d33b8bb5f1ce734d9264d2ddd1ce657d88fd8b66da1b1082d4a0fe38fe5d44c
+    Torvyn.toml:  sha256:4238150f68bb602e433c057165b2d48764279f6d37958837d158aabc15be1e1a
+    component.wasm:  sha256:c31f43967dd5be13de02cd6b3b914464a982fbe6634af1a611fb044656a194e3
+    provenance.json:  sha256:adc3580d4edf816724b6c21b0cfc70232351476b65117942ce372dc440c7ec83
+    wit/torvyn-streaming/lifecycle.wit:  sha256:63813802b981fbeb401b87d1a4e71f348947b39f113bd4fb1084050820ef3b89
+    ...
 
-  Artifact: .torvyn/artifacts/my-transform-0.1.0.tar
-
-  Artifact contents:
-    component.wasm    11.2 KiB
-    manifest.json     0.3 KiB
-    contracts/        0.9 KiB
+  Packed 1 artifact(s) into ./.torvyn/artifacts.
 ```
 
-The packaged artifact contains the compiled WebAssembly component, the project manifest metadata, and the WIT contract definitions. This artifact can be pushed to a Torvyn-compatible OCI registry with `torvyn publish`, shared with other teams, or deployed to production environments.
+The artifact is a gzip-compressed tar containing the compiled WebAssembly component, an artifact manifest derived from `Torvyn.toml`, the WIT contract definitions, and an in-toto provenance record naming the tool that built the binary. Every file it carries has a recorded SHA-256 digest, so any of them can be verified independently.
+
+Components must be built before they can be packed — `pack` reads `.torvyn/build/<name>.wasm`, which is where `torvyn build` writes.
+
+You can read an artifact back with `torvyn inspect`:
+
+```bash
+torvyn inspect .torvyn/artifacts/my-transform-0.1.0.torvyn
+```
+
+```
+  Component:  my-transform
+  Version:  0.1.0
+  Size:  81.7 KiB (Wasm), 35.2 KiB (packaged)
+
+  Exports:
+    torvyn:streaming/processor@0.1.0
+    torvyn:streaming/lifecycle@0.1.0
+
+  Imports:
+    torvyn:streaming/types@0.1.0
+    ...
+```
+
+The interfaces come from the component binary's own type section, not from the manifest — so this is what the component genuinely declares.
+
+This artifact can be pushed to a Torvyn-compatible OCI registry with `torvyn publish`, shared with other teams, or deployed to production environments. Registry support is currently limited to a local directory (`--registry local:<dir>`); the digest `publish` reports is the artifact's SHA-256 and can be checked with `sha256sum`.
 
 ## What You Have Built
 

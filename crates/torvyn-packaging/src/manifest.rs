@@ -563,6 +563,16 @@ impl ArtifactManifest {
         self
     }
 
+    /// Set the capabilities the component requires.
+    ///
+    /// An artifact declares what its component needs so a consumer can decide
+    /// whether to grant it before running anything.
+    #[must_use]
+    pub fn with_capabilities(mut self, capabilities: CapabilitiesSpec) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
     /// Set the compatibility spec.
     pub fn with_compatibility(mut self, compat: CompatibilitySpec) -> Self {
         self.compatibility = compat;

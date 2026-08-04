@@ -126,6 +126,8 @@ Options:
 
 Validates interface compatibility for every edge in the flow graph, DAG structure, role consistency, capability satisfaction, and contract version range intersection.
 
+This is a static check over the manifest: it reads the flow's nodes, edges, and `[security.grants]` entries and needs no compiled Wasm, so it can run before `torvyn build`. Each node's role comes from the interface it declares (`torvyn:streaming/source` is a source, `.../sink` a sink, and so on); a node that declares no interface is treated as a processor.
+
 **Exit codes:** 0 (links successfully), 1 (incompatible), 2 (missing components)
 
 ### `torvyn build`
@@ -236,6 +238,10 @@ Options:
 
 Reports throughput, latency percentiles, per-component breakdown, queue statistics, buffer reuse rate, copy accounting, and scheduling metrics.
 
+A benchmark assumes a source that keeps producing. If the flow finishes on its own — which every example and the scaffolded project does, in milliseconds — both the warmup and the measurement window end at that point, and the report covers the whole run rather than the empty window that would otherwise follow it. The report carries a `completion_note` saying so. To benchmark under sustained load, use a source that does not terminate.
+
+Reports are written to `.torvyn/bench/<timestamp>.json`.
+
 **Exit codes:** 0 (benchmark completed), 1 (pipeline error), 3 (regression detected when comparing)
 
 ### `torvyn pack`
@@ -250,13 +256,19 @@ Options:
   --component <NAME>      Specific component to pack (default: all)
   --output <PATH>         Output artifact path (default: .torvyn/artifacts/)
   --tag <TAG>             OCI tag (default: derived from manifest version)
-  --include-source        Include source WIT contracts in artifact metadata
+  --include-source        No effect: WIT contracts are always included
   --sign                  Sign artifact (requires signing key configuration)
 ```
 
-Runs `torvyn check`, collects the compiled `.wasm` binary, contract metadata, and benchmark metadata (if available), and assembles an OCI artifact.
+Collects each component's compiled `.wasm` binary from `.torvyn/build/`, its WIT contracts, and an artifact manifest derived from `Torvyn.toml`, and writes a gzip-compressed tar to `.torvyn/artifacts/<name>-<version>.torvyn`. Every layer carries its SHA-256 digest, and an in-toto provenance record names the build tool that produced the binary.
 
-**Exit codes:** 0 (packed), 1 (check failed), 2 (packaging error)
+The capabilities recorded in the artifact manifest are the union of the `[security.grants]` entries for the flow nodes that run the component, so an artifact declares what it will need wherever it is deployed.
+
+Every selected component must be built first. If any is not, `pack` names all of them and writes nothing.
+
+`--sign` is accepted but not yet implemented: the artifact is packed unsigned and the command warns. `--include-source` is likewise a no-op — an artifact always carries the component's WIT contracts, since a contract-first runtime cannot verify a component without them.
+
+**Exit codes:** 0 (packed), 1 (a component is unbuilt, or packaging failed), 2 (manifest or contract error)
 
 ### `torvyn publish`
 
@@ -273,7 +285,13 @@ Options:
   --force                 Overwrite existing tag
 ```
 
-**Exit codes:** 0 (published), 1 (authentication failed), 2 (push failed), 3 (artifact invalid)
+With no `--artifact`, publishes the most recently modified artifact in `.torvyn/artifacts/`.
+
+Only a local directory registry is implemented — `--registry local:<dir>`, defaulting to `local:.torvyn/registry`. The artifact is copied there and read back to confirm it arrived intact. A remote registry URL fails with an explanation rather than reporting a push that did not happen.
+
+The reported digest is the SHA-256 of the artifact's bytes, so it can be checked against `sha256sum`. `--dry-run` reports the same digest a real publish would.
+
+**Exit codes:** 0 (published), 1 (remote registry unsupported, or the artifact could not be published), 2 (artifact not found)
 
 ### `torvyn inspect`
 
@@ -290,6 +308,8 @@ Options:
                           metadata, size, contracts, benchmarks
 ```
 
+Imports and exports are read from the binary's Component Model type section, so they are what the component declares rather than what a manifest claims about it. Interfaces appear under their fully-qualified WIT name, for example `torvyn:streaming/source@0.1.0`. A bare `.wasm` has no manifest, so its version reads `unknown` and only what the binary itself carries is reported.
+
 **Exit codes:** 0 (success), 1 (target not found or invalid)
 
 ### `torvyn doctor`
@@ -304,6 +324,8 @@ Options:
 ```
 
 Checks: Torvyn CLI version, Rust toolchain and `wasm32-wasip2` target, `cargo-component`, `wasm-tools`, `wasmtime` (optional), project structure, WIT dependencies, registry connectivity.
+
+A tool counts as present only if it runs *and* exits zero; a binary on `PATH` that fails to execute is reported as a failure, not as found.
 
 **Exit codes:** 0 (all checks passed), 1 (issues found)
 
