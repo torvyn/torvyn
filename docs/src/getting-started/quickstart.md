@@ -29,7 +29,7 @@ graph LR
 
 ## Step 1: Create a New Project
 
-Use `torvyn init` to scaffold a new project. The `--template transform` flag creates a single-component stateless transform — the simplest useful Torvyn component.
+Use `torvyn init` to scaffold a new project. The `--template transform` flag creates a stateless transform — the simplest useful Torvyn component — along with an example source and sink, so the pipeline runs the moment it is built.
 
 ```bash
 torvyn init my-transform --template transform
@@ -38,22 +38,26 @@ torvyn init my-transform --template transform
 Expected output:
 
 ```
-  ✓ Created project "my-transform" with template "transform"
+  [ok] Created project "my-transform" with template "transform"
 
   my-transform
   ├── Torvyn.toml
   ├── Cargo.toml
-  ├── wit/world.wit
   ├── src/lib.rs
+  ├── wit/torvyn-streaming/…
   ├── .gitignore
-  └── README.md
+  ├── README.md
+  ├── components/source/…
+  └── components/sink/…
 
   Next steps:
     cd my-transform
     torvyn check              # Validate contracts and manifest
-    torvyn build              # Compile to WebAssembly component
-    torvyn run                # Run and see output
+    torvyn build              # Compile every component to WebAssembly
+    torvyn run                # Run the pipeline and see its output
 ```
+
+A flow needs a source and a sink, and a transform is neither: on its own it has nothing to read from and nowhere to write to. The two example components under `components/` supply both ends. Your component is the one at the project root — `src/lib.rs` — and it is the only file you need to edit. When you have real components for the ends, point `[flow.main]` in `Torvyn.toml` at them and delete the examples.
 
 Move into the project directory:
 
@@ -63,7 +67,7 @@ cd my-transform
 
 ## Step 2: Explore the Project Structure
 
-The scaffolded project contains five files. Each serves a specific role:
+The files at the project root are your component. Each serves a specific role:
 
 **`Torvyn.toml`** — The project manifest. This is the central configuration file that identifies the project, declares its components, and defines pipeline topology.
 
@@ -140,7 +144,7 @@ export!(MyTransform);
 
 The `wit_bindgen::generate!` macro reads the WIT contract and generates Rust types and traits that correspond to the imported and exported interfaces. Your component implements the `Guest` trait, which requires a `process` function.
 
-The generated template is a pass-through: it receives each stream element and emits it unchanged. In a real component, you would read the input buffer, transform the data, allocate a new output buffer, and return the result.
+The generated template is a pass-through: it reads each element's payload, copies it into a freshly allocated buffer, and emits that. The copy is not ceremony — the incoming payload is *borrowed* for the duration of the call and the host reclaims it afterwards, so an emitted element must own its buffer. In a real component you would transform the data on the way through rather than copying it verbatim.
 
 The `StreamElement` that arrives in `process` contains:
 

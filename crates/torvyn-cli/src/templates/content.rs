@@ -49,6 +49,37 @@ fn canonical_wit(prefix: &str) -> Vec<TemplateFile> {
     .collect()
 }
 
+/// The example source that lets a scaffolded pipeline run.
+///
+/// Emits a thousand numbered greetings and then ends the stream, which is what
+/// makes a scaffolded project finish on its own rather than run forever.
+///
+/// The same files back the `full-pipeline` template and the companion a
+/// single-component template ships, so there is one implementation of the
+/// contract's source world rather than two that can drift apart.
+fn companion_source(dir: &str) -> Vec<TemplateFile> {
+    let mut files = canonical_wit(&format!("{dir}/wit/torvyn-streaming/"));
+    files.extend([
+        tf(&format!("{dir}/Cargo.toml"), FP_SOURCE_CARGO_TOML),
+        tf(&format!("{dir}/src/lib.rs"), FP_SOURCE_LIB_RS),
+    ]);
+    files
+}
+
+/// The example sink that lets a scaffolded pipeline run.
+///
+/// Prints what it receives, which is how a scaffolded project shows the user
+/// its own output. It needs the `stdio:stdout` grant to do so; every manifest
+/// that places this component grants exactly that and nothing else.
+fn companion_sink(dir: &str) -> Vec<TemplateFile> {
+    let mut files = canonical_wit(&format!("{dir}/wit/torvyn-streaming/"));
+    files.extend([
+        tf(&format!("{dir}/Cargo.toml"), FP_SINK_CARGO_TOML),
+        tf(&format!("{dir}/src/lib.rs"), FP_SINK_LIB_RS),
+    ]);
+    files
+}
+
 /// Files for the stateless data transformer template.
 pub fn transform_template() -> Template {
     let mut files = canonical_wit("wit/torvyn-streaming/");
@@ -59,6 +90,11 @@ pub fn transform_template() -> Template {
         tf(".gitignore", COMMON_GITIGNORE),
         tf("README.md", TRANSFORM_README),
     ]);
+    // A transform has nothing to read from and nowhere to write to. Without
+    // both ends the scaffolded project cannot run, and `torvyn init` prints
+    // `torvyn run` as its third step.
+    files.extend(companion_source("components/source"));
+    files.extend(companion_sink("components/sink"));
     Template {
         description: "Stateless data transformer".into(),
         files,
@@ -70,10 +106,53 @@ name = "{{project_name}}"
 version = "0.1.0"
 contract_version = "{{contract_version}}"
 
+# The component you are building. Its source is at src/lib.rs.
 [[component]]
 name = "{{project_name}}"
 path = "."
 language = "rust"
+
+# A transform reads from something and writes to something. These two example
+# components supply both ends so the pipeline runs end to end; replace them
+# with your own, or point the flow below at components you already have.
+[[component]]
+name = "source"
+path = "components/source"
+language = "rust"
+
+[[component]]
+name = "sink"
+path = "components/sink"
+language = "rust"
+
+[flow.main]
+description = "Feed {{project_name}} from an example source and print what it emits"
+
+[flow.main.nodes.source]
+component = "source"
+interface = "torvyn:streaming/source"
+
+[flow.main.nodes.transform]
+component = "{{project_name}}"
+interface = "torvyn:streaming/processor"
+
+[flow.main.nodes.sink]
+component = "sink"
+interface = "torvyn:streaming/sink"
+
+[[flow.main.edges]]
+from = { node = "source", port = "output" }
+to = { node = "transform", port = "input" }
+
+[[flow.main.edges]]
+from = { node = "transform", port = "output" }
+to = { node = "sink", port = "input" }
+
+# Components run fully sandboxed by default: no filesystem, no network, no
+# stdio. The sink prints what it receives, so it is granted stdout — and
+# nothing else. Grant keys are flow-node names.
+[security.grants.sink]
+capabilities = ["stdio:stdout"]
 "#;
 
 const TRANSFORM_CARGO_TOML: &str = r#"[package]
@@ -141,7 +220,8 @@ wit_bindgen::generate!({
 });
 
 use exports::torvyn::streaming::processor::{Guest, ProcessResult};
-use torvyn::streaming::types::{StreamElement, ProcessError};
+use torvyn::streaming::types::{StreamElement, OutputElement, ElementMeta, ProcessError};
+use torvyn::streaming::buffer_allocator;
 
 struct {{component_type}};
 
@@ -149,12 +229,35 @@ impl Guest for {{component_type}} {
     fn process(input: StreamElement) -> Result<ProcessResult, ProcessError> {
         // TODO: Implement your transform logic here.
         //
-        // `input` contains:
-        //   - input.meta: element metadata (trace ID, content type, timestamp)
-        //   - input.buffer: a handle to the payload buffer
+        // `input` carries:
+        //   - input.meta: element metadata (sequence, timestamp, content type)
+        //   - input.payload: a *borrowed* handle to the incoming buffer
         //
-        // Pass-through: emit the input unchanged
-        Ok(ProcessResult::Emit(input))
+        // The input buffer is borrowed for the duration of this call and the
+        // host reclaims it afterwards, so an emitted element must own its
+        // payload: allocate a buffer, write into it, and freeze it. That is
+        // what keeps a component from handing out a reference to memory it
+        // does not own.
+        //
+        // This body is a pass-through — it copies the payload through
+        // unchanged. Replace the `data` below with whatever you produce.
+        let data = input.payload.read_all();
+
+        let out_buf = buffer_allocator::allocate(data.len() as u64)
+            .map_err(|e| ProcessError::Internal(format!("{e:?}")))?;
+        out_buf.append(&data)
+            .map_err(|e| ProcessError::Internal(format!("{e:?}")))?;
+
+        Ok(ProcessResult::Emit(OutputElement {
+            meta: ElementMeta {
+                sequence: input.meta.sequence,
+                timestamp_ns: input.meta.timestamp_ns,
+                content_type: input.meta.content_type,
+            },
+            payload: out_buf.freeze(),
+        }))
+
+        // Returning `Ok(ProcessResult::Drop)` instead discards the element.
     }
 }
 
@@ -163,21 +266,31 @@ export!({{component_type}});
 
 const TRANSFORM_README: &str = r#"# {{project_name}}
 
-A Torvyn streaming transform component.
+A Torvyn streaming transform component, with an example source and sink so the
+pipeline runs end to end.
 
 ## Quick Start
 
 ```bash
 torvyn check       # Validate contracts and manifest
-torvyn build       # Compile to WebAssembly component
-torvyn run         # Execute the pipeline locally
+torvyn build       # Compile every component to WebAssembly
+torvyn run         # Run the pipeline
 ```
+
+`torvyn run` prints the transformed messages. Edit `src/lib.rs` and run it
+again to see your change.
 
 ## Project Structure
 
-- `Torvyn.toml` — Project manifest
-- `wit/torvyn-streaming/` — Torvyn streaming WIT contracts
-- `src/lib.rs` — Component implementation
+- `src/lib.rs` — **your component.** This is the file to edit.
+- `Torvyn.toml` — project manifest, including the `main` flow
+- `wit/torvyn-streaming/` — the Torvyn streaming WIT contracts
+- `components/source/` — example source; replace it with your own
+- `components/sink/` — example sink; prints what your transform emits
+
+The example components exist because a transform has nothing to read from and
+nowhere to write to. When you have real ones, point `[flow.main]` in
+`Torvyn.toml` at them and delete these.
 
 ## Learn More
 
@@ -200,6 +313,8 @@ pub fn source_template() -> Template {
         tf(".gitignore", COMMON_GITIGNORE),
         tf("README.md", SOURCE_README),
     ]);
+    // A source needs somewhere for its elements to go before it can run.
+    files.extend(companion_sink("components/sink"));
     Template {
         description: "Data producer (no input, one output)".into(),
         files,
@@ -211,10 +326,40 @@ name = "{{project_name}}"
 version = "0.1.0"
 contract_version = "{{contract_version}}"
 
+# The component you are building. Its source is at src/lib.rs.
 [[component]]
 name = "{{project_name}}"
 path = "."
 language = "rust"
+
+# A source needs somewhere for its elements to go. This example sink prints
+# them, which is how you see what your source produces; replace it with your
+# own, or point the flow below at a component you already have.
+[[component]]
+name = "sink"
+path = "components/sink"
+language = "rust"
+
+[flow.main]
+description = "Print what {{project_name}} produces"
+
+[flow.main.nodes.source]
+component = "{{project_name}}"
+interface = "torvyn:streaming/source"
+
+[flow.main.nodes.sink]
+component = "sink"
+interface = "torvyn:streaming/sink"
+
+[[flow.main.edges]]
+from = { node = "source", port = "output" }
+to = { node = "sink", port = "input" }
+
+# Components run fully sandboxed by default: no filesystem, no network, no
+# stdio. The sink prints what it receives, so it is granted stdout — and
+# nothing else. Grant keys are flow-node names.
+[security.grants.sink]
+capabilities = ["stdio:stdout"]
 "#;
 
 const SOURCE_CARGO_TOML: &str = r#"[package]
@@ -265,6 +410,18 @@ struct {{component_type}};
 
 static mut COUNTER: u64 = 0;
 
+// The `data-source` and `data-sink` worlds export `lifecycle` as well as their
+// role interface, and the host calls `lifecycle.init` on every component
+// before the pipeline starts. A component that exports only its role
+// interface does not satisfy its world, and the runtime declines to run it.
+impl LifecycleGuest for {{component_type}} {
+    fn init(_config: String) -> Result<(), ProcessError> {
+        Ok(())
+    }
+
+    fn teardown() {}
+}
+
 impl Guest for {{component_type}} {
     fn pull() -> Result<Option<OutputElement>, ProcessError> {
         // TODO: Replace with your data generation logic.
@@ -307,14 +464,30 @@ export!({{component_type}});
 
 const SOURCE_README: &str = r#"# {{project_name}}
 
-A Torvyn streaming source component.
+A Torvyn streaming source component, with an example sink so the pipeline runs
+end to end.
 
 ## Quick Start
 
 ```bash
-torvyn check       # Validate contracts
-torvyn build       # Compile to WebAssembly
+torvyn check       # Validate contracts and manifest
+torvyn build       # Compile every component to WebAssembly
+torvyn run         # Run the pipeline
 ```
+
+`torvyn run` prints what your source produces. Edit `src/lib.rs` and run it
+again to see your change.
+
+## Project Structure
+
+- `src/lib.rs` — **your component.** This is the file to edit.
+- `Torvyn.toml` — project manifest, including the `main` flow
+- `wit/torvyn-streaming/` — the Torvyn streaming WIT contracts
+- `components/sink/` — example sink; it prints each element your source emits
+
+The example sink exists because a source needs somewhere for its elements to
+go. When you have a real one, point `[flow.main]` in `Torvyn.toml` at it and
+delete this.
 "#;
 
 // ---------------------------------------------------------------------------
@@ -332,6 +505,8 @@ pub fn sink_template() -> Template {
         tf(".gitignore", COMMON_GITIGNORE),
         tf("README.md", SINK_README),
     ]);
+    // A sink needs something to feed it before it can run.
+    files.extend(companion_source("components/source"));
     Template {
         description: "Data consumer (one input, no output)".into(),
         files,
@@ -343,14 +518,39 @@ name = "{{project_name}}"
 version = "0.1.0"
 contract_version = "{{contract_version}}"
 
+# The component you are building. Its source is at src/lib.rs.
 [[component]]
 name = "{{project_name}}"
 path = "."
 language = "rust"
 
+# A sink needs something to feed it. This example source emits numbered
+# greetings; replace it with your own, or point the flow below at a component
+# you already have.
+[[component]]
+name = "source"
+path = "components/source"
+language = "rust"
+
+[flow.main]
+description = "Feed {{project_name}} from an example source"
+
+[flow.main.nodes.source]
+component = "source"
+interface = "torvyn:streaming/source"
+
+[flow.main.nodes.sink]
+component = "{{project_name}}"
+interface = "torvyn:streaming/sink"
+
+[[flow.main.edges]]
+from = { node = "source", port = "output" }
+to = { node = "sink", port = "input" }
+
 # Components run fully sandboxed by default: no filesystem, no network, no
-# stdio. The sink prints what it receives, so it is granted stdout — and
-# nothing else. Grant keys are flow-node names.
+# stdio. Your sink prints what it receives, so it is granted stdout — and
+# nothing else. Grant keys are flow-node names, so this grants the `sink` node
+# above, which is {{project_name}}.
 [security.grants.sink]
 capabilities = ["stdio:stdout"]
 "#;
@@ -400,6 +600,18 @@ use torvyn::streaming::types::{StreamElement, ProcessError, BackpressureSignal};
 
 struct {{component_type}};
 
+// The `data-source` and `data-sink` worlds export `lifecycle` as well as their
+// role interface, and the host calls `lifecycle.init` on every component
+// before the pipeline starts. A component that exports only its role
+// interface does not satisfy its world, and the runtime declines to run it.
+impl LifecycleGuest for {{component_type}} {
+    fn init(_config: String) -> Result<(), ProcessError> {
+        Ok(())
+    }
+
+    fn teardown() {}
+}
+
 impl Guest for {{component_type}} {
     fn push(element: StreamElement) -> Result<BackpressureSignal, ProcessError> {
         // TODO: Implement your sink logic here.
@@ -420,395 +632,33 @@ export!({{component_type}});
 
 const SINK_README: &str = r#"# {{project_name}}
 
-A Torvyn streaming sink component.
+A Torvyn streaming sink component, with an example source so the pipeline runs
+end to end.
 
 ## Quick Start
 
 ```bash
-torvyn check
-torvyn build
+torvyn check       # Validate contracts and manifest
+torvyn build       # Compile every component to WebAssembly
+torvyn run         # Run the pipeline
 ```
-"#;
 
-// ---------------------------------------------------------------------------
-// Filter template
-// ---------------------------------------------------------------------------
-
-/// The `filter` template: a content filter/guard.
-/// Files for the content filter or guard template.
-pub fn filter_template() -> Template {
-    let mut files = canonical_wit("wit/torvyn-streaming/");
-    files.extend([
-        tf(
-            "wit/torvyn-streaming/filter.wit",
-            TORVYN_STREAMING_FILTER_WIT,
-        ),
-        tf(
-            "wit/torvyn-streaming/filter-world.wit",
-            TORVYN_STREAMING_FILTER_WORLD_WIT,
-        ),
-        tf("Torvyn.toml", FILTER_TORVYN_TOML),
-        tf("Cargo.toml", FILTER_CARGO_TOML),
-        tf("src/lib.rs", FILTER_LIB_RS),
-        tf(".gitignore", COMMON_GITIGNORE),
-        tf("README.md", FILTER_README),
-    ]);
-    Template {
-        description: "Content filter/guard".into(),
-        files,
-    }
-}
-
-const FILTER_TORVYN_TOML: &str = r#"[torvyn]
-name = "{{project_name}}"
-version = "0.1.0"
-contract_version = "{{contract_version}}"
-
-[[component]]
-name = "{{project_name}}"
-path = "."
-language = "rust"
-"#;
-
-const FILTER_CARGO_TOML: &str = r#"[package]
-name = "{{project_name}}"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-wit-bindgen = "0.36"
-
-[package.metadata.component]
-package = "torvyn:streaming"
-
-# cargo-component reads the component's WIT from here. Without an explicit
-# target it looks in `wit/` alone, misses `wit/torvyn-streaming/`, and reports
-# that no package header was found.
-[package.metadata.component.target]
-world = "content-filter"
-path = "wit/torvyn-streaming"
-
-# An empty [workspace] table makes this component a standalone cargo package.
-# Without it, creating a Torvyn project inside another cargo workspace makes
-# cargo refuse to build the component until it is added to that workspace's
-# members.
-[workspace]
-"#;
-
-const TORVYN_STREAMING_FILTER_WIT: &str = r#"package torvyn:streaming@0.1.0;
-
-interface filter {
-    use types.{stream-element, process-error};
-
-    /// Evaluate whether a stream element should pass through.
-    ///
-    /// - ok(true): Element passes. Runtime forwards it.
-    /// - ok(false): Element rejected. Runtime drops it.
-    /// - err(error): Filter encountered an error.
-    evaluate: func(element: stream-element) -> result<bool, process-error>;
-}
-"#;
-
-const TORVYN_STREAMING_FILTER_WORLD_WIT: &str = r#"package torvyn:streaming@0.1.0;
-
-world content-filter {
-    import types;
-
-    export filter;
-}
-"#;
-
-const FILTER_LIB_RS: &str = r#"// Generated by `torvyn init --template filter` on {{date}}
-// Torvyn CLI v{{torvyn_version}}
-//
-// This component implements the torvyn:streaming/filter interface.
-// It evaluates each element and decides whether to pass or drop it.
-
-wit_bindgen::generate!({
-    world: "content-filter",
-    path: "wit/torvyn-streaming",
-});
-
-use exports::torvyn::streaming::filter::Guest;
-use torvyn::streaming::types::{StreamElement, ProcessError};
-
-struct {{component_type}};
-
-impl Guest for {{component_type}} {
-    fn evaluate(element: StreamElement) -> Result<bool, ProcessError> {
-        // TODO: Implement your filter logic here.
-        //
-        // Return `Ok(true)` to pass the element through.
-        // Return `Ok(false)` to drop it.
-        //
-        // Access payload bytes: element.payload.read_all()
-        // Access metadata: element.meta.content_type
-
-        // Default: pass everything
-        Ok(true)
-    }
-}
-
-export!({{component_type}});
-"#;
-
-const FILTER_README: &str = r#"# {{project_name}}
-
-A Torvyn streaming filter component.
-
-## Quick Start
-
-```bash
-torvyn check       # Validate contracts
-torvyn build       # Compile to WebAssembly
-```
+`torvyn run` feeds your sink from the example source. Edit `src/lib.rs` and run
+it again to see your change.
 
 ## Project Structure
 
-- `Torvyn.toml` — Project manifest
-- `wit/torvyn-streaming/` — Torvyn streaming WIT contracts
-- `src/lib.rs` — Component implementation
-"#;
+- `src/lib.rs` — **your component.** This is the file to edit.
+- `Torvyn.toml` — project manifest, including the `main` flow
+- `wit/torvyn-streaming/` — the Torvyn streaming WIT contracts
+- `components/source/` — example source; it emits numbered greetings
 
-// ---------------------------------------------------------------------------
-// Router template
-// ---------------------------------------------------------------------------
+The example source exists because a sink needs something to feed it. When you
+have a real one, point `[flow.main]` in `Torvyn.toml` at it and delete this.
 
-/// The `router` template: multi-output router.
-/// Files for the multi-output router template.
-pub fn router_template() -> Template {
-    let mut files = canonical_wit("wit/torvyn-streaming/");
-    files.extend([
-        tf(
-            "wit/torvyn-streaming/router.wit",
-            TORVYN_STREAMING_ROUTER_WIT,
-        ),
-        tf(
-            "wit/torvyn-streaming/router-world.wit",
-            TORVYN_STREAMING_ROUTER_WORLD_WIT,
-        ),
-        tf("Torvyn.toml", TRANSFORM_TORVYN_TOML),
-        tf("Cargo.toml", TRANSFORM_CARGO_TOML),
-        tf("src/lib.rs", ROUTER_LIB_RS),
-        tf(".gitignore", COMMON_GITIGNORE),
-        tf("README.md", ROUTER_README),
-    ]);
-    Template {
-        description: "Multi-output router".into(),
-        files,
-    }
-}
-
-const TORVYN_STREAMING_ROUTER_WIT: &str = r#"package torvyn:streaming@0.1.0;
-
-interface router {
-    use types.{stream-element, process-error};
-
-    /// Determine which output port(s) should receive this element.
-    ///
-    /// Returns a list of port names. Empty list means drop.
-    /// Multiple names means fan-out.
-    route: func(element: stream-element) -> result<list<string>, process-error>;
-}
-"#;
-
-const TORVYN_STREAMING_ROUTER_WORLD_WIT: &str = r#"package torvyn:streaming@0.1.0;
-
-world content-router {
-    import types;
-
-    export router;
-}
-"#;
-
-const ROUTER_LIB_RS: &str = r#"// Generated by `torvyn init --template router` on {{date}}
-// Torvyn CLI v{{torvyn_version}}
-//
-// This component implements the torvyn:streaming/router interface.
-// It routes each element to one of multiple output ports.
-
-wit_bindgen::generate!({
-    world: "content-router",
-    path: "wit/torvyn-streaming",
-});
-
-use exports::torvyn::streaming::router::Guest;
-use torvyn::streaming::types::{StreamElement, ProcessError};
-
-struct {{component_type}};
-
-impl Guest for {{component_type}} {
-    fn route(element: StreamElement) -> Result<Vec<String>, ProcessError> {
-        // TODO: Return the port names to route the element to.
-        //
-        // Return an empty list to drop the element.
-        // Return multiple names for fan-out (runtime borrows the
-        // same buffer to each downstream).
-
-        // Default: route everything to "default"
-        Ok(vec!["default".to_string()])
-    }
-}
-
-export!({{component_type}});
-"#;
-
-const ROUTER_README: &str = r#"# {{project_name}}
-
-A Torvyn streaming router component.
-
-## Quick Start
-
-```bash
-torvyn check       # Validate contracts
-torvyn build       # Compile to WebAssembly
-```
-
-## Project Structure
-
-- `Torvyn.toml` — Project manifest
-- `wit/torvyn-streaming/` — Torvyn streaming WIT contracts
-- `src/lib.rs` — Component implementation
-"#;
-
-// ---------------------------------------------------------------------------
-// Aggregator template
-// ---------------------------------------------------------------------------
-
-/// The `aggregator` template: stateful windowed aggregator.
-/// Files for the stateful windowed aggregator template.
-pub fn aggregator_template() -> Template {
-    let mut files = canonical_wit("wit/torvyn-streaming/");
-    files.extend([
-        tf(
-            "wit/torvyn-streaming/aggregator.wit",
-            TORVYN_STREAMING_AGGREGATOR_WIT,
-        ),
-        tf(
-            "wit/torvyn-streaming/aggregator-world.wit",
-            TORVYN_STREAMING_AGGREGATOR_WORLD_WIT,
-        ),
-        tf("Torvyn.toml", TRANSFORM_TORVYN_TOML),
-        tf("Cargo.toml", TRANSFORM_CARGO_TOML),
-        tf("src/lib.rs", AGGREGATOR_LIB_RS),
-        tf(".gitignore", COMMON_GITIGNORE),
-        tf("README.md", AGGREGATOR_README),
-    ]);
-    Template {
-        description: "Stateful windowed aggregator".into(),
-        files,
-    }
-}
-
-const TORVYN_STREAMING_AGGREGATOR_WIT: &str = r#"package torvyn:streaming@0.1.0;
-
-interface aggregator {
-    use types.{stream-element, output-element, process-error};
-
-    /// Ingest a stream element into internal state.
-    ///
-    /// - ok(none): Absorbed, no output yet.
-    /// - ok(some(element)): Absorbed AND aggregated result ready.
-    /// - err(error): Ingestion failed.
-    ingest: func(element: stream-element) -> result<option<output-element>, process-error>;
-
-    /// Signal no more elements. Emit remaining buffered results.
-    flush: func() -> result<list<output-element>, process-error>;
-}
-"#;
-
-const TORVYN_STREAMING_AGGREGATOR_WORLD_WIT: &str = r#"package torvyn:streaming@0.1.0;
-
-world stream-aggregator {
-    import types;
-    import buffer-allocator;
-
-    export aggregator;
-}
-"#;
-
-const AGGREGATOR_LIB_RS: &str = r#"// Generated by `torvyn init --template aggregator` on {{date}}
-// Torvyn CLI v{{torvyn_version}}
-//
-// This component implements the torvyn:streaming/aggregator interface.
-// It accumulates elements over a window and emits aggregated results.
-
-wit_bindgen::generate!({
-    world: "stream-aggregator",
-    path: "wit/torvyn-streaming",
-});
-
-use exports::torvyn::streaming::aggregator::Guest;
-use torvyn::streaming::types::{StreamElement, OutputElement, ElementMeta, ProcessError};
-use torvyn::streaming::buffer_allocator;
-
-struct {{component_type}};
-
-// Window state
-static mut WINDOW_COUNT: u64 = 0;
-const WINDOW_SIZE: u64 = 10;
-
-impl Guest for {{component_type}} {
-    fn ingest(element: StreamElement) -> Result<Option<OutputElement>, ProcessError> {
-        // TODO: Implement your aggregation logic.
-        //
-        // Return Ok(None) to absorb without producing output.
-        // Return Ok(Some(output)) when a window completes.
-
-        unsafe {
-            WINDOW_COUNT += 1;
-            if WINDOW_COUNT >= WINDOW_SIZE {
-                WINDOW_COUNT = 0;
-
-                // Clone input buffer and emit aggregated result
-                let data = element.payload.read_all();
-                let out = buffer_allocator::allocate(data.len() as u64)
-                    .map_err(|e| ProcessError::Internal(format!("{e:?}")))?;
-                out.append(&data)
-                    .map_err(|e| ProcessError::Internal(format!("{e:?}")))?;
-
-                Ok(Some(OutputElement {
-                    meta: ElementMeta {
-                        sequence: element.meta.sequence,
-                        timestamp_ns: element.meta.timestamp_ns,
-                        content_type: element.meta.content_type,
-                    },
-                    payload: out.freeze(),
-                }))
-            } else {
-                Ok(None)
-            }
-        }
-    }
-
-    fn flush() -> Result<Vec<OutputElement>, ProcessError> {
-        // Called when the stream ends. Return any remaining buffered results.
-        Ok(vec![])
-    }
-}
-
-export!({{component_type}});
-"#;
-
-const AGGREGATOR_README: &str = r#"# {{project_name}}
-
-A Torvyn stateful windowed aggregator component.
-
-## Quick Start
-
-```bash
-torvyn check       # Validate contracts
-torvyn build       # Compile to WebAssembly
-```
-
-## Project Structure
-
-- `Torvyn.toml` — Project manifest
-- `wit/torvyn-streaming/` — Torvyn streaming WIT contracts
-- `src/lib.rs` — Component implementation
+Your sink prints what it receives, which needs the `stdio:stdout` capability.
+`[security.grants.sink]` in `Torvyn.toml` grants exactly that; a component
+that prints without the grant produces no output at all.
 "#;
 
 // ---------------------------------------------------------------------------
@@ -818,20 +668,13 @@ torvyn build       # Compile to WebAssembly
 /// The `full-pipeline` template: complete multi-component pipeline.
 /// Files for the complete pipeline: source, transform, and sink template.
 pub fn full_pipeline_template() -> Template {
-    let mut files = canonical_wit("components/source/wit/torvyn-streaming/");
+    let mut files = companion_source("components/source");
+    files.extend(companion_sink("components/sink"));
     files.extend(canonical_wit("components/transform/wit/torvyn-streaming/"));
-    files.extend(canonical_wit("components/sink/wit/torvyn-streaming/"));
     files.extend([
         tf("Torvyn.toml", FULL_PIPELINE_TORVYN_TOML),
-        // Source component
-        tf("components/source/Cargo.toml", FP_SOURCE_CARGO_TOML),
-        tf("components/source/src/lib.rs", FP_SOURCE_LIB_RS),
-        // Transform component
         tf("components/transform/Cargo.toml", FP_TRANSFORM_CARGO_TOML),
         tf("components/transform/src/lib.rs", FP_TRANSFORM_LIB_RS),
-        // Sink component
-        tf("components/sink/Cargo.toml", FP_SINK_CARGO_TOML),
-        tf("components/sink/src/lib.rs", FP_SINK_LIB_RS),
         tf(".gitignore", COMMON_GITIGNORE),
         tf("README.md", FP_README),
     ]);
@@ -1132,7 +975,6 @@ A complete Torvyn streaming pipeline with three components:
 ```bash
 torvyn check              # Validate contracts and manifest
 torvyn build              # Compile all components to WebAssembly
-torvyn run                # Run the pipeline
 torvyn run                # Run the pipeline
 ```
 

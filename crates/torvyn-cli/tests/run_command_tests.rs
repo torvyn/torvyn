@@ -63,5 +63,13 @@ language = "rust"
         .current_dir(dir.path())
         .assert()
         .failure()
-        .stderr(predicate::str::contains("No flow defined"));
+        // The message must say what is missing, name the component the
+        // project does have, and show the block to add. "Add a [flow.*]
+        // section" told a reader who knew the syntax something they knew.
+        .stderr(
+            predicate::str::contains("no flow")
+                .and(predicate::str::contains("test-proj"))
+                .and(predicate::str::contains("[flow.main]"))
+                .and(predicate::str::contains("[[flow.main.edges]]")),
+        );
 }

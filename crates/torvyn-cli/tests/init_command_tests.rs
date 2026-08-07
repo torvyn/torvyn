@@ -119,7 +119,7 @@ fn test_init_json_output() {
 
 #[test]
 fn test_init_all_single_templates() {
-    for template in ["source", "sink", "transform", "filter", "empty"] {
+    for template in ["source", "sink", "transform", "empty"] {
         let dir = TempDir::new().unwrap();
         let name = format!("proj-{template}");
 

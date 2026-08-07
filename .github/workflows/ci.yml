@@ -63,8 +63,12 @@ jobs:
 
   wasm-e2e:
     name: Wasm End-to-End
+    # The scaffold test drives every template that scaffolds a flow through
+    # check -> build -> run, which is ten `cargo component` builds rather than
+    # the three it used to be. Each scaffolded project is its own cargo
+    # workspace, so none of them share compiled dependencies.
+    timeout-minutes: 45
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -78,10 +82,10 @@ jobs:
           tool: cargo-component@0.21.1
       - name: Run real-Wasm end-to-end tests
         run: cargo test -p torvyn-integration-tests --features wasm-e2e --test test_real_wasm_e2e
-      # Scaffolds a project with `torvyn init` and drives it through
-      # check -> build -> run, asserting the pipeline produces its expected
-      # output. This is the path a new user takes, and it needs the same
-      # component toolchain this job already installs.
+      # Drives every template `torvyn init` offers through check -> build ->
+      # run, asserting each pipeline produces its expected output. This is the
+      # path a new user takes, and it needs the same component toolchain this
+      # job already installs.
       - name: Run scaffold end-to-end test
         run: cargo test -p torvyn-cli --features scaffold-e2e --test scaffold_end_to_end_tests
 

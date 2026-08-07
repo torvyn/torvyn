@@ -1,6 +1,6 @@
 //! Integration tests for CLI argument parsing.
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use torvyn_cli::cli::*;
 
 #[test]
@@ -241,19 +241,40 @@ fn test_parse_link_with_flow() {
     }
 }
 
+/// Every template the enum declares must be reachable from the command line.
+///
+/// Driven from `TemplateKind::ALL` rather than a list written by hand: a list
+/// that falls behind the enum is how three templates that could not run went
+/// unnoticed.
 #[test]
 fn test_all_template_variants_parseable() {
-    for template in [
-        "source",
-        "sink",
-        "transform",
-        "filter",
-        "router",
-        "aggregator",
-        "full-pipeline",
-        "empty",
-    ] {
-        let cli = Cli::parse_from(["torvyn", "init", "proj", "--template", template]);
-        assert!(matches!(cli.command, Command::Init(_)));
+    for &kind in TemplateKind::ALL {
+        let flag = kind
+            .to_possible_value()
+            .expect("every template has a command-line name");
+        let cli = Cli::parse_from(["torvyn", "init", "proj", "--template", flag.get_name()]);
+        match cli.command {
+            Command::Init(args) => assert_eq!(
+                args.template,
+                kind,
+                "--template {} parsed as {:?}",
+                flag.get_name(),
+                args.template
+            ),
+            other => panic!("Expected Init command, got {other:?}"),
+        }
+    }
+}
+
+/// The templates withdrawn for scaffolding components the runtime cannot
+/// execute must be rejected, not silently accepted as something else.
+#[test]
+fn test_withdrawn_templates_are_rejected() {
+    for withdrawn in ["filter", "router", "aggregator"] {
+        assert!(
+            Cli::try_parse_from(["torvyn", "init", "proj", "--template", withdrawn]).is_err(),
+            "--template {withdrawn} scaffolds a component the runtime cannot run and must be \
+             refused"
+        );
     }
 }

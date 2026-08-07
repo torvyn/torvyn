@@ -20,8 +20,14 @@ use tempfile::TempDir;
 /// a core module).
 const EMPTY_COMPONENT: &[u8] = &[0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00];
 
-/// Scaffold a project and place a component binary where `torvyn build` would.
-fn project_with_built_component(dir: &Path, name: &str) -> std::path::PathBuf {
+/// Scaffold a project and place a component binary for every component it
+/// declares, where `torvyn build` would put them.
+///
+/// The `transform` template scaffolds an example source and sink alongside the
+/// component being built, because a transform on its own has nothing to read
+/// from and nowhere to write to. All three must be built before `pack` will
+/// write anything.
+fn project_with_built_components(dir: &Path, name: &str) -> std::path::PathBuf {
     Command::cargo_bin("torvyn")
         .unwrap()
         .args(["init", name, "--template", "transform"])
@@ -32,8 +38,33 @@ fn project_with_built_component(dir: &Path, name: &str) -> std::path::PathBuf {
     let project_dir = dir.join(name);
     let build_dir = project_dir.join(".torvyn").join("build");
     std::fs::create_dir_all(&build_dir).unwrap();
-    std::fs::write(build_dir.join(format!("{name}.wasm")), EMPTY_COMPONENT).unwrap();
+    for component in declared_components(&project_dir) {
+        std::fs::write(build_dir.join(format!("{component}.wasm")), EMPTY_COMPONENT).unwrap();
+    }
     project_dir
+}
+
+/// The `[[component]]` names the project's manifest declares, in order.
+fn declared_components(project_dir: &Path) -> Vec<String> {
+    let manifest = std::fs::read_to_string(project_dir.join("Torvyn.toml")).expect("read manifest");
+    let mut names = Vec::new();
+    let mut in_component = false;
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_component = line == "[[component]]";
+            continue;
+        }
+        if in_component {
+            if let Some(value) = line.strip_prefix("name") {
+                if let Some(name) = value.split('=').nth(1) {
+                    names.push(name.trim().trim_matches('"').to_owned());
+                    in_component = false;
+                }
+            }
+        }
+    }
+    names
 }
 
 #[test]
@@ -84,7 +115,7 @@ fn test_pack_requires_a_built_component() {
 #[test]
 fn test_pack_creates_artifact() {
     let dir = TempDir::new().unwrap();
-    let project_dir = project_with_built_component(dir.path(), "pack-test");
+    let project_dir = project_with_built_components(dir.path(), "pack-test");
 
     Command::cargo_bin("torvyn")
         .unwrap()
@@ -127,7 +158,7 @@ fn test_pack_creates_artifact() {
 #[test]
 fn test_pack_json_output() {
     let dir = TempDir::new().unwrap();
-    let project_dir = project_with_built_component(dir.path(), "pack-json");
+    let project_dir = project_with_built_components(dir.path(), "pack-json");
 
     let output = Command::cargo_bin("torvyn")
         .unwrap()
@@ -146,14 +177,22 @@ fn test_pack_json_output() {
     assert!(parsed["success"].as_bool().unwrap());
     assert_eq!(parsed["command"], "pack");
 
+    // With no `--component`, every declared component is packed.
     let artifacts = parsed["data"]["artifacts"].as_array().expect("artifacts");
+    let packed_names: Vec<&str> = artifacts
+        .iter()
+        .filter_map(|a| a["name"].as_str())
+        .collect();
     assert_eq!(
-        artifacts.len(),
-        1,
-        "the transform template has one component"
+        packed_names,
+        declared_components(&project_dir),
+        "pack must produce one artifact per declared component"
     );
-    let packed = &artifacts[0];
-    assert_eq!(packed["name"], "pack-json");
+
+    let packed = artifacts
+        .iter()
+        .find(|a| a["name"] == "pack-json")
+        .expect("the project's own component");
     assert_eq!(packed["version"], "0.1.0");
     assert!(packed["artifact_path"].as_str().is_some());
 
@@ -190,7 +229,7 @@ fn test_pack_json_output() {
 #[test]
 fn test_pack_custom_output_dir() {
     let dir = TempDir::new().unwrap();
-    let project_dir = project_with_built_component(dir.path(), "pack-custom");
+    let project_dir = project_with_built_components(dir.path(), "pack-custom");
     let custom_output = dir.path().join("my-artifacts");
 
     Command::cargo_bin("torvyn")
@@ -200,10 +239,14 @@ fn test_pack_custom_output_dir() {
         .assert()
         .success();
 
-    assert!(
-        custom_output.join("pack-custom-0.1.0.torvyn").is_file(),
-        "--output was not honoured"
-    );
+    for component in declared_components(&project_dir) {
+        assert!(
+            custom_output
+                .join(format!("{component}-0.1.0.torvyn"))
+                .is_file(),
+            "--output was not honoured for {component}"
+        );
+    }
     assert!(
         !project_dir.join(".torvyn").join("artifacts").exists(),
         "--output was honoured but the default directory was created anyway"
@@ -215,7 +258,7 @@ fn test_pack_custom_output_dir() {
 #[test]
 fn test_pack_tag_overrides_the_version() {
     let dir = TempDir::new().unwrap();
-    let project_dir = project_with_built_component(dir.path(), "pack-tagged");
+    let project_dir = project_with_built_components(dir.path(), "pack-tagged");
 
     Command::cargo_bin("torvyn")
         .unwrap()
@@ -234,7 +277,7 @@ fn test_pack_tag_overrides_the_version() {
 #[test]
 fn test_pack_warns_that_include_source_has_no_effect() {
     let dir = TempDir::new().unwrap();
-    let project_dir = project_with_built_component(dir.path(), "pack-src");
+    let project_dir = project_with_built_components(dir.path(), "pack-src");
 
     Command::cargo_bin("torvyn")
         .unwrap()

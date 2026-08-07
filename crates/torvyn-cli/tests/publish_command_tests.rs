@@ -27,7 +27,11 @@ fn packed_project(dir: &Path, name: &str) -> PathBuf {
     let project_dir = dir.join(name);
     let build_dir = project_dir.join(".torvyn").join("build");
     std::fs::create_dir_all(&build_dir).unwrap();
-    std::fs::write(build_dir.join(format!("{name}.wasm")), EMPTY_COMPONENT).unwrap();
+    // The `transform` template scaffolds an example source and sink alongside
+    // the component being built; `pack` writes nothing until all are built.
+    for component in declared_components(&project_dir) {
+        std::fs::write(build_dir.join(format!("{component}.wasm")), EMPTY_COMPONENT).unwrap();
+    }
 
     Command::cargo_bin("torvyn")
         .unwrap()
@@ -37,6 +41,29 @@ fn packed_project(dir: &Path, name: &str) -> PathBuf {
         .success();
 
     project_dir
+}
+
+/// The `[[component]]` names the project's manifest declares, in order.
+fn declared_components(project_dir: &Path) -> Vec<String> {
+    let manifest = std::fs::read_to_string(project_dir.join("Torvyn.toml")).expect("read manifest");
+    let mut names = Vec::new();
+    let mut in_component = false;
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_component = line == "[[component]]";
+            continue;
+        }
+        if in_component {
+            if let Some(value) = line.strip_prefix("name") {
+                if let Some(name) = value.split('=').nth(1) {
+                    names.push(name.trim().trim_matches('"').to_owned());
+                    in_component = false;
+                }
+            }
+        }
+    }
+    names
 }
 
 /// Extract the digest from `publish`'s human output, without its prefix.
@@ -94,9 +121,18 @@ fn test_publish_to_local_directory() {
     let registry_dir = dir.path().join("my-registry");
     let registry_arg = format!("local:{}", registry_dir.display());
 
+    // Name the artifact explicitly: with no `--artifact`, `publish` takes the
+    // most recently packed one, which for a multi-component project is
+    // whichever was packed last rather than the project's own component.
     let assert = Command::cargo_bin("torvyn")
         .unwrap()
-        .args(["publish", "--registry", &registry_arg])
+        .args([
+            "publish",
+            "--artifact",
+            ".torvyn/artifacts/pub-local-0.1.0.torvyn",
+            "--registry",
+            &registry_arg,
+        ])
         .current_dir(&project_dir)
         .assert()
         .success()

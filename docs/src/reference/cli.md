@@ -35,8 +35,7 @@ Arguments:
 
 Options:
   --template <TEMPLATE>  Project template
-                         Values: source, sink, transform, filter, router,
-                         aggregator, full-pipeline, empty
+                         Values: source, sink, transform, full-pipeline, empty
                          Default: transform
   --language <LANG>      Implementation language
                          Values: rust, go, python, zig
@@ -48,20 +47,29 @@ Options:
   --force                Overwrite existing directory contents
 ```
 
+Every template except `empty` scaffolds a project that runs as generated: `torvyn check`, `torvyn build`, and `torvyn run` all succeed on it without an edit.
+
+A pipeline needs a source and a sink, so a template for a single component ships example components at the ends it lacks — `--template transform` generates your transform plus a source and a sink, `--template source` generates your source plus a sink, and `--template sink` generates your sink plus a source. The examples live under `components/`; your own component stays at the project root, in `src/lib.rs`. Replace them by pointing `[flow.main]` at components of your own.
+
+Because your component is named after the project, a project name that matches an example component is refused: `torvyn init sink --template transform` would declare two components called `sink`.
+
+`empty` generates a manifest and nothing else, so `build` and `run` have nothing to act on until you add a `[[component]]` entry and a `[flow.*]` section. `init` prints that instead of steps you cannot take.
+
+`filter`, `router`, and `aggregator` are no longer offered. They scaffolded components implementing `torvyn:streaming/filter`, `/router`, and `/aggregator` — interfaces that exist in no contract the engine binds, so the component compiled and was then refused at instantiation. Those roles are [Phase 1](https://github.com/torvyn/torvyn/blob/main/documents/ROADMAP.md) work, and the templates return with the interfaces that make them runnable.
+
 **Example:**
 ```
 $ torvyn init my-transform --template transform --language rust
-✓ Created project "my-transform" with template "transform"
+[ok] Created project "my-transform" with template "transform"
 
   Next steps:
     cd my-transform
-    $EDITOR wit/world.wit     # Review your component's contract
-    $EDITOR src/lib.rs        # Implement your component
     torvyn check              # Validate contracts and manifest
-    torvyn build              # Compile to WebAssembly component
+    torvyn build              # Compile every component to WebAssembly
+    torvyn run                # Run the pipeline and see its output
 ```
 
-**Exit codes:** 0 (success), 1 (error — directory exists, invalid template, etc.)
+**Exit codes:** 0 (success), 1 (error — directory exists, name collides with an example component, etc.)
 
 ### `torvyn check`
 

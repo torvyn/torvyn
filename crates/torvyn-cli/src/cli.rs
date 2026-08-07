@@ -86,6 +86,17 @@ pub enum ColorChoice {
 }
 
 /// Project template type for `torvyn init`.
+///
+/// Every template here scaffolds a project that `torvyn build` and `torvyn run`
+/// can complete, except [`TemplateKind::Empty`], which deliberately generates
+/// no components at all.
+///
+/// `filter`, `router`, and `aggregator` were offered until they were found to
+/// scaffold components the runtime cannot execute: they implement
+/// `torvyn:streaming/{filter,router,aggregator}`, which exist in no contract
+/// the engine binds. Such a component compiles and is then refused at
+/// instantiation. Those roles are Phase 1 on the roadmap, and the templates
+/// will return with the interfaces that make them runnable.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TemplateKind {
@@ -95,12 +106,6 @@ pub enum TemplateKind {
     Sink,
     /// Stateless data transformer.
     Transform,
-    /// Content filter/guard.
-    Filter,
-    /// Multi-output router.
-    Router,
-    /// Stateful windowed aggregator.
-    Aggregator,
     /// Complete multi-component pipeline with source + transform + sink.
     FullPipeline,
     /// Minimal skeleton for experienced users.
@@ -108,6 +113,21 @@ pub enum TemplateKind {
 }
 
 impl TemplateKind {
+    /// Every template.
+    ///
+    /// Exists so tests can iterate the full set rather than a hand-written
+    /// list that silently falls behind — a stale list is how three templates
+    /// that could not run went unnoticed. Not read by the command itself,
+    /// which takes the template clap parsed.
+    #[allow(dead_code)]
+    pub const ALL: &'static [Self] = &[
+        Self::Source,
+        Self::Sink,
+        Self::Transform,
+        Self::FullPipeline,
+        Self::Empty,
+    ];
+
     /// Returns a human-readable description of this template.
     #[allow(dead_code)]
     pub fn description(&self) -> &'static str {
@@ -115,12 +135,50 @@ impl TemplateKind {
             Self::Source => "Data producer (no input, one output)",
             Self::Sink => "Data consumer (one input, no output)",
             Self::Transform => "Stateless data transformer",
-            Self::Filter => "Content filter/guard",
-            Self::Router => "Multi-output router",
-            Self::Aggregator => "Stateful windowed aggregator",
             Self::FullPipeline => "Complete pipeline with source + transform + sink",
             Self::Empty => "Minimal skeleton for experienced users",
         }
+    }
+
+    /// Components this template scaffolds *alongside* the one the user is
+    /// building, so that the flow it generates can actually run.
+    ///
+    /// A pipeline needs a source and a sink. A scaffolded transform has
+    /// nothing to read from and nowhere to write to, so a template for one
+    /// ships the two ends with it; a scaffolded source ships only a sink, and
+    /// a scaffolded sink only a source.
+    ///
+    /// These names occupy the manifest's component namespace, which is why
+    /// [`Self::name_collides_with_companion`] exists.
+    pub const fn companions(&self) -> &'static [&'static str] {
+        match self {
+            Self::Source => &["sink"],
+            Self::Sink => &["source"],
+            Self::Transform => &["source", "sink"],
+            // Names every component it scaffolds itself; nothing is derived
+            // from the project name, so nothing can collide.
+            Self::FullPipeline | Self::Empty => &[],
+        }
+    }
+
+    /// Whether the scaffolded manifest defines a flow, and therefore whether
+    /// `torvyn run` applies to the project this template produces.
+    pub const fn scaffolds_flow(&self) -> bool {
+        !matches!(self, Self::Empty)
+    }
+
+    /// The companion this project name would collide with, if any.
+    ///
+    /// The user's own component is named after the project, so a project
+    /// called `sink` would produce two components named `sink` — a manifest
+    /// that cannot be resolved. Caught at `init` time, where the fix is to
+    /// pick another name, rather than at `build` time where the cause is far
+    /// from the effect.
+    pub fn name_collides_with_companion(&self, project_name: &str) -> Option<&'static str> {
+        self.companions()
+            .iter()
+            .copied()
+            .find(|companion| *companion == project_name)
     }
 }
 

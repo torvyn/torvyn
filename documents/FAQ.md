@@ -54,18 +54,19 @@ But `torvyn init` saves you from having to remember the correct WIT package stru
 | `source` | Data producer (no input, one output) |
 | `sink` | Data consumer (one input, no output) |
 | `transform` (default) | Stateless 1:1 transformer |
-| `filter` | Accept/reject gate |
-| `router` | Multi-output dispatcher |
-| `aggregator` | Stateful windowed accumulator |
 | `full-pipeline` | Complete Source + Processor + Sink with inline flow definition |
 | `empty` | Minimal skeleton for experienced users |
 
+Every template except `empty` scaffolds a project that runs as generated. A flow needs a source and a sink, so a template for a single component ships example components for the ends it lacks — `--template transform` generates your transform plus both, `--template source` generates your source plus a sink. Your component stays at the project root; the examples live under `components/` and are meant to be replaced.
+
 ```bash
-# Example: create a filter component in Go
-torvyn init my-filter --template filter --language go
+# Example: create a transform component
+torvyn init my-transform --template transform
 ```
 
-**Name validation rules:** 1--64 characters, `[a-zA-Z0-9_-]` only, cannot start with a hyphen or digit.
+`filter`, `router`, and `aggregator` templates were offered until they were found to scaffold components the runtime cannot execute — they implement `torvyn:streaming/filter`, `/router`, and `/aggregator`, interfaces no contract the engine binds defines, so the component compiles and is then refused at instantiation. Those roles are [Phase 1](ROADMAP.md) work.
+
+**Name validation rules:** 1--64 characters, `[a-zA-Z0-9_-]` only, cannot start with a hyphen or digit. A name matching an example component the template would scaffold is also refused, since your component is named after the project and the two would collide.
 
 > **Source:** [crates/torvyn-cli/src/commands/init.rs](../crates/torvyn-cli/src/commands/init.rs).
 

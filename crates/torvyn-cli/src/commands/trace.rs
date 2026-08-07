@@ -275,11 +275,7 @@ pub async fn execute(
         .flow
         .clone()
         .or_else(|| manifest.flow.keys().next().cloned())
-        .ok_or_else(|| CliError::Config {
-            detail: "No flow defined in manifest".into(),
-            file: Some(manifest_path.display().to_string()),
-            suggestion: "Add a [flow.*] section or use --flow <name>.".into(),
-        })?;
+        .ok_or_else(|| crate::commands::no_flow_defined(manifest_path, &manifest))?;
 
     // Node count sizes the span buffer: one span per stage per element. The
     // manifest keeps flow tables as raw TOML, so this reads the node table

@@ -101,11 +101,7 @@ pub async fn execute(
     })?;
 
     if !manifest.has_flows() {
-        return Err(CliError::Config {
-            detail: "No flows defined in manifest".into(),
-            file: Some(manifest_path.display().to_string()),
-            suggestion: "Add a [flow.*] section to your Torvyn.toml.".into(),
-        });
+        return Err(crate::commands::no_flow_defined(manifest_path, &manifest));
     }
 
     let project_dir = manifest_path

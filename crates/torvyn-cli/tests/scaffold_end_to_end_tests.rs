@@ -219,6 +219,115 @@ fn scaffolded_pipeline_builds_and_runs() {
     );
 }
 
+/// Every template that scaffolds a flow must survive its own printed next
+/// steps: `check`, then `build`, then `run`.
+///
+/// `full-pipeline` is covered above in more depth. This covers the templates
+/// that scaffold the component the user is building at the project root, with
+/// example components filling the ends of the pipeline it lacks — the shape
+/// that made `torvyn run` fail with "No flow defined in manifest" for seven of
+/// the eight templates that once shipped.
+///
+/// Nothing here was reachable by any test before, and all three templates were
+/// broken in a different way each: the `source` and `sink` templates imported
+/// `LifecycleGuest` and never implemented it, and the `transform` template's
+/// pass-through body returned the borrowed input where the contract requires
+/// an owned `OutputElement`. All three failed to compile.
+#[test]
+fn every_scaffolded_template_builds_and_runs() {
+    for template in ["source", "sink", "transform"] {
+        let workspace = TempDir::new().expect("temp workspace");
+        let name = format!("p-{template}");
+
+        Command::cargo_bin("torvyn")
+            .unwrap()
+            .args(["init", &name, "--template", template])
+            .current_dir(workspace.path())
+            .assert()
+            .success();
+
+        let project = workspace.path().join(&name);
+
+        Command::cargo_bin("torvyn")
+            .unwrap()
+            .args(["check"])
+            .current_dir(&project)
+            .assert()
+            .success();
+
+        Command::cargo_bin("torvyn")
+            .unwrap()
+            .args(["build"])
+            .current_dir(&project)
+            .timeout(BUILD_TIMEOUT)
+            .assert()
+            .success();
+
+        // Every component the manifest declares must land where `run` looks.
+        let manifest = std::fs::read_to_string(project.join("Torvyn.toml")).expect("read manifest");
+        let declared = declared_components(&manifest);
+        assert!(
+            declared.len() >= 2,
+            "{template} scaffolds {declared:?}; a pipeline needs a source and a sink"
+        );
+        for component in &declared {
+            let artifact = project
+                .join(".torvyn/build")
+                .join(format!("{component}.wasm"));
+            assert!(
+                artifact.is_file(),
+                "{template}: torvyn build did not produce {}",
+                artifact.display()
+            );
+        }
+
+        let run = Command::cargo_bin("torvyn")
+            .unwrap()
+            .args(["run"])
+            .current_dir(&project)
+            .timeout(BUILD_TIMEOUT)
+            .assert()
+            .success();
+
+        let stdout = String::from_utf8_lossy(&run.get_output().stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&run.get_output().stderr).into_owned();
+
+        // The example source emits numbered greetings and the sink prints
+        // them, which also proves the sink's `stdio:stdout` grant reached the
+        // sandbox — a component that prints without it produces nothing.
+        assert!(
+            stdout.contains("Hello, Torvyn!"),
+            "{template}: the pipeline produced no output.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("Errors:  0") || stderr.contains("Errors: 0"),
+            "{template}: the run reported errors.\nstderr:\n{stderr}"
+        );
+    }
+}
+
+/// The `[[component]]` names a manifest declares, in order.
+fn declared_components(manifest: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut in_component = false;
+    for line in manifest.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_component = line == "[[component]]";
+            continue;
+        }
+        if in_component {
+            if let Some(value) = line.strip_prefix("name") {
+                if let Some(name) = value.split('=').nth(1) {
+                    names.push(name.trim().trim_matches('"').to_owned());
+                    in_component = false;
+                }
+            }
+        }
+    }
+    names
+}
+
 /// `torvyn link` is a static check: it needs the manifest, not compiled Wasm.
 /// It used to fail on every project with "invalid type: map, expected a string
 /// in `edges.from`", because it parsed the manifest with a private schema that
@@ -316,7 +425,28 @@ fn wit_files_reported(output: &str) -> Option<usize> {
 
 #[cfg(test)]
 mod unit {
-    use super::{digest_reported, sha256_hex, wit_files_reported};
+    use super::{declared_components, digest_reported, sha256_hex, wit_files_reported};
+
+    #[test]
+    fn reads_every_declared_component_name() {
+        let manifest = r#"
+[torvyn]
+name = "p"
+
+[[component]]
+name = "p"
+path = "."
+
+[[component]]
+name = "sink"
+path = "components/sink"
+
+[flow.main.nodes.source]
+component = "p"
+"#;
+        assert_eq!(declared_components(manifest), vec!["p", "sink"]);
+        assert!(declared_components("[torvyn]\nname = \"p\"\n").is_empty());
+    }
 
     #[test]
     fn parses_the_reported_digest() {
