@@ -169,6 +169,7 @@ pub async fn execute(
 
     Ok(CommandResult {
         success: true,
+        failure: None,
         command: "init".into(),
         data: result,
         warnings: vec![],

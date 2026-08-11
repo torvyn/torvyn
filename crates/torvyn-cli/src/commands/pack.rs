@@ -223,6 +223,7 @@ pub async fn execute(
 
     Ok(CommandResult {
         success: true,
+        failure: None,
         command: "pack".into(),
         data: PackResult {
             artifacts,

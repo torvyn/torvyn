@@ -257,11 +257,13 @@ A structured error model with five categories, each triggering different runtime
 
 | Variant | Runtime Response |
 |---------|-----------------|
-| `invalid-input(string)` | May retry or skip, depending on error policy |
-| `unavailable(string)` | May trigger circuit-breaker logic |
-| `internal(string)` | Logged, may retry or skip |
-| `deadline-exceeded` | Feeds into timeout accounting |
+| `invalid-input(string)` | Recorded under its own category; terminates the flow under `FailFast` |
+| `unavailable(string)` | Recorded under its own category; terminates the flow under `FailFast` |
+| `internal(string)` | Recorded under its own category; terminates the flow under `FailFast` |
+| `deadline-exceeded` | Feeds into timeout accounting; terminates the flow under `FailFast` |
 | `fatal(string)` | Terminal --- component is torn down, no more elements sent |
+
+`FailFast` is the reactor's only selectable error policy in Phase 0, and it is what its name says: any component error cancels the flow. What the variant changes today is *how* the failure is reported — the category it is recorded under in metrics and traces, and the error `torvyn run` prints when it names the component that failed. Policies that skip or retry per element, and so make the non-fatal variants behave differently from `fatal`, are Phase 1 work.
 
 #### `backpressure-signal` (enum)
 

@@ -3,7 +3,7 @@
 //! Per Doc 04 §1.3: a single long-lived Tokio task that handles
 //! flow creation/teardown and administrative commands.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 
-use torvyn_types::{ComponentId, EventSink, FlowId, FlowState, StreamId};
+use torvyn_types::{ComponentId, EventSink, FlowId, FlowState, ProcessError, StreamId};
 
 use torvyn_engine::{ComponentInstance, ComponentInvoker};
 use torvyn_resources::DefaultResourceManager;
@@ -21,7 +21,7 @@ use crate::cancellation::{CancellationReason, FlowCancellation};
 use crate::config::FlowConfig;
 use crate::error::{FlowCreationError, FlowError};
 use crate::events::{ReactorCommand, ReactorEvent, ShutdownResult};
-use crate::flow_driver::{FlowDriver, FlowDriverHandle};
+use crate::flow_driver::{FlowDriver, FlowDriverHandle, FlowOutcome};
 use crate::metrics::FlowCompletionStats;
 use crate::stream::StreamState;
 
@@ -62,9 +62,27 @@ pub struct ReactorCoordinator<I: ComponentInvoker, E: EventSink> {
     /// completed flows do not accumulate host-managed resources for the
     /// engine's lifetime.
     resources: Arc<DefaultResourceManager>,
+    /// How recently-finished flows ended.
+    ///
+    /// A flow's entry is removed when its task is reaped, which takes the
+    /// terminal state and the cancellation reason with it — so anything asking
+    /// how a flow ended, after it has ended, found nothing. Callers ask
+    /// precisely then, which is why the outcome outlives the entry.
+    ///
+    /// Bounded: a long-lived host spawning flows indefinitely must not
+    /// accumulate them. The oldest is evicted past [`MAX_RETAINED_OUTCOMES`],
+    /// which is far more than the one a CLI run needs and enough for an
+    /// operator inspecting a handful of recent flows.
+    outcomes: BTreeMap<FlowId, FlowOutcome>,
     /// Whether the coordinator is shutting down.
     shutting_down: bool,
 }
+
+/// How many finished flows' outcomes the coordinator keeps.
+///
+/// Flow ids increase monotonically, so evicting the lowest key evicts the
+/// oldest flow.
+const MAX_RETAINED_OUTCOMES: usize = 64;
 
 impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoordinator<I, E> {
     /// Create a new coordinator.
@@ -85,6 +103,7 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
             invoker,
             event_sink,
             resources,
+            outcomes: BTreeMap::new(),
             shutting_down: false,
         }
     }
@@ -140,6 +159,19 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
                     None => Err(FlowError::Internal(format!("flow {flow_id} not found"))),
                 };
                 let _ = reply.send(result);
+            }
+            ReactorCommand::QueryFlowOutcome(flow_id, reply) => {
+                // A running flow has no outcome yet, but reporting its live
+                // state is more useful than reporting nothing: a caller can
+                // tell "still running" from "never existed".
+                let outcome = match self.flows.get(&flow_id) {
+                    Some(entry) => Some(FlowOutcome {
+                        state: entry.handle.state,
+                        reason: entry.handle.cancellation.reason().cloned(),
+                    }),
+                    None => self.outcomes.get(&flow_id).cloned(),
+                };
+                let _ = reply.send(outcome);
             }
             ReactorCommand::ListFlows(reply) => {
                 let list: Vec<_> = self
@@ -467,16 +499,36 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
         for flow_id in completed_ids {
             if let Some(entry) = self.flows.remove(&flow_id) {
                 let FlowEntry {
+                    handle,
                     join_handle,
                     component_ids,
-                    ..
                 } = entry;
+                // Record how the flow ended before the entry goes. The
+                // cancellation token is shared with the driver, so its reason
+                // is the one the driver set.
+                let reason = handle.cancellation.reason().cloned();
                 match join_handle.await {
                     Ok((_, state, _stats)) => {
                         debug!(flow_id = %flow_id, state = %state, "flow reaped");
+                        self.retain_outcome(flow_id, FlowOutcome { state, reason });
                     }
                     Err(e) => {
                         error!(flow_id = %flow_id, error = %e, "flow task panicked");
+                        // A panicked driver never reached its own terminal
+                        // state, and reporting the flow as merely "not found"
+                        // would hide the panic from whoever is waiting on it.
+                        self.retain_outcome(
+                            flow_id,
+                            FlowOutcome {
+                                state: FlowState::Failed,
+                                reason: Some(CancellationReason::DownstreamError {
+                                    component: ComponentId::new(0),
+                                    error: ProcessError::Internal(format!(
+                                        "the flow driver task panicked: {e}"
+                                    )),
+                                }),
+                            },
+                        );
                     }
                 }
                 // The driver task has fully terminated (and already emitted its
@@ -487,6 +539,20 @@ impl<I: ComponentInvoker + 'static, E: EventSink + Clone + 'static> ReactorCoord
                 // observability.
                 self.reclaim_flow_resources(flow_id, &component_ids);
             }
+        }
+    }
+
+    /// Remember how a flow ended, evicting the oldest once the cap is reached.
+    ///
+    /// # COLD PATH — called once per flow, at reap.
+    fn retain_outcome(&mut self, flow_id: FlowId, outcome: FlowOutcome) {
+        self.outcomes.insert(flow_id, outcome);
+        while self.outcomes.len() > MAX_RETAINED_OUTCOMES {
+            // Flow ids increase monotonically, so the lowest key is the oldest.
+            let Some(&oldest) = self.outcomes.keys().next() else {
+                break;
+            };
+            self.outcomes.remove(&oldest);
         }
     }
 

@@ -149,6 +149,7 @@ pub async fn execute(
 
     Ok(CommandResult {
         success: true,
+        failure: None,
         command: "doctor".into(),
         data: result,
         warnings: vec![],

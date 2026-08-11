@@ -385,6 +385,124 @@ async fn test_flow_lifecycle_state_transitions() {
 }
 
 /// Shutdown: all flows drain cleanly via coordinator.
+/// A flow's outcome must outlive the flow.
+///
+/// The coordinator removes a flow's entry when its driver task is reaped,
+/// which took the terminal state and the cancellation reason with it — so
+/// anything asking how a flow ended, after it had ended, found nothing. That
+/// is exactly when a caller waiting on the flow asks.
+#[tokio::test]
+async fn a_failed_flows_outcome_survives_reaping() {
+    let (cmd_tx, cmd_rx) = mpsc::channel::<ReactorCommand>(64);
+    let (event_tx, _event_rx) = mpsc::channel::<ReactorEvent>(64);
+    let coordinator = ReactorCoordinator::new(
+        cmd_rx,
+        event_tx,
+        Arc::new(TestInvoker::erroring()),
+        Arc::new(NoopEventSink),
+        Arc::new(DefaultResourceManager::new_for_testing()),
+    );
+    let _coord = tokio::spawn(coordinator.run());
+    let handle = ReactorHandle::new(cmd_tx);
+
+    let topology = FlowTopology {
+        stages: vec![source(1), sink(2)],
+        connections: vec![conn(0, 1)],
+    };
+    topology.validate().unwrap();
+    let instances = make_instances(&topology).await;
+    let flow_id = handle
+        .spawn_flow(FlowConfig::default_with_topology(topology), instances)
+        .await
+        .expect("spawn");
+
+    // Wait until the flow is gone from the live table — the reaped state, and
+    // the one that used to be unanswerable.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if handle.flow_state(flow_id).await.is_err() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the flow was never reaped"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let outcome = handle
+        .flow_outcome(flow_id)
+        .await
+        .expect("the outcome must outlive the flow");
+    assert!(outcome.failed(), "expected a failure, got {outcome}");
+    assert!(
+        outcome.component_error().is_some(),
+        "the outcome must name the error the component returned: {outcome}"
+    );
+}
+
+/// A flow that ran to completion is reported as completed, not merely absent.
+#[tokio::test]
+async fn a_completed_flows_outcome_survives_reaping() {
+    let (cmd_tx, cmd_rx) = mpsc::channel::<ReactorCommand>(64);
+    let (event_tx, _event_rx) = mpsc::channel::<ReactorEvent>(64);
+    let coordinator = ReactorCoordinator::new(
+        cmd_rx,
+        event_tx,
+        Arc::new(TestInvoker::new(3)),
+        Arc::new(NoopEventSink),
+        Arc::new(DefaultResourceManager::new_for_testing()),
+    );
+    let _coord = tokio::spawn(coordinator.run());
+    let handle = ReactorHandle::new(cmd_tx);
+
+    let topology = FlowTopology {
+        stages: vec![source(1), sink(2)],
+        connections: vec![conn(0, 1)],
+    };
+    topology.validate().unwrap();
+    let instances = make_instances(&topology).await;
+    let flow_id = handle
+        .spawn_flow(FlowConfig::default_with_topology(topology), instances)
+        .await
+        .expect("spawn");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if handle.flow_state(flow_id).await.is_err() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the flow was never reaped"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let outcome = handle.flow_outcome(flow_id).await.expect("outcome");
+    assert!(!outcome.failed(), "a clean run must not report failure");
+    assert_eq!(outcome.state, FlowState::Completed);
+}
+
+/// A flow the reactor never issued has no outcome, which must be reported as
+/// absence rather than as a completed run.
+#[tokio::test]
+async fn an_unknown_flow_has_no_outcome() {
+    let (cmd_tx, cmd_rx) = mpsc::channel::<ReactorCommand>(64);
+    let (event_tx, _event_rx) = mpsc::channel::<ReactorEvent>(64);
+    let coordinator = ReactorCoordinator::new(
+        cmd_rx,
+        event_tx,
+        Arc::new(TestInvoker::new(0)),
+        Arc::new(NoopEventSink),
+        Arc::new(DefaultResourceManager::new_for_testing()),
+    );
+    let _coord = tokio::spawn(coordinator.run());
+    let handle = ReactorHandle::new(cmd_tx);
+
+    assert!(handle.flow_outcome(FlowId::new(9999)).await.is_none());
+}
+
 #[tokio::test]
 async fn test_coordinator_shutdown_drains_flows() {
     let (cmd_tx, cmd_rx) = mpsc::channel::<ReactorCommand>(64);

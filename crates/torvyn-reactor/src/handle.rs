@@ -15,6 +15,7 @@ use crate::config::FlowConfig;
 use crate::error::{FlowCreationError, FlowError};
 use crate::events::{ReactorCommand, ShutdownResult};
 use crate::fairness::FlowPriority;
+use crate::flow_driver::FlowOutcome;
 
 // ---------------------------------------------------------------------------
 // ReactorHandle
@@ -137,6 +138,24 @@ impl ReactorHandle {
             .map_err(|_| FlowError::Internal("reactor shut down".into()))?;
         rx.await
             .map_err(|_| FlowError::Internal("coordinator dropped".into()))?
+    }
+
+    /// Ask how a flow ended, and why.
+    ///
+    /// Unlike [`flow_state`](Self::flow_state), this answers after the flow's
+    /// task has been reaped — which is exactly when a caller waiting on the
+    /// flow asks. Returns `None` when the reactor has no record of the flow,
+    /// either because the id was never issued or because the outcome has aged
+    /// out of the bounded set the coordinator retains.
+    ///
+    /// # COLD PATH
+    pub async fn flow_outcome(&self, flow_id: FlowId) -> Option<FlowOutcome> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(ReactorCommand::QueryFlowOutcome(flow_id, tx))
+            .await
+            .ok()?;
+        rx.await.ok().flatten()
     }
 
     /// List all active flows.

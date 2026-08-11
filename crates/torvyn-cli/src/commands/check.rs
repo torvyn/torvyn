@@ -255,6 +255,7 @@ pub async fn execute(
 
     Ok(CommandResult {
         success: true,
+        failure: None,
         command: "check".into(),
         data: result,
         warnings: vec![],

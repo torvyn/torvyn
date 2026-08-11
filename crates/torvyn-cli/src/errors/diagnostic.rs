@@ -78,6 +78,8 @@ pub fn render_cli_error(ctx: &OutputContext, err: &CliError) {
                 "This command will be available in a future release (Part B).",
             );
         }
+        // The command's own output already stated the failure.
+        CliError::AlreadyReported => {}
     }
 }
 

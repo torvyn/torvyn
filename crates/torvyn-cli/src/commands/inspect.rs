@@ -152,6 +152,7 @@ pub async fn execute(
 
                 return Ok(CommandResult {
                     success: true,
+                    failure: None,
                     command: "inspect".into(),
                     data: result,
                     warnings: vec![],
@@ -183,6 +184,7 @@ pub async fn execute(
 
     Ok(CommandResult {
         success: true,
+        failure: None,
         command: "inspect".into(),
         data: result,
         warnings: vec![],

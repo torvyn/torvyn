@@ -232,6 +232,7 @@ pub async fn execute(
 
     Ok(CommandResult {
         success: true,
+        failure: None,
         command: "link".into(),
         data: result,
         warnings: vec![],

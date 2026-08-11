@@ -14,6 +14,7 @@ use crate::cancellation::CancellationReason;
 use crate::config::FlowConfig;
 use crate::error::{FlowCreationError, FlowError};
 use crate::fairness::FlowPriority;
+use crate::flow_driver::FlowOutcome;
 use crate::metrics::FlowCompletionStats;
 
 // ---------------------------------------------------------------------------
@@ -42,6 +43,12 @@ pub enum ReactorCommand {
     ),
     /// Query the current state of a flow.
     QueryFlowState(FlowId, oneshot::Sender<Result<FlowState, FlowError>>),
+    /// Query how a flow ended, and why.
+    ///
+    /// Answers for a running flow and for one that has already been reaped,
+    /// which is when a caller waiting on it actually asks. `None` means the
+    /// reactor has no record of the flow at all.
+    QueryFlowOutcome(FlowId, oneshot::Sender<Option<FlowOutcome>>),
     /// List all flows with their current states.
     ListFlows(oneshot::Sender<Vec<(FlowId, FlowState)>>),
     /// Update the priority of a running flow.
@@ -72,6 +79,7 @@ impl std::fmt::Debug for ReactorCommand {
                 write!(f, "CancelFlow({id}, {reason})")
             }
             ReactorCommand::QueryFlowState(id, _) => write!(f, "QueryFlowState({id})"),
+            ReactorCommand::QueryFlowOutcome(id, _) => write!(f, "QueryFlowOutcome({id})"),
             ReactorCommand::ListFlows(_) => write!(f, "ListFlows"),
             ReactorCommand::UpdatePriority(id, pri, _) => {
                 write!(f, "UpdatePriority({id}, {pri})")

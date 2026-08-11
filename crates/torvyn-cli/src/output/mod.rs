@@ -179,7 +179,19 @@ pub trait HumanRenderable {
 #[derive(Debug, Serialize)]
 pub struct CommandResult<T: Serialize> {
     /// Whether the command succeeded.
+    ///
+    /// A command that produced a report *and* failed sets this to `false` and
+    /// fills [`failure`](Self::failure). The dispatcher renders the report and
+    /// then exits non-zero, so the diagnosis and the failure both reach the
+    /// user. This used to be written and never read: `torvyn run` reported a
+    /// pipeline that aborted on its first element as a success, exit code and
+    /// all.
     pub success: bool,
+    /// Why the command failed, when it did.
+    ///
+    /// Always `None` when `success` is `true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<CommandFailure>,
     /// The command name that produced this result.
     pub command: String,
     /// Command-specific result data.
@@ -187,6 +199,28 @@ pub struct CommandResult<T: Serialize> {
     /// Warnings produced during execution.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+}
+
+/// What went wrong in a command that still produced a report.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandFailure {
+    /// One line stating what failed.
+    pub detail: String,
+    /// Surrounding detail — what had happened by the time it failed.
+    pub context: String,
+}
+
+impl<T: Serialize> CommandResult<T> {
+    /// Mark this result as a failure, keeping the report it carries.
+    #[must_use]
+    pub fn failed(mut self, detail: impl Into<String>, context: impl Into<String>) -> Self {
+        self.success = false;
+        self.failure = Some(CommandFailure {
+            detail: detail.into(),
+            context: context.into(),
+        });
+        self
+    }
 }
 
 impl<T: Serialize + HumanRenderable> HumanRenderable for CommandResult<T> {

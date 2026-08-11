@@ -16,8 +16,39 @@ pub mod trace;
 
 use crate::cli::{Command, GlobalOpts};
 use crate::errors::CliError;
-use crate::output::OutputContext;
+use crate::output::{CommandResult, OutputContext};
+use serde::Serialize;
 use std::path::Path;
+
+/// Render a command's report, then fail if the command failed.
+///
+/// A command can produce a useful report *and* have failed — a pipeline run
+/// that aborted partway through is the case this exists for. Rendering first
+/// means the user sees how far it got; returning the error afterwards means
+/// the process exits non-zero and the failure is stated plainly.
+///
+/// COLD PATH — once per invocation.
+fn render_and_check<T: Serialize + crate::output::HumanRenderable>(
+    ctx: &OutputContext,
+    result: &CommandResult<T>,
+) -> Result<(), CliError> {
+    ctx.render(result);
+    let Some(failure) = &result.failure else {
+        return Ok(());
+    };
+
+    // In JSON the rendered report already carries `success: false` and the
+    // failure object, so a second document would leave a consumer with two
+    // JSON values on stdout. The exit code still has to change.
+    if ctx.format == crate::cli::OutputFormat::Json {
+        return Err(CliError::AlreadyReported);
+    }
+
+    Err(CliError::Runtime {
+        detail: failure.detail.clone(),
+        context: Some(failure.context.clone()),
+    })
+}
 
 /// The error every command that needs a flow reports when the manifest has
 /// none.
@@ -136,15 +167,15 @@ pub async fn execute_command(
         }
         Command::Run(args) => {
             let result = run::execute(args, ctx).await?;
-            ctx.render(&result);
+            render_and_check(ctx, &result)?;
         }
         Command::Trace(args) => {
             let result = trace::execute(args, ctx).await?;
-            ctx.render(&result);
+            render_and_check(ctx, &result)?;
         }
         Command::Bench(args) => {
             let result = bench::execute(args, ctx).await?;
-            ctx.render(&result);
+            render_and_check(ctx, &result)?;
         }
         Command::Pack(args) => {
             let result = pack::execute(args, ctx).await?;

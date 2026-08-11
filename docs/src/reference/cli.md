@@ -176,7 +176,31 @@ Options:
 
 Runs `torvyn check` and `torvyn link` implicitly before execution. Displays real-time throughput and error counters. Prints summary statistics on completion or Ctrl+C.
 
-**Exit codes:** 0 (completed successfully), 1 (pipeline error), 2 (validation failed), 130 (interrupted by Ctrl+C)
+The summary ends with the state the flow terminated in. A flow that failed is reported as a failure: the command names the node that failed and the error it returned, and exits non-zero.
+
+```
+  -- Summary ------------------------------------------------------------
+  Duration:  0.05s
+  Elements:  2
+  Throughput:  37 elem/s
+  Errors:  1
+  Peak memory:  0 B
+  Flow state:  Failed
+
+error: flow "main" failed: component "transform" returned process error: invalid
+       input — payload is not valid UTF-16.
+
+  context: 2 element(s) had been processed when the flow stopped. Run `torvyn
+           trace` to see each element's path through the pipeline.
+```
+
+The summary is printed either way — how far the pipeline got before it stopped is worth knowing — and the failure follows it.
+
+Under JSON output the same verdict arrives as a single document: `success` is `false`, a `failure` object carries the detail, and `data.flow_state`, `data.failed`, and `data.flow_stopped_because` carry it structurally.
+
+Every component error terminates the flow. The reactor's only selectable error policy is `FailFast`, which is what its name says; per-element policies that skip or retry are [Phase 1](https://github.com/torvyn/torvyn/blob/main/documents/ROADMAP.md) work. What the error's category changes today is how it is reported and recorded, not whether the flow survives it.
+
+**Exit codes:** 0 (the flow completed), 1 (the flow failed, or the pipeline could not be started), 2 (validation failed), 130 (interrupted by Ctrl+C)
 
 ### `torvyn trace`
 
@@ -223,6 +247,8 @@ Output looks like:
 
 **`--show-buffers` is not implemented** and exits with an error rather than being silently ignored. Buffer content snapshots would require the runtime to retain payload bytes after an element is consumed, which it deliberately does not do — buffers return to the pool as soon as a stage releases them. Per-element copy counts and byte totals are in the summary.
 
+A trace of a pipeline that failed still shows the spans up to the point it stopped — that is where the failure is — but the command names the failure and exits non-zero.
+
 **Exit codes:** Same as `torvyn run`.
 
 ### `torvyn bench`
@@ -250,7 +276,9 @@ A benchmark assumes a source that keeps producing. If the flow finishes on its o
 
 Reports are written to `.torvyn/bench/<timestamp>.json`.
 
-**Exit codes:** 0 (benchmark completed), 1 (pipeline error), 3 (regression detected when comparing)
+A benchmark of a flow that failed is not a benchmark. The figures are still reported — they say how far it got — but the command names the failure and exits non-zero rather than presenting them as a measurement.
+
+**Exit codes:** 0 (benchmark completed), 1 (the flow failed, or the pipeline could not be started), 3 (regression detected when comparing)
 
 ### `torvyn pack`
 

@@ -19,7 +19,7 @@ use torvyn_types::{ComponentId, ProcessError};
 ///
 /// Per Doc 04 §6.1: cancellation sources include operator commands,
 /// downstream errors, timeouts, resource exhaustion, and upstream completion.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum CancellationReason {
     /// Operator or API requested cancellation.
     OperatorRequest,

@@ -351,6 +351,13 @@ pub async fn execute(
     // directly here.
     wait_for_flow(&host, flow_id).await?;
 
+    // How the flow ended. A trace of a pipeline that aborted is still worth
+    // showing — it is where the failure happened — but it must not be
+    // presented as a trace of a healthy run.
+    let outcome = host.flow_outcome(flow_id).await.ok();
+    let stages = super::run::flow_stages(&host, flow_id).await;
+    let traced_flow = flow_name.clone();
+
     // Read the run's spans and metrics *before* shutting down: shutdown
     // deregisters the flow, which releases both.
     // Ask the buffer whether it wrapped *before* draining it: draining resets
@@ -404,11 +411,20 @@ pub async fn execute(
         ));
     }
 
-    Ok(CommandResult {
+    let command_result = CommandResult {
         success: true,
+        failure: None,
         command: "trace".into(),
         data: result,
         warnings,
+    };
+
+    Ok(match outcome.filter(torvyn_host::FlowOutcome::failed) {
+        Some(failed) => command_result.failed(
+            super::run::describe_failure(&traced_flow, &failed, &stages),
+            "The spans above cover the run up to the point it stopped.".to_owned(),
+        ),
+        None => command_result,
     })
 }
 

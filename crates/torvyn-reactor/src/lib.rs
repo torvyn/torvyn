@@ -45,7 +45,7 @@ pub use config::{FlowConfig, StreamConfig, TimeoutConfig, YieldConfig};
 pub use error::{ErrorPolicy, FlowCreationError, FlowError};
 pub use events::{ReactorEvent, ShutdownResult};
 pub use fairness::FlowPriority;
-pub use flow_driver::{FlowDriver, FlowDriverHandle};
+pub use flow_driver::{FlowDriver, FlowDriverHandle, FlowOutcome};
 pub use handle::ReactorHandle;
 pub use metrics::{ComponentMetrics, FlowCompletionStats, ReactorMetrics, StreamMetrics};
 pub use queue::BoundedQueue;

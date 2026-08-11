@@ -191,6 +191,7 @@ pub fn execute(
 
     Ok(CommandResult {
         success: true,
+        failure: None,
         command: "build".into(),
         data: BuildResult {
             components: built,

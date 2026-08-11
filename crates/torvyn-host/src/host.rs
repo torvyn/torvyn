@@ -18,7 +18,7 @@ use torvyn_config::FlowDef;
 use torvyn_engine::{WasmtimeEngine, WasmtimeInvoker};
 use torvyn_observability::ObservabilityCollector;
 use torvyn_pipeline::{flow_def_to_topology, instantiate_pipeline, ComponentIndex};
-use torvyn_reactor::{cancellation::CancellationReason, ReactorHandle};
+use torvyn_reactor::{cancellation::CancellationReason, FlowOutcome, ReactorHandle};
 use torvyn_types::{ComponentId, ComponentRole, FlowId, FlowState};
 
 use crate::builder::HostConfig;
@@ -418,21 +418,52 @@ impl TorvynHost {
     /// # Errors
     /// Returns [`HostError::Flow`] if the flow is not found.
     pub async fn flow_state(&self, flow_id: FlowId) -> Result<FlowState, HostError> {
-        // The flow must be known to the host.
+        Ok(self.flow_outcome(flow_id).await?.state)
+    }
+
+    /// How a flow ended, and why.
+    ///
+    /// A terminal [`FlowState`] alone does not distinguish a component error
+    /// from a missed deadline from an exhausted budget; the outcome's reason
+    /// does, and for a component error it names the component and the error it
+    /// returned.
+    ///
+    /// This answers after the flow's driver task has been reaped, which is when
+    /// a caller waiting on the flow asks. Before this existed, a reaped flow
+    /// was reported as `Completed` whatever had happened to it — so a pipeline
+    /// that aborted on its first element was indistinguishable from one that
+    /// ran to the end.
+    ///
+    /// # COLD PATH
+    ///
+    /// # Errors
+    /// Returns [`HostError::Flow`] if the flow is not known to this host.
+    pub async fn flow_outcome(&self, flow_id: FlowId) -> Result<FlowOutcome, HostError> {
+        // The flow must be one this host started.
         let cached = {
             let flows = self.flows.read().await;
             flows.get(&flow_id).map(|r| r.state)
         }
         .ok_or_else(|| HostError::flow_not_found(flow_id))?;
 
-        // Prefer the reactor's live state. If the reactor no longer tracks the
-        // flow, it reached a terminal state and was reaped: report the cached
-        // state if it is already terminal, otherwise treat it as completed.
-        match self.reactor.flow_state(flow_id).await {
-            Ok(state) => Ok(state),
-            Err(_) if cached.is_terminal() => Ok(cached),
-            Err(_) => Ok(FlowState::Completed),
+        // The reactor is authoritative: it keeps the outcome of a flow after
+        // reaping it, so this is answerable for a finished flow.
+        if let Some(outcome) = self.reactor.flow_outcome(flow_id).await {
+            return Ok(outcome);
         }
+
+        // The reactor has no record — the flow aged out of the bounded set it
+        // retains, or it was cancelled before the reactor ever tracked it. Fall
+        // back to what the host itself recorded, and say nothing about the
+        // reason rather than inventing one.
+        Ok(FlowOutcome {
+            state: if cached.is_terminal() {
+                cached
+            } else {
+                FlowState::Completed
+            },
+            reason: None,
+        })
     }
 
     /// List all active flows.

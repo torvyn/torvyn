@@ -50,6 +50,10 @@ pub mod signal;
 // Re-exports
 pub use builder::{HostBuilder, HostConfig};
 pub use error::{FlowError, HostError, StartupError, StartupStage};
-pub use host::{FlowRecord, HostStatus, TorvynHost};
+pub use host::{FlowRecord, FlowStage, HostStatus, TorvynHost};
+// Re-exported so a caller reading a flow's outcome does not have to depend on
+// the reactor crate directly.
 pub use inspection::{FlowSummary, InspectionHandle};
 pub use shutdown::ShutdownOutcome;
+pub use torvyn_reactor::cancellation::CancellationReason;
+pub use torvyn_reactor::FlowOutcome;

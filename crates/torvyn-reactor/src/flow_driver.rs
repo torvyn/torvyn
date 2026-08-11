@@ -32,6 +32,110 @@ use crate::stream::{StreamElementRef, StreamState};
 use crate::topology::FlowTopology;
 
 // ---------------------------------------------------------------------------
+// FlowOutcome
+// ---------------------------------------------------------------------------
+
+/// How a flow ended, and why.
+///
+/// A terminal [`FlowState`] alone does not say what went wrong: `Failed` is
+/// reported identically for a component error, a missed deadline, and an
+/// exhausted resource budget. The reason carries the difference, and for a
+/// component error it names the component and the error it returned.
+///
+/// The reactor holds this after the flow's task is reaped, because the only
+/// caller who needs it — whatever is waiting for the flow to finish — asks
+/// after it has finished.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FlowOutcome {
+    /// The state the flow terminated in.
+    pub state: FlowState,
+    /// Why it terminated. `None` for a flow that is still running, and for a
+    /// flow that ran to completion without any cancellation being recorded.
+    pub reason: Option<CancellationReason>,
+}
+
+impl FlowOutcome {
+    /// Whether the flow ended in a state the operator should treat as a
+    /// failure.
+    #[must_use]
+    pub fn failed(&self) -> bool {
+        matches!(self.state, FlowState::Failed)
+    }
+
+    /// The component this outcome blames, when it blames one.
+    #[must_use]
+    pub fn failing_component(&self) -> Option<ComponentId> {
+        match &self.reason {
+            Some(CancellationReason::DownstreamError { component, .. }) => Some(*component),
+            _ => None,
+        }
+    }
+
+    /// The error a component returned, when the flow ended because one did.
+    #[must_use]
+    pub fn component_error(&self) -> Option<&ProcessError> {
+        match &self.reason {
+            Some(CancellationReason::DownstreamError { error, .. }) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for FlowOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.reason {
+            Some(reason) => write!(f, "{} ({reason})", self.state),
+            None => write!(f, "{}", self.state),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Failure attribution
+// ---------------------------------------------------------------------------
+
+/// The cancellation reason a flow error warrants.
+///
+/// The reason is the only account of a failure that outlives the flow: the
+/// coordinator retains it, and it is what `torvyn run` reports to the user.
+/// It used to be built by stringifying the error into
+/// `ProcessError::Internal`, which discarded the variant — so a component
+/// reporting malformed input and one hitting a runtime bug produced the same
+/// post-mortem.
+///
+/// `executing` is the stage that was running, used only for errors that are
+/// not themselves attributable to a component.
+///
+/// # COLD PATH — called once, when a flow terminates.
+fn cancellation_reason(error: &FlowError, executing: ComponentId) -> CancellationReason {
+    match error {
+        FlowError::ComponentError { component, error } => CancellationReason::DownstreamError {
+            component: *component,
+            error: error.clone(),
+        },
+        // The component missed its deadline, which is what `deadline-exceeded`
+        // means in the contract. Keeping it inside the five-variant model beats
+        // flattening a timeout into an internal error.
+        FlowError::ComponentTimeout { component, .. } => CancellationReason::DownstreamError {
+            component: *component,
+            error: ProcessError::DeadlineExceeded,
+        },
+        FlowError::DeadlineExceeded { elapsed, .. } => {
+            CancellationReason::Timeout { elapsed: *elapsed }
+        }
+        FlowError::ResourceExhausted { detail } => CancellationReason::ResourceExhaustion {
+            detail: detail.clone(),
+        },
+        FlowError::DrainTimeout { .. } | FlowError::Internal(_) => {
+            CancellationReason::DownstreamError {
+                component: executing,
+                error: ProcessError::Internal(format!("{error}")),
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // FlowDriverHandle
 // ---------------------------------------------------------------------------
 
@@ -233,10 +337,7 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
                                     "FailFast: flow terminating"
                                 );
                                 self.cancellation
-                                    .cancel(CancellationReason::DownstreamError {
-                                        component: execution.component_id,
-                                        error: ProcessError::Internal(format!("{flow_err}")),
-                                    });
+                                    .cancel(cancellation_reason(&flow_err, execution.component_id));
                                 break;
                             }
                             ErrorPolicy::SkipElement | ErrorPolicy::LogAndContinue => {
@@ -400,10 +501,13 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
         let is_error = result.is_err();
         self.component_metrics[stage_idx].record_invocation(duration, is_error);
 
-        let status = if is_error {
-            InvocationStatus::Error(torvyn_types::ProcessErrorKind::Internal)
-        } else {
-            InvocationStatus::Ok
+        // Record what the component actually returned. Every error used to be
+        // filed as `Internal` regardless of variant, which collapsed the
+        // five-category error model into one: a malformed input and a runtime
+        // bug were indistinguishable in metrics and in traces.
+        let status = match &result {
+            Ok(()) => InvocationStatus::Ok,
+            Err(flow_err) => InvocationStatus::Error(flow_err.kind()),
         };
 
         // `record_invocation` takes absolute epoch timestamps, and the sink
@@ -831,6 +935,11 @@ mod tests {
         pull_count: AtomicU64,
         max_pulls: u64,
         should_error: AtomicBool,
+        /// The error the sink returns when `should_error` is set. Settable so a
+        /// test can tell one `ProcessError` variant from another: the two
+        /// error tests that existed both used `Fatal`, and passed unchanged
+        /// when a non-fatal variant was substituted.
+        error: std::sync::Mutex<ProcessError>,
     }
 
     impl TestInvoker {
@@ -839,6 +948,7 @@ mod tests {
                 pull_count: AtomicU64::new(0),
                 max_pulls,
                 should_error: AtomicBool::new(false),
+                error: std::sync::Mutex::new(ProcessError::Fatal("test error".into())),
             }
         }
 
@@ -846,6 +956,18 @@ mod tests {
             let invoker = Self::new(u64::MAX);
             invoker.should_error.store(true, Ordering::Release);
             invoker
+        }
+
+        /// An invoker whose sink returns `error` for every element.
+        fn failing_with(error: ProcessError) -> Self {
+            let invoker = Self::new(u64::MAX);
+            invoker.should_error.store(true, Ordering::Release);
+            *invoker.error.lock().expect("test mutex") = error;
+            invoker
+        }
+
+        fn current_error(&self) -> ProcessError {
+            self.error.lock().expect("test mutex").clone()
         }
     }
 
@@ -857,7 +979,7 @@ mod tests {
             _component_id: ComponentId,
         ) -> Result<Option<OutputElement>, ProcessError> {
             if self.should_error.load(Ordering::Acquire) {
-                return Err(ProcessError::Fatal("test error".into()));
+                return Err(self.current_error());
             }
             let count = self.pull_count.fetch_add(1, Ordering::Relaxed);
             if count >= self.max_pulls {
@@ -877,7 +999,7 @@ mod tests {
             element: StreamElement,
         ) -> Result<ProcessResult, ProcessError> {
             if self.should_error.load(Ordering::Acquire) {
-                return Err(ProcessError::Fatal("test error".into()));
+                return Err(self.current_error());
             }
             Ok(ProcessResult::Output(OutputElement {
                 meta: element.meta,
@@ -892,7 +1014,7 @@ mod tests {
             _element: StreamElement,
         ) -> Result<BackpressureSignal, ProcessError> {
             if self.should_error.load(Ordering::Acquire) {
-                return Err(ProcessError::Fatal("test error".into()));
+                return Err(self.current_error());
             }
             Ok(BackpressureSignal::Ready)
         }
@@ -1255,6 +1377,230 @@ mod tests {
 
         let (_, state, _) = driver.run().await;
         assert_eq!(state, FlowState::Failed);
+    }
+
+    /// A component's error must reach the flow's cancellation reason intact.
+    ///
+    /// The reason used to be built by stringifying the error into
+    /// `ProcessError::Internal`, so every failure — malformed input, a missed
+    /// deadline, a runtime bug — produced the same post-mortem, and the
+    /// five-variant error model was unobservable from outside the flow.
+    #[tokio::test]
+    async fn the_cancellation_reason_carries_the_error_the_component_returned() {
+        for error in [
+            ProcessError::InvalidInput("malformed".into()),
+            ProcessError::Unavailable("upstream down".into()),
+            ProcessError::Internal("bug".into()),
+            ProcessError::DeadlineExceeded,
+            ProcessError::Fatal("done".into()),
+        ] {
+            let flow_id = FlowId::new(20);
+            let topology = FlowTopology {
+                stages: vec![source_stage(1), sink_stage(2)],
+                connections: vec![conn(0, 1)],
+            };
+            topology.validate().unwrap();
+
+            let cancellation = FlowCancellation::new();
+            let observed = cancellation.clone();
+            let (event_tx, _event_rx) = mpsc::channel(256);
+
+            let driver = FlowDriver::new(
+                flow_id,
+                FlowConfig::default_with_topology(topology.clone()),
+                make_instances(&topology).await,
+                make_streams(&topology, flow_id),
+                TestInvoker::failing_with(error.clone()),
+                NoopEventSink,
+                cancellation,
+                event_tx,
+            );
+            let (_, state, _) = driver.run().await;
+
+            assert_eq!(state, FlowState::Failed, "for {error}");
+            match observed.reason() {
+                Some(CancellationReason::DownstreamError {
+                    error: recorded, ..
+                }) => assert_eq!(*recorded, error, "the recorded error was rewritten"),
+                other => panic!("expected a DownstreamError for {error}, got {other:?}"),
+            }
+        }
+    }
+
+    /// A flow that completes normally records why, and it is not a failure.
+    #[tokio::test]
+    async fn a_completed_flow_records_source_completion() {
+        let flow_id = FlowId::new(21);
+        let topology = FlowTopology {
+            stages: vec![source_stage(1), sink_stage(2)],
+            connections: vec![conn(0, 1)],
+        };
+        topology.validate().unwrap();
+
+        let cancellation = FlowCancellation::new();
+        let observed = cancellation.clone();
+        let (event_tx, _event_rx) = mpsc::channel(256);
+
+        let driver = FlowDriver::new(
+            flow_id,
+            FlowConfig::default_with_topology(topology.clone()),
+            make_instances(&topology).await,
+            make_streams(&topology, flow_id),
+            TestInvoker::new(5),
+            NoopEventSink,
+            cancellation,
+            event_tx,
+        );
+        let (_, state, _) = driver.run().await;
+
+        assert_eq!(state, FlowState::Completed);
+        assert_eq!(observed.reason(), Some(&CancellationReason::SourceComplete));
+
+        let outcome = FlowOutcome {
+            state,
+            reason: observed.reason().cloned(),
+        };
+        assert!(!outcome.failed());
+        assert!(outcome.failing_component().is_none());
+    }
+
+    /// `FlowOutcome` is what the CLI reads to name the failure, so it must
+    /// expose the component and the error rather than only the state.
+    #[test]
+    fn a_failed_outcome_names_the_component_and_the_error() {
+        let outcome = FlowOutcome {
+            state: FlowState::Failed,
+            reason: Some(CancellationReason::DownstreamError {
+                component: ComponentId::new(7),
+                error: ProcessError::InvalidInput("bad".into()),
+            }),
+        };
+
+        assert!(outcome.failed());
+        assert_eq!(outcome.failing_component(), Some(ComponentId::new(7)));
+        assert_eq!(
+            outcome.component_error(),
+            Some(&ProcessError::InvalidInput("bad".into()))
+        );
+        assert!(outcome.to_string().contains("bad"));
+    }
+
+    /// An outcome with no reason must not claim one, and a non-failure must
+    /// not be mistaken for a component error.
+    #[test]
+    fn an_outcome_without_a_component_error_reports_none() {
+        let cancelled = FlowOutcome {
+            state: FlowState::Cancelled,
+            reason: Some(CancellationReason::OperatorRequest),
+        };
+        assert!(!cancelled.failed());
+        assert!(cancelled.failing_component().is_none());
+        assert!(cancelled.component_error().is_none());
+
+        let bare = FlowOutcome {
+            state: FlowState::Completed,
+            reason: None,
+        };
+        assert_eq!(bare.to_string(), FlowState::Completed.to_string());
+    }
+
+    /// Every error variant must be recorded under its own category. They were
+    /// all filed as `Internal`, which made a malformed input and a runtime bug
+    /// indistinguishable in metrics and in traces.
+    #[test]
+    fn a_flow_error_is_categorised_by_the_error_it_carries() {
+        use torvyn_types::ProcessErrorKind;
+
+        let component = ComponentId::new(1);
+        for (error, expected) in [
+            (
+                ProcessError::InvalidInput("x".into()),
+                ProcessErrorKind::InvalidInput,
+            ),
+            (
+                ProcessError::Unavailable("x".into()),
+                ProcessErrorKind::Unavailable,
+            ),
+            (
+                ProcessError::Internal("x".into()),
+                ProcessErrorKind::Internal,
+            ),
+            (
+                ProcessError::DeadlineExceeded,
+                ProcessErrorKind::DeadlineExceeded,
+            ),
+            (ProcessError::Fatal("x".into()), ProcessErrorKind::Fatal),
+        ] {
+            let flow_err = FlowError::ComponentError {
+                component,
+                error: error.clone(),
+            };
+            assert_eq!(flow_err.kind(), expected, "for {error}");
+            assert_eq!(flow_err.component(), Some(component));
+        }
+
+        // A component that missed its deadline is a deadline, not a bug.
+        let timeout = FlowError::ComponentTimeout {
+            component,
+            timeout: Duration::from_secs(1),
+        };
+        assert_eq!(timeout.kind(), ProcessErrorKind::DeadlineExceeded);
+        assert_eq!(timeout.component(), Some(component));
+
+        // The reactor's own failures are internal, and blame no component.
+        let internal = FlowError::Internal("reactor bug".into());
+        assert_eq!(internal.kind(), ProcessErrorKind::Internal);
+        assert!(internal.component().is_none());
+    }
+
+    /// A timeout must stay inside the five-variant model rather than being
+    /// flattened into an internal error.
+    #[test]
+    fn a_timeout_becomes_a_deadline_exceeded_reason() {
+        let component = ComponentId::new(4);
+        let reason = cancellation_reason(
+            &FlowError::ComponentTimeout {
+                component,
+                timeout: Duration::from_millis(50),
+            },
+            ComponentId::new(99),
+        );
+        assert_eq!(
+            reason,
+            CancellationReason::DownstreamError {
+                component,
+                error: ProcessError::DeadlineExceeded,
+            }
+        );
+    }
+
+    /// An error the runtime cannot attribute to a component is blamed on the
+    /// stage that was executing, which is the best available answer.
+    #[test]
+    fn an_unattributable_error_blames_the_executing_stage() {
+        let executing = ComponentId::new(3);
+        let reason = cancellation_reason(&FlowError::Internal("boom".into()), executing);
+        match reason {
+            CancellationReason::DownstreamError { component, error } => {
+                assert_eq!(component, executing);
+                assert!(format!("{error}").contains("boom"));
+            }
+            other => panic!("expected DownstreamError, got {other:?}"),
+        }
+
+        // Resource exhaustion is its own reason, not a component's fault.
+        let reason = cancellation_reason(
+            &FlowError::ResourceExhausted {
+                detail: "pool empty".into(),
+            },
+            executing,
+        );
+        assert_eq!(
+            reason,
+            CancellationReason::ResourceExhaustion {
+                detail: "pool empty".into()
+            }
+        );
     }
 
     #[tokio::test]

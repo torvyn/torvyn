@@ -104,6 +104,7 @@ pub async fn execute(
         }
         return Ok(CommandResult {
             success: true,
+            failure: None,
             command: "publish".into(),
             data: PublishResult {
                 reference: format!("{registry}/{file_name}"),
@@ -151,6 +152,7 @@ pub async fn execute(
 
     Ok(CommandResult {
         success: true,
+        failure: None,
         command: "publish".into(),
         data: PublishResult {
             reference: format!("{registry}/{file_name}"),

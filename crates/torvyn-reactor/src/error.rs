@@ -5,7 +5,7 @@
 
 use std::fmt;
 use std::time::Duration;
-use torvyn_types::{ComponentId, ProcessError};
+use torvyn_types::{ComponentId, ProcessError, ProcessErrorKind};
 
 // ---------------------------------------------------------------------------
 // FlowCreationError
@@ -135,6 +135,46 @@ pub enum FlowError {
     },
     /// An internal reactor error (bug).
     Internal(String),
+}
+
+impl FlowError {
+    /// The component this error is attributable to, when it is attributable to
+    /// one.
+    ///
+    /// # COLD PATH — called once when a flow terminates.
+    #[must_use]
+    pub fn component(&self) -> Option<ComponentId> {
+        match self {
+            FlowError::ComponentError { component, .. }
+            | FlowError::ComponentTimeout { component, .. } => Some(*component),
+            _ => None,
+        }
+    }
+
+    /// The category this error should be recorded under.
+    ///
+    /// A component's error carries its own category; the reactor's own
+    /// failures are internal to the runtime, except a component invocation
+    /// timeout, which is the deadline the component missed.
+    ///
+    /// Every error used to be recorded as `Internal` regardless of what the
+    /// component returned, which made the five-variant error model
+    /// unobservable: a malformed input and a runtime bug were indistinguishable
+    /// in metrics and in traces.
+    ///
+    /// # HOT PATH — called once per failed invocation.
+    #[must_use]
+    pub fn kind(&self) -> ProcessErrorKind {
+        match self {
+            FlowError::ComponentError { error, .. } => ProcessErrorKind::from(error),
+            FlowError::ComponentTimeout { .. } | FlowError::DeadlineExceeded { .. } => {
+                ProcessErrorKind::DeadlineExceeded
+            }
+            FlowError::ResourceExhausted { .. }
+            | FlowError::DrainTimeout { .. }
+            | FlowError::Internal(_) => ProcessErrorKind::Internal,
+        }
+    }
 }
 
 impl fmt::Display for FlowError {

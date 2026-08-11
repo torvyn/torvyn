@@ -328,6 +328,175 @@ fn declared_components(manifest: &str) -> Vec<String> {
     names
 }
 
+/// A pipeline whose component fails must say so, name the component, and exit
+/// non-zero.
+///
+/// This is the case the runtime handled worst. A component returning an error
+/// aborted the flow, the sink printed nothing, and `torvyn run` exited 0 with a
+/// summary whose only hint was `Errors: 1` between throughput and peak memory.
+/// The diagnosis existed the whole time — the driver logs it, and the reactor
+/// records the component and the error in the flow's cancellation reason — but
+/// the CLI installs no log subscriber, the reactor deleted the reason when it
+/// reaped the flow, and `run` never asked.
+#[test]
+fn a_failing_pipeline_reports_which_component_failed() {
+    let workspace = TempDir::new().expect("temp workspace");
+
+    Command::cargo_bin("torvyn")
+        .unwrap()
+        .args(["init", "failing", "--template", "transform"])
+        .current_dir(workspace.path())
+        .assert()
+        .success();
+
+    let project = workspace.path().join("failing");
+
+    // Make the transform reject every element with a *non-fatal* error, which
+    // is the variant the documentation is most explicit about.
+    let lib_rs = project.join("src/lib.rs");
+    let source = std::fs::read_to_string(&lib_rs).expect("read lib.rs");
+    let marker = "        let data = input.payload.read_all();";
+    assert!(
+        source.contains(marker),
+        "the transform template no longer reads its payload the way this test patches:\n{source}"
+    );
+    std::fs::write(
+        &lib_rs,
+        source.replacen(
+            marker,
+            "        return Err(ProcessError::InvalidInput(format!(\n\
+             \x20           \"payload rejected by test at sequence {}\",\n\
+             \x20           input.meta.sequence\n\
+             \x20       )));\n\
+             \x20       #[allow(unreachable_code)]\n\
+             \x20       let data = input.payload.read_all();",
+            1,
+        ),
+    )
+    .expect("write lib.rs");
+
+    Command::cargo_bin("torvyn")
+        .unwrap()
+        .args(["build"])
+        .current_dir(&project)
+        .timeout(BUILD_TIMEOUT)
+        .assert()
+        .success();
+
+    let run = Command::cargo_bin("torvyn")
+        .unwrap()
+        .args(["run"])
+        .current_dir(&project)
+        .timeout(BUILD_TIMEOUT)
+        .assert()
+        // Exit code first: a pipeline that produced nothing must not report
+        // success, whatever it printed.
+        .failure();
+
+    let stdout = String::from_utf8_lossy(&run.get_output().stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&run.get_output().stderr).into_owned();
+
+    assert!(
+        !stdout.contains("Hello, Torvyn!"),
+        "the transform rejected every element, so the sink should have printed \
+         nothing:\n{stdout}"
+    );
+
+    // The summary still renders — how far the flow got is the first thing
+    // worth knowing — and it now says the flow failed.
+    assert!(
+        stderr.contains("Flow state") && stderr.contains("Failed"),
+        "the summary does not report the terminal state:\n{stderr}"
+    );
+
+    // And the failure names the flow, the node the manifest declares, the
+    // error's category, and the message the component returned — rather than
+    // the bare count that used to be the only signal. The flow is `main`; the
+    // project is `failing`.
+    for expected in [
+        "flow \"main\" failed",
+        "component \"transform\"",
+        "invalid input",
+        "payload rejected by test",
+    ] {
+        assert!(
+            stderr.contains(expected),
+            "the failure does not mention {expected:?}:\n{stderr}"
+        );
+    }
+}
+
+/// The machine-readable output must carry the same verdict, as one document.
+///
+/// A JSON consumer has no error line to read, so `success` and the `failure`
+/// object are how the failure reaches it — and two JSON values on stdout would
+/// break the parse.
+#[test]
+fn a_failing_pipeline_reports_failure_in_json() {
+    let workspace = TempDir::new().expect("temp workspace");
+
+    Command::cargo_bin("torvyn")
+        .unwrap()
+        .args(["init", "failing-json", "--template", "transform"])
+        .current_dir(workspace.path())
+        .assert()
+        .success();
+
+    let project = workspace.path().join("failing-json");
+    let lib_rs = project.join("src/lib.rs");
+    let source = std::fs::read_to_string(&lib_rs).expect("read lib.rs");
+    std::fs::write(
+        &lib_rs,
+        source.replacen(
+            "        let data = input.payload.read_all();",
+            "        return Err(ProcessError::Fatal(format!(\n\
+             \x20           \"unrecoverable at sequence {}\",\n\
+             \x20           input.meta.sequence\n\
+             \x20       )));\n\
+             \x20       #[allow(unreachable_code)]\n\
+             \x20       let data = input.payload.read_all();",
+            1,
+        ),
+    )
+    .expect("write lib.rs");
+
+    Command::cargo_bin("torvyn")
+        .unwrap()
+        .args(["build"])
+        .current_dir(&project)
+        .timeout(BUILD_TIMEOUT)
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("torvyn")
+        .unwrap()
+        .args(["--format", "json", "run"])
+        .current_dir(&project)
+        .timeout(BUILD_TIMEOUT)
+        .output()
+        .expect("run");
+
+    assert!(!output.status.success(), "a failed flow must exit non-zero");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout is not a single JSON document ({e}):\n{stdout}"));
+
+    assert_eq!(parsed["success"], serde_json::Value::Bool(false));
+    assert_eq!(parsed["data"]["flow_state"], "Failed");
+    assert_eq!(parsed["data"]["failed"], serde_json::Value::Bool(true));
+
+    let detail = parsed["failure"]["detail"]
+        .as_str()
+        .expect("the failure must carry a detail");
+    assert!(detail.contains("transform"), "{detail}");
+    assert!(detail.contains("unrecoverable"), "{detail}");
+
+    // The reason is carried structurally too, so a consumer need not parse
+    // the sentence.
+    assert!(parsed["data"]["flow_stopped_because"].is_string());
+}
+
 /// `torvyn link` is a static check: it needs the manifest, not compiled Wasm.
 /// It used to fail on every project with "invalid type: map, expected a string
 /// in `edges.from`", because it parsed the manifest with a private schema that

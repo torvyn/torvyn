@@ -95,6 +95,15 @@ pub enum CliError {
         /// Command name.
         command: String,
     },
+    /// The command already reported this failure in its own output, and this
+    /// error exists only to set the exit code.
+    ///
+    /// A command that produces a report *and* fails — a pipeline run that
+    /// aborted partway through — renders the report first. In human output the
+    /// failure is then printed as a normal error, but in JSON the report
+    /// already carries `success: false` and a `failure` object, and printing a
+    /// second document would leave a consumer with two JSON values on stdout.
+    AlreadyReported,
 }
 
 impl CliError {
@@ -115,6 +124,7 @@ impl CliError {
             Self::Io { .. } => 2,
             Self::Internal { .. } => 1,
             Self::NotImplemented { .. } => 1,
+            Self::AlreadyReported => 1,
         }
     }
 
@@ -123,6 +133,9 @@ impl CliError {
     /// COLD PATH — called at most once per invocation.
     pub fn render(&self, ctx: &OutputContext) {
         use crate::cli::OutputFormat;
+        if matches!(self, Self::AlreadyReported) {
+            return;
+        }
         match ctx.format {
             OutputFormat::Json => {
                 let err_obj = self.to_json_value();
@@ -205,6 +218,11 @@ impl CliError {
                 "error": true,
                 "category": "not_implemented",
                 "detail": format!("Command '{command}' is not yet implemented (Part B)"),
+            }),
+            // Never rendered — `render` returns before reaching this.
+            Self::AlreadyReported => serde_json::json!({
+                "error": true,
+                "category": "already_reported",
             }),
         }
     }

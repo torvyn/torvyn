@@ -641,7 +641,9 @@ The crash handling sequence:
 - Circuit breaker (disable component after N failures)
 - Graceful degradation (substitute default values)
 
-**Current workaround:** Wrap error-prone logic inside the component's `process()` function with try/catch and return `ProcessError::InvalidInput` or `ProcessError::Internal` instead of `ProcessError::Fatal`. Non-fatal errors are logged but do not terminate the flow when the error policy is configured to continue.
+**Current workaround:** Handle recoverable conditions inside the component's own `process()` — return `ProcessResult::Drop` to discard an element you cannot use, rather than an error. Under Phase 0's `FailFast` policy every error returned to the host cancels the flow, whichever variant it is, so an error is the right choice only when stopping is the right outcome.
+
+**What you see when it happens:** `torvyn run` prints the flow's terminal state in its summary, then names the node that failed and the error it returned, and exits non-zero. `torvyn trace` and `torvyn bench` do the same for the runs they drive.
 
 > **Source:** [crates/torvyn-types/src/error.rs](../crates/torvyn-types/src/error.rs), `ProcessError`; [04_reactor_and_scheduling.md](../docs/design/04_reactor_and_scheduling.md), Section 6.
 
@@ -649,15 +651,17 @@ The crash handling sequence:
 
 ### What are the error categories and when should I use each?
 
-Torvyn defines five `ProcessError` variants, each triggering different runtime behavior:
+Torvyn defines five `ProcessError` variants. Each is recorded under its own category and each says something different to whoever reads the failure:
 
-| Variant | When to Use | Fatal? | Runtime Response |
+| Variant | When to Use | Fatal? | Runtime Response (Phase 0) |
 |---------|-------------|--------|-----------------|
-| `invalid-input(msg)` | Input element was malformed or doesn't match expected schema | No | May retry or skip, depending on error policy |
-| `unavailable(msg)` | A required resource or service was unavailable | No | May trigger circuit-breaker logic |
-| `internal(msg)` | Unexpected bug inside the component | No | Logged with "consider filing a bug report" |
-| `deadline-exceeded` | Component didn't finish within its timeout | No | Feeds into timeout accounting |
+| `invalid-input(msg)` | Input element was malformed or doesn't match expected schema | No | Recorded as `invalid_input`; cancels the flow under `FailFast` |
+| `unavailable(msg)` | A required resource or service was unavailable | No | Recorded as `unavailable`; cancels the flow under `FailFast` |
+| `internal(msg)` | Unexpected bug inside the component | No | Recorded as `internal`; cancels the flow under `FailFast` |
+| `deadline-exceeded` | Component didn't finish within its timeout | No | Recorded as `deadline_exceeded`; feeds timeout accounting |
 | `fatal(msg)` | Component is permanently unable to process further elements | **Yes** | Terminal --- flow is cancelled, no more elements sent |
+
+**What "Fatal?" means today.** `FailFast` is the only error policy a Phase 0 flow can run under, and it cancels the flow on *any* component error. So in practice the non-fatal variants also stop the pipeline; what they change is how the failure is reported. `torvyn run` names the component and prints the error the component returned, and the category is what metrics and traces record the invocation under. The `Fatal?` column describes the contract the variants will honour once per-element policies land, and marks `fatal` as the one that will remain terminal under every policy.
 
 **Guidelines:**
 

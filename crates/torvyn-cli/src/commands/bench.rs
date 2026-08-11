@@ -317,6 +317,12 @@ pub async fn execute(
     let bench_elapsed = bench_start.elapsed();
     let end_snapshot = host.observability().snapshot(flow_id);
 
+    // How the flow ended, read before shutdown. A flow that died partway
+    // through still produces numbers, and they describe the time before it
+    // died rather than the pipeline's performance.
+    let outcome = host.flow_outcome(flow_id).await.ok();
+    let stages = super::run::flow_stages(&host, flow_id).await;
+
     // Shutdown.
     host.shutdown().await.ok();
 
@@ -389,11 +395,25 @@ pub async fn execute(
 
     report.saved_to = saved_to;
 
-    Ok(CommandResult {
+    let command_result = CommandResult {
         success: true,
+        failure: None,
         command: "bench".into(),
         data: report,
         warnings: completion_note.into_iter().collect(),
+    };
+
+    // A benchmark of a flow that failed is not a benchmark. The figures are
+    // still reported — they say how far it got — but the command must not
+    // present them as a measurement, nor exit zero.
+    Ok(match outcome.filter(torvyn_host::FlowOutcome::failed) {
+        Some(failed) => command_result.failed(
+            super::run::describe_failure(&flow_name, &failed, &stages),
+            "The figures above cover the time before the flow stopped, so they do not \
+             measure the pipeline's throughput."
+                .to_owned(),
+        ),
+        None => command_result,
     })
 }
 
