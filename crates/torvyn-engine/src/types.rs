@@ -72,6 +72,69 @@ impl CompiledComponent {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ComponentLimits
+// ---------------------------------------------------------------------------
+
+/// Per-component resource limits, overriding the engine's defaults.
+///
+/// Both are `None` by default, meaning "use the engine's configured default".
+/// A manifest sets them per flow node, so one component in a pipeline can be
+/// given a larger fuel budget or a tighter memory cap than its neighbours.
+///
+/// These used to have no delivery route at all: `instantiate` took only the
+/// WASI sandbox, so every component ran with the engine-wide defaults however
+/// the manifest was written. `fuel_budget` and `max_memory` were parsed,
+/// validated, carried through three layers of types, and dropped.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ComponentLimits {
+    /// Fuel this component may consume per invocation.
+    ///
+    /// `Some(0)` means unlimited, which is what the configuration reference
+    /// documents `0` to mean. `None` uses the engine's `default_fuel`.
+    pub fuel_budget: Option<u64>,
+    /// Cap on this component's Wasm linear memory, in bytes.
+    ///
+    /// `None` uses the engine's `max_memory_bytes`. Growing past the cap traps
+    /// the component rather than failing the allocation silently.
+    pub max_memory_bytes: Option<usize>,
+}
+
+impl ComponentLimits {
+    /// Limits that defer entirely to the engine's configuration.
+    #[must_use]
+    pub const fn inherit() -> Self {
+        Self {
+            fuel_budget: None,
+            max_memory_bytes: None,
+        }
+    }
+
+    /// The fuel budget to install, given the engine's default.
+    ///
+    /// A component asking for unlimited fuel (`Some(0)`) gets the largest
+    /// budget expressible rather than a literal zero. Metering is an
+    /// engine-wide Wasmtime setting, so a single component cannot opt out of
+    /// it — and a zero budget in the store means something else entirely:
+    /// "this engine does not meter fuel, never call `set_fuel`". Storing zero
+    /// here would leave the component never refuelled and trapping partway
+    /// through the run, which is the opposite of what was asked for.
+    #[must_use]
+    pub fn fuel_or(&self, engine_default: u64) -> u64 {
+        match self.fuel_budget {
+            Some(0) => u64::MAX,
+            Some(budget) => budget,
+            None => engine_default,
+        }
+    }
+
+    /// The memory cap to install, given the engine's default.
+    #[must_use]
+    pub fn memory_or(&self, engine_default: usize) -> usize {
+        self.max_memory_bytes.unwrap_or(engine_default)
+    }
+}
+
 /// A component's declared interface surface, read from its type section.
 ///
 /// Both lists are as the Component Model records them: an interface appears

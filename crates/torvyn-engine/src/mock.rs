@@ -14,6 +14,7 @@
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::types::ComponentLimits;
 use torvyn_security::WasiConfiguration;
 use torvyn_types::{
     BackpressureSignal, BufferHandle, ComponentId, ElementMeta, ProcessError, ResourceId,
@@ -88,12 +89,16 @@ impl WasmEngine for MockEngine {
         _imports: ImportBindings,
         component_id: ComponentId,
         _wasi: &WasiConfiguration,
+        limits: &ComponentLimits,
     ) -> Result<ComponentInstance, EngineError> {
         Ok(ComponentInstance {
             component_id,
             inner: ComponentInstanceInner::Mock(MockInstanceState {
                 component_id,
-                fuel: 1_000_000,
+                // Mirrors the Wasmtime backend: a component's own budget wins
+                // over the default, so a test on the mock path observes the
+                // same override.
+                fuel: limits.fuel_or(1_000_000),
                 memory_bytes: 0,
                 call_count: 0,
                 process_response: None,
@@ -317,6 +322,7 @@ mod tests {
                 imports,
                 ComponentId::new(1),
                 &WasiConfiguration::deny_all(),
+                &ComponentLimits::inherit(),
             )
             .await;
         assert!(instance.is_ok());
@@ -339,6 +345,7 @@ mod tests {
                 imports,
                 ComponentId::new(1),
                 &WasiConfiguration::deny_all(),
+                &ComponentLimits::inherit(),
             )
             .await
             .unwrap();
@@ -360,6 +367,7 @@ mod tests {
                 imports,
                 ComponentId::new(1),
                 &WasiConfiguration::deny_all(),
+                &ComponentLimits::inherit(),
             )
             .await
             .unwrap();
@@ -380,6 +388,7 @@ mod tests {
                 imports,
                 ComponentId::new(1),
                 &WasiConfiguration::deny_all(),
+                &ComponentLimits::inherit(),
             )
             .await
             .unwrap();
@@ -412,6 +421,7 @@ mod tests {
                 imports,
                 ComponentId::new(1),
                 &WasiConfiguration::deny_all(),
+                &ComponentLimits::inherit(),
             )
             .await
             .unwrap();
@@ -439,6 +449,7 @@ mod tests {
                 imports,
                 ComponentId::new(1),
                 &WasiConfiguration::deny_all(),
+                &ComponentLimits::inherit(),
             )
             .await
             .unwrap();
@@ -469,6 +480,7 @@ mod tests {
                 imports,
                 ComponentId::new(1),
                 &WasiConfiguration::deny_all(),
+                &ComponentLimits::inherit(),
             )
             .await
             .unwrap();
@@ -504,6 +516,7 @@ mod tests {
                 imports,
                 ComponentId::new(1),
                 &WasiConfiguration::deny_all(),
+                &ComponentLimits::inherit(),
             )
             .await
             .unwrap();
@@ -533,6 +546,7 @@ mod tests {
                 imports,
                 ComponentId::new(1),
                 &WasiConfiguration::deny_all(),
+                &ComponentLimits::inherit(),
             )
             .await
             .unwrap();
@@ -560,6 +574,7 @@ mod tests {
                 imports,
                 ComponentId::new(1),
                 &WasiConfiguration::deny_all(),
+                &ComponentLimits::inherit(),
             )
             .await
             .unwrap();
@@ -587,6 +602,7 @@ mod tests {
                 imports,
                 ComponentId::new(1),
                 &WasiConfiguration::deny_all(),
+                &ComponentLimits::inherit(),
             )
             .await
             .unwrap();

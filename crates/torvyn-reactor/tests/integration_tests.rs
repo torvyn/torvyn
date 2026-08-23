@@ -202,6 +202,7 @@ async fn make_instances(topology: &FlowTopology) -> Vec<ComponentInstance> {
                 imports,
                 stage.component_id,
                 &torvyn_engine::WasiConfiguration::deny_all(),
+                &torvyn_engine::ComponentLimits::inherit(),
             )
             .await
             .unwrap();

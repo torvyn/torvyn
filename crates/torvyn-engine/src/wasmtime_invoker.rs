@@ -615,6 +615,7 @@ mod tests {
     ) -> (crate::WasmtimeEngine, ComponentInstance) {
         use crate::traits::WasmEngine;
         use crate::types::{CompiledComponent, CompiledComponentInner};
+        use crate::ComponentLimits;
         use torvyn_security::WasiConfiguration;
         use wasmtime::component::Component;
 
@@ -630,6 +631,7 @@ mod tests {
                 imports,
                 ComponentId::new(1),
                 &WasiConfiguration::deny_all(),
+                &ComponentLimits::inherit(),
             )
             .await
             .expect("instantiate must succeed");

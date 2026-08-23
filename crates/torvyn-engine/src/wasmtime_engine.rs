@@ -24,7 +24,8 @@ use crate::host_state::{self, HostState};
 use crate::traits::WasmEngine;
 use crate::types::{
     CompiledComponent, CompiledComponentInner, ComponentInstance, ComponentInstanceInner,
-    ComponentInterfaces, ImportBindings, ImportBindingsInner, WasmtimeInstanceState, WitBindings,
+    ComponentInterfaces, ComponentLimits, ImportBindings, ImportBindingsInner,
+    WasmtimeInstanceState, WitBindings,
 };
 use crate::wit_bindings;
 
@@ -215,14 +216,21 @@ impl WasmtimeEngine {
 
     /// Create a new `Store` configured for a specific component instance.
     ///
+    /// `component_limits` overrides the engine's defaults for this component
+    /// alone. Both the memory cap and the fuel budget are fixed here: a
+    /// `StoreLimits` cannot be changed once the store exists, and the fuel
+    /// budget recorded in the store's state is what every subsequent
+    /// invocation refuels to.
+    ///
     /// # COLD PATH — called once per component instantiation.
     fn create_store(
         &self,
         component_id: ComponentId,
         wasi: &WasiConfiguration,
+        component_limits: &ComponentLimits,
     ) -> Result<Store<HostState>, EngineError> {
         let limits = StoreLimitsBuilder::new()
-            .memory_size(self.config.max_memory_bytes)
+            .memory_size(component_limits.memory_or(self.config.max_memory_bytes))
             .table_elements(self.config.max_table_elements as usize)
             .instances(self.config.max_instances as usize)
             .trap_on_grow_failure(true) // Per spike finding 2.5
@@ -250,8 +258,12 @@ impl WasmtimeEngine {
         // can refuel before every guest call. Zero means "fuel budgeting is
         // disabled for this store", which is the only state in which
         // `Store::set_fuel` would fail (the engine's `consume_fuel` is off).
+        // A component's own budget overrides the engine default. Zero means
+        // fuel metering is off for this store — the only state in which
+        // `Store::set_fuel` would fail — which is both what a disabled engine
+        // implies and what the configuration reference documents `0` to mean.
         let fuel_budget = if self.config.fuel_enabled {
-            self.config.default_fuel
+            component_limits.fuel_or(self.config.default_fuel)
         } else {
             0
         };
@@ -270,10 +282,13 @@ impl WasmtimeEngine {
         // Apply resource limiter.
         store.limiter(|state| &mut state.limits);
 
-        // Set initial fuel if enabled.
+        // Set initial fuel if enabled. The component's own budget is what the
+        // invoker refuels to before every call, so the store starts on it too
+        // — otherwise the first invocation would run on the engine default and
+        // only later calls would honour the manifest.
         if self.config.fuel_enabled {
             store
-                .set_fuel(self.config.default_fuel)
+                .set_fuel(fuel_budget)
                 .expect("fuel should be configurable when consume_fuel is enabled");
 
             // Configure async yield interval for cooperative preemption.
@@ -395,6 +410,7 @@ impl WasmEngine for WasmtimeEngine {
         imports: ImportBindings,
         component_id: ComponentId,
         wasi: &WasiConfiguration,
+        limits: &ComponentLimits,
     ) -> Result<ComponentInstance, EngineError> {
         let component = match &compiled.inner {
             CompiledComponentInner::Wasmtime(c) => c,
@@ -420,16 +436,14 @@ impl WasmEngine for WasmtimeEngine {
         // any guest import outside that union is a real configuration
         // error and `instantiate_async` will reject it.
 
-        let mut store = self.create_store(component_id, wasi)?;
+        let mut store = self.create_store(component_id, wasi, limits)?;
 
         // Instantiate the component asynchronously.
+        let memory_cap = limits.memory_or(self.config.max_memory_bytes);
         let instance = linker
             .instantiate_async(&mut store, component)
             .await
-            .map_err(|e| EngineError::InstantiationFailed {
-                component_id,
-                reason: e.to_string(),
-            })?;
+            .map_err(|e| instantiation_error(component_id, memory_cap, &e))?;
 
         // Detect which world the component implements by trying each
         // bindgen-generated wrapper in turn. The four sets of required
@@ -522,6 +536,46 @@ impl WasmEngine for WasmtimeEngine {
 /// some unit tests) produce `None`.
 ///
 /// # COLD PATH — called once per component instantiation.
+/// Classify a failure to instantiate a component.
+///
+/// A component whose linear memory cannot reach its declared minimum fails
+/// here, and Wasmtime words that as "forcing trap when growing memory to N
+/// bytes" — true, but silent about the limit that forced it. When the cause is
+/// the memory cap, name the cap: the operator wrote it, and the number they
+/// need to change is the one they set.
+///
+/// # COLD PATH — called once, and only on failure.
+fn instantiation_error(
+    component_id: ComponentId,
+    memory_cap: usize,
+    error: &wasmtime::Error,
+) -> EngineError {
+    let reason = error.to_string();
+    match memory_growth_target(&reason) {
+        Some(attempted_bytes) => EngineError::MemoryLimitExceeded {
+            component_id,
+            attempted_bytes,
+            limit_bytes: memory_cap,
+        },
+        None => EngineError::InstantiationFailed {
+            component_id,
+            reason,
+        },
+    }
+}
+
+/// The byte count in Wasmtime's memory-growth trap message, if this is one.
+///
+/// Matching on the message is what the API leaves available: the growth
+/// failure arrives as an opaque `wasmtime::Error` with no typed cause. A
+/// message change upstream costs the better wording and nothing else — the
+/// failure is still reported, as `InstantiationFailed` carrying Wasmtime's own
+/// text.
+fn memory_growth_target(reason: &str) -> Option<usize> {
+    let rest = reason.split("growing memory to").nth(1)?;
+    rest.split_whitespace().next()?.parse().ok()
+}
+
 fn detect_world(
     store: &mut Store<HostState>,
     instance: &wasmtime::component::Instance,
@@ -646,6 +700,7 @@ mod tests {
                 imports,
                 component_id,
                 &WasiConfiguration::deny_all(),
+                &ComponentLimits::inherit(),
             )
             .await;
         assert!(instance.is_ok());
@@ -676,6 +731,7 @@ mod tests {
                 imports,
                 ComponentId::new(1),
                 &WasiConfiguration::deny_all(),
+                &ComponentLimits::inherit(),
             )
             .await
             .unwrap();
@@ -729,5 +785,137 @@ mod tests {
             engine.describe_bytes(b"not a wasm component"),
             Err(EngineError::CompilationFailed { .. })
         ));
+    }
+
+    /// A component's own budget must win over the engine's default, and
+    /// `None` must defer to it. These were carried through three layers of
+    /// types and then read by nothing, so every component ran on the default
+    /// however the manifest was written.
+    #[test]
+    fn component_limits_override_the_engine_defaults() {
+        let inherit = ComponentLimits::inherit();
+        assert_eq!(inherit.fuel_or(1_000), 1_000);
+        assert_eq!(inherit.memory_or(4_096), 4_096);
+
+        let overridden = ComponentLimits {
+            fuel_budget: Some(42),
+            max_memory_bytes: Some(8_192),
+        };
+        assert_eq!(overridden.fuel_or(1_000), 42);
+        assert_eq!(overridden.memory_or(4_096), 8_192);
+    }
+
+    /// A component asking for unlimited fuel must get the largest budget
+    /// expressible, not a literal zero: zero in the store means "this engine
+    /// does not meter fuel, never refuel", which would leave the component
+    /// trapping partway through the run — the opposite of unlimited.
+    #[test]
+    fn a_zero_fuel_budget_means_unlimited_not_never_refuel() {
+        let unlimited = ComponentLimits {
+            fuel_budget: Some(0),
+            max_memory_bytes: None,
+        };
+        assert_eq!(unlimited.fuel_or(1_000), u64::MAX);
+    }
+
+    /// A store built for a component must carry that component's budget.
+    #[tokio::test]
+    async fn a_store_is_built_with_the_components_own_fuel_budget() {
+        let engine = WasmtimeEngine::new(WasmtimeEngineConfig::default()).unwrap();
+        let component = engine.compile_component(b"(component)").unwrap();
+
+        let instance = engine
+            .instantiate(
+                &component,
+                engine.default_imports(),
+                ComponentId::new(1),
+                &WasiConfiguration::deny_all(),
+                &ComponentLimits {
+                    fuel_budget: Some(7_777),
+                    max_memory_bytes: None,
+                },
+            )
+            .await
+            .expect("instantiate");
+
+        assert_eq!(
+            engine.fuel_remaining(&instance),
+            Some(7_777),
+            "the component's own budget must be installed, not the engine default"
+        );
+    }
+
+    /// And a component that sets none inherits the engine's.
+    #[tokio::test]
+    async fn a_store_without_limits_inherits_the_engine_budget() {
+        let config = WasmtimeEngineConfig {
+            default_fuel: 12_345,
+            ..WasmtimeEngineConfig::default()
+        };
+        let engine = WasmtimeEngine::new(config).unwrap();
+        let component = engine.compile_component(b"(component)").unwrap();
+
+        let instance = engine
+            .instantiate(
+                &component,
+                engine.default_imports(),
+                ComponentId::new(1),
+                &WasiConfiguration::deny_all(),
+                &ComponentLimits::inherit(),
+            )
+            .await
+            .expect("instantiate");
+
+        assert_eq!(engine.fuel_remaining(&instance), Some(12_345));
+    }
+
+    /// Wasmtime words a growth failure without naming the limit that forced
+    /// it. The operator wrote that limit, so the error must state it.
+    #[test]
+    fn a_memory_growth_failure_names_the_configured_cap() {
+        let err = instantiation_error(
+            ComponentId::new(3),
+            65_536,
+            &wasmtime::Error::msg("forcing trap when growing memory to 1114112 bytes"),
+        );
+        match err {
+            EngineError::MemoryLimitExceeded {
+                component_id,
+                attempted_bytes,
+                limit_bytes,
+            } => {
+                assert_eq!(component_id, ComponentId::new(3));
+                assert_eq!(attempted_bytes, 1_114_112);
+                assert_eq!(limit_bytes, 65_536);
+            }
+            other => panic!("expected MemoryLimitExceeded, got {other}"),
+        }
+    }
+
+    /// Any other instantiation failure keeps Wasmtime's own account of it
+    /// rather than being mislabelled as a memory problem.
+    #[test]
+    fn other_instantiation_failures_keep_their_reason() {
+        let err = instantiation_error(
+            ComponentId::new(3),
+            65_536,
+            &wasmtime::Error::msg("unknown import: `wasi:sockets/tcp`"),
+        );
+        match err {
+            EngineError::InstantiationFailed { reason, .. } => {
+                assert!(reason.contains("unknown import"), "{reason}");
+            }
+            other => panic!("expected InstantiationFailed, got {other}"),
+        }
+    }
+
+    #[test]
+    fn the_growth_target_is_read_only_from_a_growth_message() {
+        assert_eq!(
+            memory_growth_target("forcing trap when growing memory to 1114112 bytes"),
+            Some(1_114_112)
+        );
+        assert_eq!(memory_growth_target("unknown import"), None);
+        assert_eq!(memory_growth_target("growing memory to lots"), None);
     }
 }

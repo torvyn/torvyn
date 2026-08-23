@@ -1108,6 +1108,7 @@ mod tests {
                     imports,
                     stage.component_id,
                     &torvyn_engine::WasiConfiguration::deny_all(),
+                    &torvyn_engine::ComponentLimits::inherit(),
                 )
                 .await
                 .unwrap();

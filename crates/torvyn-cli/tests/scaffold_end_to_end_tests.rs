@@ -497,6 +497,143 @@ fn a_failing_pipeline_reports_failure_in_json() {
     assert!(parsed["data"]["flow_stopped_because"].is_string());
 }
 
+/// A resource limit written in the manifest must actually bind the component.
+///
+/// Both the per-node budget and the manifest-wide default were parsed,
+/// validated, and carried through three layers of types before being dropped:
+/// `instantiate` took only the WASI sandbox, `StageDefinition::fuel_budget`
+/// was read by nothing, `NodeConfig::memory_limit` was read nowhere at all,
+/// and the engine was always built from `WasmtimeEngineConfig::default()`.
+/// Every component ran on 16 MiB and 1,000,000 fuel however the manifest was
+/// written — including for an operator following the production-deployment
+/// checklist, which tells them to set a per-component memory cap.
+#[test]
+fn a_manifest_resource_limit_binds_the_component() {
+    let workspace = TempDir::new().expect("temp workspace");
+
+    Command::cargo_bin("torvyn")
+        .unwrap()
+        .args(["init", "bounded", "--template", "transform"])
+        .current_dir(workspace.path())
+        .assert()
+        .success();
+
+    let project = workspace.path().join("bounded");
+    let manifest_path = project.join("Torvyn.toml");
+    let manifest = std::fs::read_to_string(&manifest_path).expect("read manifest");
+
+    let transform_node = "[flow.main.nodes.transform]";
+    assert!(
+        manifest.contains(transform_node),
+        "the transform template no longer declares the node this test bounds:\n{manifest}"
+    );
+
+    Command::cargo_bin("torvyn")
+        .unwrap()
+        .args(["build"])
+        .current_dir(&project)
+        .timeout(BUILD_TIMEOUT)
+        .assert()
+        .success();
+
+    // Unbounded, the pipeline runs to completion. This is the control: it
+    // proves the failures below come from the limits and not from the build.
+    Command::cargo_bin("torvyn")
+        .unwrap()
+        .args(["run"])
+        .current_dir(&project)
+        .timeout(BUILD_TIMEOUT)
+        .assert()
+        .success();
+
+    // One unit of fuel cannot execute meaningful work, so the component must
+    // be stopped — and the failure must name it.
+    std::fs::write(
+        &manifest_path,
+        manifest.replace(
+            transform_node,
+            &format!("{transform_node}\nfuel_budget = 1"),
+        ),
+    )
+    .expect("write manifest");
+
+    let starved = Command::cargo_bin("torvyn")
+        .unwrap()
+        .args(["run"])
+        .current_dir(&project)
+        .timeout(BUILD_TIMEOUT)
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&starved.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("component \"transform\""),
+        "a starved component must be named:\n{stderr}"
+    );
+
+    // A component cannot reach its declared minimum memory under a one-page
+    // cap, so it must be refused — naming both the cap and what was attempted.
+    std::fs::write(
+        &manifest_path,
+        manifest.replace(
+            transform_node,
+            &format!("{transform_node}\nmax_memory = \"64KiB\""),
+        ),
+    )
+    .expect("write manifest");
+
+    let capped = Command::cargo_bin("torvyn")
+        .unwrap()
+        .args(["run"])
+        .current_dir(&project)
+        .timeout(BUILD_TIMEOUT)
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&capped.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("65536"),
+        "the error must state the cap the operator configured:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Memory limit exceeded"),
+        "a memory cap must not be reported as a generic instantiation failure:\n{stderr}"
+    );
+
+    // The same cap set manifest-wide must bind every component.
+    std::fs::write(
+        &manifest_path,
+        format!("[runtime]\nmax_memory_per_component = \"64KiB\"\n\n{manifest}"),
+    )
+    .expect("write manifest");
+
+    Command::cargo_bin("torvyn")
+        .unwrap()
+        .args(["run"])
+        .current_dir(&project)
+        .timeout(BUILD_TIMEOUT)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Memory limit exceeded"));
+
+    // And a generous limit must not get in the way — a limit that rejects
+    // everything is as useless as one that binds nothing.
+    std::fs::write(
+        &manifest_path,
+        manifest.replace(
+            transform_node,
+            &format!("{transform_node}\nfuel_budget = 50_000_000\nmax_memory = \"64MiB\""),
+        ),
+    )
+    .expect("write manifest");
+
+    Command::cargo_bin("torvyn")
+        .unwrap()
+        .args(["run"])
+        .current_dir(&project)
+        .timeout(BUILD_TIMEOUT)
+        .assert()
+        .success();
+}
+
 /// `torvyn link` is a static check: it needs the manifest, not compiled Wasm.
 /// It used to fail on every project with "invalid type: map, expected a string
 /// in `edges.from`", because it parsed the manifest with a private schema that

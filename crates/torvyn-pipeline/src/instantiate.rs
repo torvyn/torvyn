@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use tracing::{info, instrument, warn};
 
-use torvyn_engine::{ComponentInstance, ComponentInvoker, WasmEngine};
+use torvyn_engine::{ComponentInstance, ComponentInvoker, ComponentLimits, WasmEngine};
 use torvyn_reactor::{
     config::{FlowConfig, StreamConfig},
     handle::ReactorHandle,
@@ -267,8 +267,19 @@ where
     // construction (deny-all when the component declares no grants).
     let imports = engine.default_imports();
     let wasi = node.config().wasi.clone();
+
+    // The node's own fuel budget and memory cap, from its `[flow.*.nodes.*]`
+    // entry. Both are fixed at store creation, so this is the only point at
+    // which they can be applied — they used to be carried this far and
+    // dropped, leaving every component on the engine-wide defaults however the
+    // manifest was written.
+    let limits = ComponentLimits {
+        fuel_budget: node.config().fuel_budget,
+        max_memory_bytes: node.config().memory_limit,
+    };
+
     let mut instance = engine
-        .instantiate(&compiled, imports, component_id, &wasi)
+        .instantiate(&compiled, imports, component_id, &wasi, &limits)
         .await
         .map_err(|e| PipelineError::InstantiationFailed {
             flow_name: flow_name.to_owned(),

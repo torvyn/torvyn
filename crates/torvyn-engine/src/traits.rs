@@ -13,8 +13,8 @@ use torvyn_types::{BackpressureSignal, ComponentId, ProcessError};
 
 use crate::error::EngineError;
 use crate::types::{
-    CompiledComponent, ComponentInstance, ImportBindings, OutputElement, ProcessResult,
-    StreamElement,
+    CompiledComponent, ComponentInstance, ComponentLimits, ImportBindings, OutputElement,
+    ProcessResult, StreamElement,
 };
 
 // ---------------------------------------------------------------------------
@@ -103,6 +103,7 @@ pub trait WasmEngine: Send + Sync + 'static {
         imports: ImportBindings,
         component_id: ComponentId,
         wasi: &WasiConfiguration,
+        limits: &ComponentLimits,
     ) -> Result<ComponentInstance, EngineError>;
 
     /// Set the fuel budget for a component instance.
@@ -399,6 +400,7 @@ mod tests {
                 imports,
                 ComponentId::new(1),
                 &WasiConfiguration::deny_all(),
+                &ComponentLimits::inherit(),
             )
             .await
             .unwrap();

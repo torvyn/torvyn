@@ -352,12 +352,19 @@ pub async fn make_instances(topology: &FlowTopology) -> Vec<ComponentInstance> {
     for stage in &topology.stages {
         let compiled = engine.compile_component(b"test").unwrap();
         let imports = MockEngine::mock_imports();
+        // Honour the stage's own fuel budget, exactly as the real pipeline
+        // does, so a test can set one and observe the difference.
+        let limits = torvyn_engine::ComponentLimits {
+            fuel_budget: stage.fuel_budget,
+            max_memory_bytes: None,
+        };
         let instance = engine
             .instantiate(
                 &compiled,
                 imports,
                 stage.component_id,
                 &torvyn_engine::WasiConfiguration::deny_all(),
+                &limits,
             )
             .await
             .unwrap();

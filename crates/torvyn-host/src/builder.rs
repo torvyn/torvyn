@@ -20,7 +20,9 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::info;
 
-use torvyn_config::{load_pipeline, FlowDef, ObservabilityConfig, RuntimeConfig, SecurityConfig};
+use torvyn_config::{
+    load_pipeline, parse_memory_size, FlowDef, ObservabilityConfig, RuntimeConfig, SecurityConfig,
+};
 use torvyn_engine::{WasmtimeEngine, WasmtimeEngineConfig, WasmtimeInvoker};
 use torvyn_observability::ObservabilityCollector;
 use torvyn_pipeline::ComponentIndex;
@@ -166,6 +168,13 @@ pub struct HostBuilder {
     /// loaded from the configuration file during [`build()`](Self::build);
     /// programmatic definitions take precedence on name conflicts.
     flow_definitions: BTreeMap<String, FlowDef>,
+    /// Whether the caller supplied an engine configuration directly.
+    ///
+    /// When they have not, [`build()`](Self::build) derives the engine's
+    /// resource limits from the manifest's `[runtime]` table. Without this
+    /// flag the derivation would silently overwrite an explicit
+    /// [`with_engine_config`](Self::with_engine_config).
+    engine_config_is_explicit: bool,
 }
 
 impl HostBuilder {
@@ -176,6 +185,7 @@ impl HostBuilder {
     pub fn new() -> Self {
         Self {
             config: HostConfig::default(),
+            engine_config_is_explicit: false,
             config_path: None,
             collector_config: None,
             components: ComponentIndex::empty(),
@@ -218,10 +228,15 @@ impl HostBuilder {
 
     /// Override the engine configuration.
     ///
+    /// Takes precedence over the manifest's `[runtime]` table, which
+    /// [`build()`](Self::build) otherwise uses to set the engine's per-component
+    /// memory cap and default fuel budget.
+    ///
     /// # COLD PATH
     #[must_use]
     pub fn with_engine_config(mut self, config: WasmtimeEngineConfig) -> Self {
         self.config.engine = config;
+        self.engine_config_is_explicit = true;
         self
     }
 
@@ -344,7 +359,22 @@ impl HostBuilder {
             self.components = ComponentIndex::new(project_root, &parsed.components);
         }
 
-        // Step 2: Validate
+        // Step 2: Carry the manifest's resource limits into the engine.
+        //
+        // `[runtime].max_memory_per_component` and `default_fuel_per_invocation`
+        // were parsed, validated, and then read by nothing: the engine was
+        // always built from `WasmtimeEngineConfig::default()`, so a manifest
+        // asking for an 8 MiB cap got the default 16 MiB and an operator
+        // following the production checklist bounded nothing.
+        if !self.engine_config_is_explicit {
+            apply_runtime_limits(&self.config.runtime, &mut self.config.engine).map_err(
+                |reason| {
+                    HostError::config(format!("Configuration validation failed:\n  - {reason}"))
+                },
+            )?;
+        }
+
+        // Step 3: Validate
         let problems = self.config.validate();
         if !problems.is_empty() {
             return Err(HostError::config(format!(
@@ -355,10 +385,10 @@ impl HostBuilder {
 
         info!("Configuration validated successfully");
 
-        // Step 3: Initialize subsystems in dependency order
+        // Step 4: Initialize subsystems in dependency order
         // (Per Doc 02, Section 8.1 / Doc 10, Section 3.4)
 
-        // 3a: Build the observability collector first, because it is the event
+        // 4a: Build the observability collector first, because it is the event
         // sink for *both* the reactor (invocations, latencies, errors) and the
         // resource manager (data copies). The collector owns `Arc`-backed
         // registries (and a background event recorder), so it is shared by
@@ -380,7 +410,7 @@ impl HostBuilder {
         );
         info!("Observability collector initialized");
 
-        // 3b: Build the shared resource manager with the collector as its event
+        // 4b: Build the shared resource manager with the collector as its event
         // sink so every data copy is recorded, then build the engine sharing
         // that manager. The host is the composition root that owns the single
         // `DefaultResourceManager` and hands it to the engine (and, through
@@ -399,11 +429,11 @@ impl HostBuilder {
         );
         info!("Wasm engine initialized");
 
-        // 3c: Initialize the component invoker (Wasmtime backend).
+        // 4c: Initialize the component invoker (Wasmtime backend).
         let invoker = Arc::new(WasmtimeInvoker::new());
         info!("Component invoker initialized");
 
-        // 3d: Spawn the reactor coordinator and obtain its handle.
+        // 4d: Spawn the reactor coordinator and obtain its handle.
         let (cmd_tx, cmd_rx) = mpsc::channel::<ReactorCommand>(REACTOR_COMMAND_CHANNEL_CAPACITY);
         let (event_tx, _event_rx) = mpsc::channel::<ReactorEvent>(REACTOR_EVENT_CHANNEL_CAPACITY);
 
@@ -423,7 +453,7 @@ impl HostBuilder {
         let reactor = ReactorHandle::new(cmd_tx);
         info!("Reactor coordinator spawned");
 
-        // Step 4: Construct host with all subsystem handles wired in.
+        // Step 5: Construct host with all subsystem handles wired in.
         Ok(TorvynHost::new(crate::host::HostParts {
             config: self.config,
             engine,
@@ -497,6 +527,55 @@ fn observability_collector_config(
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+/// Carry the manifest's `[runtime]` resource limits into the engine's
+/// configuration.
+///
+/// The two tables describe the same limits in different units: `[runtime]`
+/// uses a human-readable size string and the engine wants bytes. Only the
+/// fields `[runtime]` governs are touched, so an engine setting with no
+/// manifest equivalent — compilation strategy, stack size — keeps its default.
+///
+/// `RuntimeConfig`'s defaults are the engine's defaults, so a manifest that
+/// says nothing about resources produces exactly the configuration the engine
+/// would have used anyway.
+///
+/// # Errors
+/// Returns the reason the memory size could not be read. `torvyn check`
+/// validates the same field with the same parser, so reaching this is a
+/// caller that skipped validation rather than a user typo.
+///
+/// COLD PATH — once, during host construction.
+fn apply_runtime_limits(
+    runtime: &RuntimeConfig,
+    engine: &mut WasmtimeEngineConfig,
+) -> Result<(), String> {
+    let bytes = parse_memory_size(&runtime.max_memory_per_component).map_err(|reason| {
+        format!(
+            "runtime.max_memory_per_component: {reason} (got {:?})",
+            runtime.max_memory_per_component
+        )
+    })?;
+    engine.max_memory_bytes = usize::try_from(bytes).map_err(|_| {
+        format!(
+            "runtime.max_memory_per_component: {bytes} bytes does not fit in this platform's \
+             address space"
+        )
+    })?;
+
+    // `0` disables fuel metering, which is what the configuration reference
+    // documents it to mean. The engine expresses that as `fuel_enabled: false`
+    // rather than a zero budget, because its own validation rejects a zero
+    // budget while metering is on.
+    if runtime.default_fuel_per_invocation == 0 {
+        engine.fuel_enabled = false;
+    } else {
+        engine.fuel_enabled = true;
+        engine.default_fuel = runtime.default_fuel_per_invocation;
+    }
+
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
@@ -652,6 +731,7 @@ mod tests {
             collector_config: None,
             components: ComponentIndex::empty(),
             flow_definitions: BTreeMap::new(),
+            engine_config_is_explicit: false,
         };
 
         let result = builder.build().await;
@@ -683,5 +763,96 @@ mod tests {
             msg.contains("E0900") || msg.contains("Failed to load"),
             "unexpected error: {msg}"
         );
+    }
+
+    /// The manifest's `[runtime]` limits must reach the engine. They were
+    /// parsed, validated, and read by nothing: the engine was always built
+    /// from `WasmtimeEngineConfig::default()`, so a manifest asking for an
+    /// 8 MiB cap got 16 MiB and an operator following the production
+    /// checklist bounded nothing.
+    #[test]
+    fn runtime_limits_reach_the_engine() {
+        let runtime = RuntimeConfig {
+            max_memory_per_component: "8MiB".into(),
+            default_fuel_per_invocation: 250_000,
+            ..RuntimeConfig::default()
+        };
+        let mut engine = WasmtimeEngineConfig::default();
+        apply_runtime_limits(&runtime, &mut engine).expect("valid limits");
+
+        assert_eq!(engine.max_memory_bytes, 8 * 1024 * 1024);
+        assert_eq!(engine.default_fuel, 250_000);
+        assert!(engine.fuel_enabled);
+    }
+
+    /// A manifest that says nothing about resources must produce exactly the
+    /// configuration the engine would have used anyway.
+    #[test]
+    fn default_runtime_limits_leave_the_engine_unchanged() {
+        let mut engine = WasmtimeEngineConfig::default();
+        let expected = WasmtimeEngineConfig::default();
+        apply_runtime_limits(&RuntimeConfig::default(), &mut engine).expect("defaults are valid");
+
+        assert_eq!(engine.max_memory_bytes, expected.max_memory_bytes);
+        assert_eq!(engine.default_fuel, expected.default_fuel);
+        assert_eq!(engine.fuel_enabled, expected.fuel_enabled);
+    }
+
+    /// `0` is documented as "unlimited". Fuel metering is an engine-wide
+    /// Wasmtime setting, so the honest implementation is to turn it off.
+    #[test]
+    fn zero_fuel_disables_metering() {
+        let runtime = RuntimeConfig {
+            default_fuel_per_invocation: 0,
+            ..RuntimeConfig::default()
+        };
+        let mut engine = WasmtimeEngineConfig::default();
+        apply_runtime_limits(&runtime, &mut engine).expect("zero is valid");
+
+        assert!(!engine.fuel_enabled, "0 must mean unlimited");
+    }
+
+    /// Only the fields `[runtime]` governs are touched: an engine setting with
+    /// no manifest equivalent keeps its value.
+    #[test]
+    fn unrelated_engine_settings_are_preserved() {
+        let mut engine = WasmtimeEngineConfig {
+            stack_size: 4 * 1024 * 1024,
+            max_instances: 99,
+            ..WasmtimeEngineConfig::default()
+        };
+        apply_runtime_limits(&RuntimeConfig::default(), &mut engine).expect("valid");
+
+        assert_eq!(engine.stack_size, 4 * 1024 * 1024);
+        assert_eq!(engine.max_instances, 99);
+    }
+
+    /// A size the runtime cannot read must be reported, naming the field.
+    #[test]
+    fn an_unreadable_memory_cap_is_reported() {
+        let runtime = RuntimeConfig {
+            max_memory_per_component: "banana".into(),
+            ..RuntimeConfig::default()
+        };
+        let mut engine = WasmtimeEngineConfig::default();
+        let err = apply_runtime_limits(&runtime, &mut engine).expect_err("must be rejected");
+
+        assert!(err.contains("max_memory_per_component"), "{err}");
+        assert!(err.contains("banana"), "{err}");
+    }
+
+    /// An explicit engine configuration is the caller's decision and must not
+    /// be overwritten by the manifest.
+    #[test]
+    fn an_explicit_engine_config_is_marked_as_such() {
+        let builder = HostBuilder::new();
+        assert!(!builder.engine_config_is_explicit);
+
+        let builder = HostBuilder::new().with_engine_config(WasmtimeEngineConfig {
+            default_fuel: 7,
+            ..WasmtimeEngineConfig::default()
+        });
+        assert!(builder.engine_config_is_explicit);
+        assert_eq!(builder.config.engine.default_fuel, 7);
     }
 }

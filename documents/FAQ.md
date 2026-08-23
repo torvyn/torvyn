@@ -862,7 +862,12 @@ Per-component overrides in flow definitions:
 component = "heavy-transform"
 interface = "torvyn:streaming/processor"
 fuel_budget = 5_000_000                   # Higher budget for this component
+max_memory = "64MiB"                      # And a larger linear-memory cap
 ```
+
+A node's `fuel_budget` and `max_memory` override the `[runtime]` defaults for that component alone; a node that sets neither inherits both. `fuel_budget = 0` means unlimited for that component, and `default_fuel_per_invocation = 0` disables fuel metering for the whole engine.
+
+A component that cannot reach its declared minimum linear memory under its cap is refused at instantiation, and the error names both the cap and the size attempted, so the number to change is the one you wrote.
 
 **Trade-off:** Fuel is an approximate proxy for CPU time, not an exact measure. The relationship between fuel units and wall-clock time depends on the component's instruction mix. Use `torvyn bench` to calibrate fuel budgets for your workloads.
 

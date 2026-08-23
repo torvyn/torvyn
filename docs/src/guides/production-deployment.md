@@ -12,7 +12,7 @@ Torvyn's memory consumption has three components:
 
 2. **Buffer pool reservation:** Pre-allocated buffer pools. With default settings, the pool reservation is approximately 53 MiB (Small: ~1 MiB, Medium: ~4 MiB, Large: ~16 MiB, Huge: ~32 MiB on-demand). Adjust pool sizes based on workload: if your pipeline processes mostly small messages, reduce Large and Huge pools; if it processes large binary payloads, increase Large pool allocation.
 
-3. **Component linear memory:** Each Wasm component instance has its own linear memory, starting small and growing up to the configured limit (`max_memory_per_component`, default 64 MiB). Total component memory = number of active component instances × their actual memory usage. For a pipeline with 5 components at 20 MiB each, budget 100 MiB.
+3. **Component linear memory:** Each Wasm component instance has its own linear memory, starting small and growing up to the configured limit (`max_memory_per_component`, default 16 MiB; a flow node overrides it for itself with `max_memory`). Total component memory = number of active component instances × their actual memory usage. For a pipeline with 5 components at 20 MiB each, budget 100 MiB.
 
 **Formula:** `total_memory ≈ host_overhead + pool_reservation + (active_components × avg_component_memory)`
 

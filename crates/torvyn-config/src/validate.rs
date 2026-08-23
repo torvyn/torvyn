@@ -71,6 +71,26 @@ pub fn validate_pipeline(pipeline: &PipelineDefinition, file: &str) -> ConfigErr
         validate_security_config(sec, file, &mut errors);
     }
 
+    // Validate per-node resource limits. A memory cap the runtime cannot read
+    // is worse than none: the operator wrote a bound and believes it is in
+    // force. `torvyn check` is where they should hear otherwise.
+    for (flow_name, flow) in &pipeline.flows {
+        for (node_name, node) in &flow.nodes {
+            let Some(raw) = &node.max_memory else {
+                continue;
+            };
+            if let Err(reason) = parse_memory_size(raw) {
+                errors.push(ConfigParseError::invalid_value(
+                    file,
+                    &format!("flow.{flow_name}.nodes.{node_name}.max_memory"),
+                    raw,
+                    "a valid memory size (e.g., \"16MiB\", \"512KiB\")",
+                    &format!("{reason}. Use B, KiB, MiB, or GiB suffixes."),
+                ));
+            }
+        }
+    }
+
     // Validate per-flow scheduling policies
     for (name, flow) in &pipeline.flows {
         if let Some(ref policy) = flow.scheduling_policy {
@@ -152,16 +172,9 @@ fn validate_runtime_config(
         ));
     }
 
-    // Validate fuel > 0
-    if config.default_fuel_per_invocation == 0 {
-        errors.push(ConfigParseError::invalid_value(
-            file,
-            "runtime.default_fuel_per_invocation",
-            "0",
-            "a positive integer",
-            "Fuel budget must be at least 1.",
-        ));
-    }
+    // `0` is not rejected: the configuration reference documents it as
+    // "unlimited", and the host implements that by disabling fuel metering for
+    // the engine rather than installing a zero budget.
 }
 
 /// Validate observability configuration fields.
@@ -230,6 +243,7 @@ fn validate_security_config(
 mod tests {
     use super::*;
     use crate::manifest::ComponentManifest;
+    use crate::pipeline::PipelineDefinition;
 
     #[test]
     fn test_validate_manifest_valid_defaults() {
@@ -295,8 +309,78 @@ max_memory_per_component = "not-a-size"
         assert!(!errors.is_empty());
     }
 
+    /// `0` is documented as "unlimited" in the configuration reference, and the
+    /// host implements it by disabling fuel metering for the engine. Rejecting
+    /// it contradicted both.
+    /// A node's memory cap must be readable, or the operator has written a
+    /// bound the runtime will not apply.
     #[test]
-    fn test_validate_zero_fuel_is_error() {
+    fn a_nodes_unreadable_memory_cap_is_rejected() {
+        let toml_str = r#"
+[torvyn]
+name = "test"
+version = "0.1.0"
+contract_version = "0.1.0"
+
+[flow.main.nodes.source]
+component = "source"
+interface = "torvyn:streaming/source"
+
+[flow.main.nodes.worker]
+component = "worker"
+interface = "torvyn:streaming/processor"
+max_memory = "banana"
+
+[[flow.main.edges]]
+from = { node = "source", port = "output" }
+to = { node = "worker", port = "input" }
+"#;
+        let pipeline = PipelineDefinition::from_toml_str(toml_str, "f").expect("parses");
+        let errors = validate_pipeline(&pipeline, "f");
+        assert!(
+            errors
+                .iter()
+                .any(|e| format!("{e}").contains("flow.main.nodes.worker.max_memory")),
+            "expected the offending field to be named: {errors:?}"
+        );
+    }
+
+    /// Every documented unit must be accepted, so a valid manifest is not
+    /// rejected by the check that catches typos.
+    #[test]
+    fn a_nodes_memory_cap_accepts_every_documented_unit() {
+        for size in ["16MiB", "1GiB", "512KiB", "1024B", "65536"] {
+            let toml_str = format!(
+                r#"
+[torvyn]
+name = "test"
+version = "0.1.0"
+contract_version = "0.1.0"
+
+[flow.main.nodes.source]
+component = "source"
+interface = "torvyn:streaming/source"
+
+[flow.main.nodes.worker]
+component = "worker"
+interface = "torvyn:streaming/processor"
+max_memory = "{size}"
+
+[[flow.main.edges]]
+from = {{ node = "source", port = "output" }}
+to = {{ node = "worker", port = "input" }}
+"#
+            );
+            let pipeline = PipelineDefinition::from_toml_str(&toml_str, "f").expect("parses");
+            assert!(
+                validate_pipeline(&pipeline, "f").is_empty(),
+                "max_memory = {size:?} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_zero_fuel_means_unlimited() {
         let toml_str = r#"
 [torvyn]
 name = "test"
@@ -307,8 +391,7 @@ contract_version = "0.1.0"
 default_fuel_per_invocation = 0
 "#;
         let manifest = ComponentManifest::from_toml_str(toml_str, "f").unwrap();
-        let errors = validate_manifest(&manifest, "f");
-        assert!(!errors.is_empty());
+        assert!(validate_manifest(&manifest, "f").is_empty());
     }
 
     #[test]

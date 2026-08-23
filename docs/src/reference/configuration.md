@@ -87,10 +87,22 @@ Capabilities that enhance functionality but are not required. The component must
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `worker_threads` | integer | CPU count | Tokio worker thread count. |
-| `max_memory_per_component` | string | `"64MiB"` | Wasm linear memory limit per component instance. |
-| `fuel_per_invocation` | integer | `1_000_000` | Wasmtime fuel budget per component call. `0` = unlimited. |
+| `max_memory_per_component` | string | `"16MiB"` | Wasm linear memory limit per component instance. A component that cannot reach its declared minimum under this cap is refused at instantiation. |
+| `default_fuel_per_invocation` | integer | `1_000_000` | Wasmtime fuel budget per component call. `0` disables fuel metering entirely. |
 | `component_init_timeout_ms` | integer | `5000` | Timeout for `lifecycle.init()` calls. |
 | `component_teardown_timeout_ms` | integer | `2000` | Timeout for `lifecycle.teardown()` calls. |
+
+Both apply to every component in the pipeline. A flow node overrides them for itself:
+
+```toml
+[flow.main.nodes.transform]
+component = "transform"
+interface = "torvyn:streaming/processor"
+fuel_budget = 5_000_000     # this component alone gets more fuel; 0 = unlimited
+max_memory = "64MiB"        # and a larger memory cap
+```
+
+A component that exhausts its fuel traps, which the runtime reports as `deadline-exceeded` — fuel is a proxy for CPU time, so that is the category it falls under. A component that cannot reach its declared minimum memory under its cap is refused at instantiation, and the error names both the cap and the size that was attempted.
 
 ### `[runtime.backpressure]` — Global Backpressure Defaults
 

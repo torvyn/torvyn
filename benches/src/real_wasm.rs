@@ -42,8 +42,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use torvyn_engine::{
-    CompiledComponent, ComponentInstance, ComponentInvoker, WasiConfiguration, WasmEngine,
-    WasmtimeEngine, WasmtimeEngineConfig, WasmtimeInvoker,
+    CompiledComponent, ComponentInstance, ComponentInvoker, ComponentLimits, WasiConfiguration,
+    WasmEngine, WasmtimeEngine, WasmtimeEngineConfig, WasmtimeInvoker,
 };
 use torvyn_integration_tests::real_wasm::{
     echo_sink_wasm, echo_source_wasm, identity_processor_wasm,
@@ -426,6 +426,12 @@ impl WasmFixtures {
                 self.engine.default_imports(),
                 stage.component_id,
                 &WasiConfiguration::deny_all(),
+                // Mirror the real pipeline: a stage's own budget, where it
+                // sets one, is what the store is built with.
+                &ComponentLimits {
+                    fuel_budget: stage.fuel_budget,
+                    max_memory_bytes: None,
+                },
             )
             .await
             .expect("component instantiation must succeed");

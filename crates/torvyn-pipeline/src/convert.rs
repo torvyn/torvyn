@@ -3,7 +3,7 @@
 //! Converts a [`torvyn_config::FlowDef`] (parsed from TOML) into a
 //! [`PipelineTopology`] (the validated in-memory topology model).
 
-use torvyn_config::{EdgeDef, FlowDef, NodeDef, SecurityConfig};
+use torvyn_config::{parse_memory_size, EdgeDef, FlowDef, NodeDef, SecurityConfig};
 use torvyn_security::WasiConfiguration;
 use torvyn_types::ComponentRole;
 
@@ -37,7 +37,12 @@ pub fn flow_def_to_topology(
         let role =
             infer_role_from_interface(&node_def.interface).unwrap_or(ComponentRole::Processor);
 
-        let mut config = node_def_to_config(node_def);
+        let mut config = node_def_to_config(node_def).map_err(|reason| {
+            vec![PipelineError::Subsystem {
+                subsystem: "config",
+                reason: format!("flow '{flow_name}', node '{node_name}': {reason}"),
+            }]
+        })?;
 
         // Resolve this component's capability grants into its WASI sandbox.
         // A component with no grants stays deny-all (fully sandboxed).
@@ -108,13 +113,26 @@ fn infer_role_from_interface(interface: &str) -> Option<ComponentRole> {
 /// Convert a `NodeDef` to a `NodeConfig`.
 ///
 /// # COLD PATH
-fn node_def_to_config(node_def: &NodeDef) -> NodeConfig {
-    NodeConfig {
+fn node_def_to_config(node_def: &NodeDef) -> Result<NodeConfig, String> {
+    // A memory cap the runtime cannot read is a limit the operator believes is
+    // in force. Report it rather than dropping it — `torvyn check` validates
+    // the same field with the same parser, so this is the second line of
+    // defence, not the first.
+    let memory_limit = match &node_def.max_memory {
+        Some(raw) => {
+            let bytes = parse_memory_size(raw).map_err(|reason| format!("max_memory: {reason}"))?;
+            // A cap wider than the address space cannot be applied, and
+            // truncating it would silently install a *smaller* one.
+            Some(usize::try_from(bytes).map_err(|_| {
+                format!("max_memory: {bytes} bytes does not fit in this platform's address space")
+            })?)
+        }
+        None => None,
+    };
+
+    Ok(NodeConfig {
         fuel_budget: node_def.fuel_budget,
-        memory_limit: node_def
-            .max_memory
-            .as_ref()
-            .and_then(|s| parse_memory_size(s)),
+        memory_limit,
         timeout: None, // Not exposed in NodeDef at config level (flow-level default)
         priority: node_def.priority.map(|p| p.min(10) as u8),
         error_policy: None, // Not exposed in NodeDef at config level
@@ -122,7 +140,7 @@ fn node_def_to_config(node_def: &NodeDef) -> NodeConfig {
         // Deny-all by default; `flow_def_to_topology` overrides this from the
         // security configuration's per-component grants.
         wasi: WasiConfiguration::deny_all(),
-    }
+    })
 }
 
 /// Convert an `EdgeDef` to an `EdgeConfig`.
@@ -142,25 +160,6 @@ fn edge_def_to_config(edge_def: &EdgeDef) -> EdgeConfig {
                 _ => torvyn_types::BackpressurePolicy::BlockProducer,
             }
         }),
-    }
-}
-
-/// Parse a memory size string like "16MiB" or "1GiB" into bytes.
-///
-/// # COLD PATH
-fn parse_memory_size(s: &str) -> Option<usize> {
-    let s = s.trim();
-    if let Some(rest) = s.strip_suffix("GiB") {
-        rest.trim()
-            .parse::<usize>()
-            .ok()
-            .map(|v| v * 1024 * 1024 * 1024)
-    } else if let Some(rest) = s.strip_suffix("MiB") {
-        rest.trim().parse::<usize>().ok().map(|v| v * 1024 * 1024)
-    } else if let Some(rest) = s.strip_suffix("KiB") {
-        rest.trim().parse::<usize>().ok().map(|v| v * 1024)
-    } else {
-        s.parse::<usize>().ok()
     }
 }
 
@@ -329,11 +328,60 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_memory_size() {
-        assert_eq!(parse_memory_size("16MiB"), Some(16 * 1024 * 1024));
-        assert_eq!(parse_memory_size("1GiB"), Some(1024 * 1024 * 1024));
-        assert_eq!(parse_memory_size("512KiB"), Some(512 * 1024));
-        assert_eq!(parse_memory_size("65536"), Some(65536));
-        assert_eq!(parse_memory_size("invalid"), None);
+    fn a_nodes_memory_cap_is_read_in_every_documented_unit() {
+        for (written, expected) in [
+            ("16MiB", 16 * 1024 * 1024),
+            ("1GiB", 1024 * 1024 * 1024),
+            ("512KiB", 512 * 1024),
+            // The `B` suffix is documented and the pipeline's own parser, now
+            // removed, could not read it — so `max_memory = "1024B"` was
+            // silently dropped.
+            ("1024B", 1024),
+            ("65536", 65536),
+        ] {
+            let node = NodeDef {
+                max_memory: Some(written.to_owned()),
+                ..Default::default()
+            };
+            let config = node_def_to_config(&node).expect("a documented size must parse");
+            assert_eq!(
+                config.memory_limit,
+                Some(expected),
+                "max_memory = {written:?}"
+            );
+        }
+    }
+
+    /// A cap the runtime cannot read is a limit the operator believes is in
+    /// force. It must be reported, not dropped.
+    #[test]
+    fn an_unreadable_memory_cap_is_reported() {
+        let node = NodeDef {
+            max_memory: Some("banana".to_owned()),
+            ..Default::default()
+        };
+        let err = node_def_to_config(&node).expect_err("an unreadable size must be rejected");
+        assert!(err.contains("max_memory"), "{err}");
+    }
+
+    /// A node that sets no limits inherits the engine's, which is what `None`
+    /// means downstream.
+    #[test]
+    fn a_node_without_limits_inherits_them() {
+        let config = node_def_to_config(&NodeDef::default()).expect("defaults are valid");
+        assert!(config.memory_limit.is_none());
+        assert!(config.fuel_budget.is_none());
+    }
+
+    /// A node's fuel budget must survive the conversion; it used to reach the
+    /// reactor and be read by nothing.
+    #[test]
+    fn a_nodes_fuel_budget_is_carried_through() {
+        let node = NodeDef {
+            fuel_budget: Some(5_000_000),
+            ..Default::default()
+        };
+        let config = node_def_to_config(&node).expect("valid");
+        assert_eq!(config.fuel_budget, Some(5_000_000));
     }
 }

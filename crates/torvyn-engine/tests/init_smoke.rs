@@ -9,8 +9,8 @@
 #![cfg(feature = "wasmtime-backend")]
 
 use torvyn_engine::{
-    ComponentInvoker, WasiConfiguration, WasmEngine, WasmtimeEngine, WasmtimeEngineConfig,
-    WasmtimeInvoker,
+    ComponentInvoker, ComponentLimits, WasiConfiguration, WasmEngine, WasmtimeEngine,
+    WasmtimeEngineConfig, WasmtimeInvoker,
 };
 use torvyn_types::ComponentId;
 
@@ -33,6 +33,7 @@ async fn data_sink_fixture_instantiates_and_runs_init() {
             imports,
             component_id,
             &WasiConfiguration::deny_all(),
+            &ComponentLimits::inherit(),
         )
         .await
         .expect("instantiate data-sink component");
