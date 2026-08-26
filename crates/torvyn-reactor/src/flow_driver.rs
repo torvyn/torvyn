@@ -10,8 +10,8 @@ use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
 use torvyn_types::{
-    ComponentId, ElementMeta, EventSink, FlowId, FlowState, InvocationStatus, ProcessError,
-    StreamId,
+    BackpressureSignal, ComponentId, ComponentRole, ElementMeta, EventSink, FlowId, FlowState,
+    InvocationStatus, ProcessError, StreamId,
 };
 
 use torvyn_engine::{ComponentInstance, ComponentInvoker, ProcessResult, StreamElement};
@@ -364,7 +364,10 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
                     }
 
                     // 5. Check backpressure transitions for all streams.
-                    self.check_backpressure_all();
+                    let transitions = self.check_backpressure_all();
+                    if !transitions.is_empty() {
+                        self.notify_producers(transitions).await;
+                    }
 
                     // 6. Yield check.
                     self.yield_ctrl.record_element();
@@ -789,8 +792,13 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
     /// Check all streams for backpressure transitions.
     ///
     /// # HOT PATH
-    fn check_backpressure_all(&mut self) {
-        for stream in &mut self.streams {
+    fn check_backpressure_all(&mut self) -> Vec<(usize, BackpressureSignal)> {
+        // Which streams changed state, and to what. Collected rather than
+        // acted on in place: notifying the producer is a guest call, and the
+        // loop below holds `&mut self.streams`.
+        let mut transitions = Vec::new();
+
+        for (stream_idx, stream) in self.streams.iter_mut().enumerate() {
             let queue_len = stream.queue.len();
             let capacity = stream.queue.capacity();
             let low_wm = stream.low_watermark_depth();
@@ -801,6 +809,7 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
             {
                 if activate {
                     if stream.backpressure.try_activate() {
+                        transitions.push((stream_idx, BackpressureSignal::Pause));
                         stream.metrics.record_backpressure_event();
                         self.event_sink.record_backpressure(
                             self.flow_id,
@@ -817,6 +826,7 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
                         );
                     }
                 } else if let Some(duration) = stream.backpressure.try_deactivate() {
+                    transitions.push((stream_idx, BackpressureSignal::Ready));
                     stream.metrics.add_backpressure_duration(duration);
                     self.event_sink.record_backpressure(
                         self.flow_id,
@@ -832,6 +842,59 @@ impl<I: ComponentInvoker, E: EventSink> FlowDriver<I, E> {
                         "backpressure deactivated"
                     );
                 }
+            }
+        }
+
+        transitions
+    }
+
+    /// Tell each affected stream's producer that congestion began or eased.
+    ///
+    /// Declining to call `pull` already stops a source that generates its data
+    /// inside `pull`. It does not stop one holding an external subscription —
+    /// a socket, a broker consumer, a long poll — which keeps receiving with
+    /// nowhere to put what arrives. `notify-backpressure` is the only
+    /// mechanism the contract gives such a source to push back, and the
+    /// runtime used to detect the transition, count it, log it, and never
+    /// deliver it.
+    ///
+    /// # WARM PATH — one guest call per transition. Hysteresis is what keeps
+    /// transitions rare; this is not on the per-element path.
+    async fn notify_producers(&mut self, transitions: Vec<(usize, BackpressureSignal)>) {
+        for (stream_idx, signal) in transitions {
+            let Some(&stage_idx) = self.stream_index.producers.get(stream_idx) else {
+                continue;
+            };
+            let Some(stage) = self.topology.stages.get(stage_idx) else {
+                continue;
+            };
+
+            // Only a source exports the hook. Skipping the rest keeps this off
+            // the path of stages that cannot receive it.
+            if stage.role != ComponentRole::Source {
+                continue;
+            }
+
+            let component_id = stage.component_id;
+            let Some(instance) = self.instances.get_mut(stage_idx) else {
+                continue;
+            };
+            // A source that traps while being told to pause has still been
+            // paused by the scheduler, so a failed notification is worth a
+            // line in the log and nothing more. Failing the flow because a
+            // hint failed would turn a courtesy into an outage.
+            if let Err(e) = self
+                .invoker
+                .invoke_notify_backpressure(instance, component_id, signal)
+                .await
+            {
+                warn!(
+                    flow_id = %self.flow_id,
+                    component = %component_id,
+                    signal = ?signal,
+                    error = %e,
+                    "notify-backpressure failed; the scheduler's backpressure still applies"
+                );
             }
         }
     }
@@ -940,6 +1003,12 @@ mod tests {
         /// error tests that existed both used `Fatal`, and passed unchanged
         /// when a non-fatal variant was substituted.
         error: std::sync::Mutex<ProcessError>,
+        /// Backpressure signals delivered to sources, in order.
+        ///
+        /// Recorded rather than counted: `Pause` on congestion and `Ready` on
+        /// release are different promises, and a mechanism that only ever sent
+        /// one of them would still be broken.
+        backpressure: std::sync::Mutex<Vec<(ComponentId, BackpressureSignal)>>,
     }
 
     impl TestInvoker {
@@ -949,6 +1018,7 @@ mod tests {
                 max_pulls,
                 should_error: AtomicBool::new(false),
                 error: std::sync::Mutex::new(ProcessError::Fatal("test error".into())),
+                backpressure: std::sync::Mutex::new(Vec::new()),
             }
         }
 
@@ -968,6 +1038,11 @@ mod tests {
 
         fn current_error(&self) -> ProcessError {
             self.error.lock().expect("test mutex").clone()
+        }
+
+        /// Backpressure signals this invoker was handed, in order.
+        fn backpressure_signals(&self) -> Vec<(ComponentId, BackpressureSignal)> {
+            self.backpressure.lock().expect("test mutex").clone()
         }
     }
 
@@ -1028,6 +1103,19 @@ mod tests {
             Ok(())
         }
 
+        async fn invoke_notify_backpressure(
+            &self,
+            _instance: &mut ComponentInstance,
+            component_id: ComponentId,
+            signal: BackpressureSignal,
+        ) -> Result<(), ProcessError> {
+            self.backpressure
+                .lock()
+                .expect("test mutex")
+                .push((component_id, signal));
+            Ok(())
+        }
+
         async fn invoke_teardown(
             &self,
             _instance: &mut ComponentInstance,
@@ -1074,6 +1162,21 @@ mod tests {
     }
 
     fn make_streams(topology: &FlowTopology, flow_id: FlowId) -> Vec<StreamState> {
+        make_streams_with_capacity(topology, flow_id, 64)
+    }
+
+    /// Streams with a chosen queue capacity.
+    ///
+    /// The driver executes one stage per loop iteration, so with the default
+    /// capacity of 64 a two-stage pipeline never fills its queue and
+    /// backpressure never engages. A capacity of 1 makes the transition
+    /// deterministic: the source's first element fills the queue, and the
+    /// sink's consumption empties it.
+    fn make_streams_with_capacity(
+        topology: &FlowTopology,
+        flow_id: FlowId,
+        capacity: usize,
+    ) -> Vec<StreamState> {
         topology
             .connections
             .iter()
@@ -1084,7 +1187,7 @@ mod tests {
                     flow_id,
                     topology.stages[c.from_stage].component_id,
                     topology.stages[c.to_stage].component_id,
-                    64,
+                    capacity,
                     BackpressurePolicy::BlockProducer,
                     0.5,
                 )
@@ -1884,5 +1987,215 @@ mod tests {
             sink.spans.lock().expect("spans mutex").is_empty(),
             "Production level must not retain per-element spans"
         );
+    }
+
+    /// A source must be told when the stream it feeds becomes congested, and
+    /// again when it drains.
+    ///
+    /// The runtime detected the transition, counted it, emitted an
+    /// observability event, and logged it — and never delivered it. The
+    /// contract declares `notify-backpressure`, the host bindgen generates the
+    /// call, every template and example implements it, and the reference says
+    /// it is "called by the runtime between `pull()` invocations". Nothing
+    /// called it.
+    ///
+    /// Declining to call `pull` already stops a source that generates its data
+    /// inside `pull`. It does not stop one holding an external subscription,
+    /// which is the case this signal exists for.
+    #[tokio::test]
+    async fn a_source_is_told_when_its_stream_congests_and_drains() {
+        let flow_id = FlowId::new(30);
+        let topology = FlowTopology {
+            stages: vec![source_stage(1), sink_stage(2)],
+            connections: vec![conn(0, 1)],
+        };
+        topology.validate().unwrap();
+
+        // Capacity 1: the source's first element fills the queue, and the
+        // sink's consumption empties it, so both transitions are forced.
+        let streams = make_streams_with_capacity(&topology, flow_id, 1);
+        let (event_tx, _event_rx) = mpsc::channel(256);
+        let invoker = Arc::new(TestInvoker::new(4));
+
+        let driver = FlowDriver::new(
+            flow_id,
+            FlowConfig::default_with_topology(topology.clone()),
+            make_instances(&topology).await,
+            streams,
+            Arc::clone(&invoker),
+            NoopEventSink,
+            FlowCancellation::new(),
+            event_tx,
+        );
+        let (_, state, _) = driver.run().await;
+        assert_eq!(state, FlowState::Completed);
+
+        let signals = invoker.backpressure_signals();
+        assert!(
+            !signals.is_empty(),
+            "the source was never told about backpressure"
+        );
+
+        // Every signal must reach the source — it is the only stage that
+        // exports the hook, and the only one feeding this stream.
+        for (component_id, _) in &signals {
+            assert_eq!(
+                *component_id,
+                ComponentId::new(1),
+                "a signal was delivered to a stage that is not the producer"
+            );
+        }
+
+        assert!(
+            signals.iter().any(|(_, s)| *s == BackpressureSignal::Pause),
+            "congestion was never signalled: {signals:?}"
+        );
+        assert!(
+            signals.iter().any(|(_, s)| *s == BackpressureSignal::Ready),
+            "release was never signalled, so a paused source would never resume: {signals:?}"
+        );
+    }
+
+    /// Signals must alternate. A source that receives two `Pause`es without an
+    /// intervening `Ready` has been told to stop twice and to resume never,
+    /// which is what a mechanism missing its hysteresis would produce.
+    #[tokio::test]
+    async fn backpressure_signals_alternate() {
+        let flow_id = FlowId::new(31);
+        let topology = FlowTopology {
+            stages: vec![source_stage(1), sink_stage(2)],
+            connections: vec![conn(0, 1)],
+        };
+        topology.validate().unwrap();
+
+        let (event_tx, _event_rx) = mpsc::channel(256);
+        let invoker = Arc::new(TestInvoker::new(8));
+
+        let driver = FlowDriver::new(
+            flow_id,
+            FlowConfig::default_with_topology(topology.clone()),
+            make_instances(&topology).await,
+            make_streams_with_capacity(&topology, flow_id, 1),
+            Arc::clone(&invoker),
+            NoopEventSink,
+            FlowCancellation::new(),
+            event_tx,
+        );
+        driver.run().await;
+
+        let signals = invoker.backpressure_signals();
+        assert!(
+            signals.len() >= 2,
+            "expected several transitions: {signals:?}"
+        );
+        for pair in signals.windows(2) {
+            assert_ne!(
+                pair[0].1, pair[1].1,
+                "consecutive identical signals: {signals:?}"
+            );
+        }
+        assert_eq!(
+            signals[0].1,
+            BackpressureSignal::Pause,
+            "the first signal must be congestion, not release: {signals:?}"
+        );
+    }
+
+    /// A pipeline whose queue never fills must not notify at all. A signal
+    /// sent without congestion would have a well-behaved source throttling
+    /// itself for no reason.
+    #[tokio::test]
+    async fn an_uncongested_pipeline_notifies_nothing() {
+        let flow_id = FlowId::new(32);
+        let topology = FlowTopology {
+            stages: vec![source_stage(1), sink_stage(2)],
+            connections: vec![conn(0, 1)],
+        };
+        topology.validate().unwrap();
+
+        let (event_tx, _event_rx) = mpsc::channel(256);
+        let invoker = Arc::new(TestInvoker::new(4));
+
+        let driver = FlowDriver::new(
+            flow_id,
+            FlowConfig::default_with_topology(topology.clone()),
+            make_instances(&topology).await,
+            // The default capacity of 64 is never reached by a driver that
+            // executes one stage per iteration.
+            make_streams(&topology, flow_id),
+            Arc::clone(&invoker),
+            NoopEventSink,
+            FlowCancellation::new(),
+            event_tx,
+        );
+        driver.run().await;
+
+        assert!(
+            invoker.backpressure_signals().is_empty(),
+            "an uncongested pipeline signalled backpressure: {:?}",
+            invoker.backpressure_signals()
+        );
+    }
+
+    /// The signal belongs to the stage feeding the congested stream. A
+    /// processor in the middle is not a source and exports no hook, so it must
+    /// be skipped rather than called.
+    #[tokio::test]
+    async fn only_the_producing_source_is_notified() {
+        let flow_id = FlowId::new(33);
+        let topology = FlowTopology {
+            stages: vec![source_stage(1), processor_stage(2), sink_stage(3)],
+            connections: vec![conn(0, 1), conn(1, 2)],
+        };
+        topology.validate().unwrap();
+
+        let (event_tx, _event_rx) = mpsc::channel(256);
+        let invoker = Arc::new(TestInvoker::new(6));
+
+        let driver = FlowDriver::new(
+            flow_id,
+            FlowConfig::default_with_topology(topology.clone()),
+            make_instances(&topology).await,
+            make_streams_with_capacity(&topology, flow_id, 1),
+            Arc::clone(&invoker),
+            NoopEventSink,
+            FlowCancellation::new(),
+            event_tx,
+        );
+        driver.run().await;
+
+        let signals = invoker.backpressure_signals();
+        assert!(!signals.is_empty(), "no transition occurred at all");
+        for (component_id, signal) in &signals {
+            assert_eq!(
+                *component_id,
+                ComponentId::new(1),
+                "{signal:?} went to a stage that is not the source"
+            );
+        }
+    }
+
+    /// The producer index is the inverse of `outputs`, and getting it wrong
+    /// would send every signal to the wrong component.
+    #[test]
+    fn the_stream_index_maps_each_stream_to_its_producer() {
+        let topology = FlowTopology {
+            stages: vec![source_stage(1), processor_stage(2), sink_stage(3)],
+            connections: vec![conn(0, 1), conn(1, 2)],
+        };
+        topology.validate().unwrap();
+
+        let streams = make_streams(&topology, FlowId::new(34));
+        let index = StreamIndex::build(&topology, &streams);
+
+        assert_eq!(index.producers, vec![0, 1]);
+        for (stream_idx, &stage_idx) in index.producers.iter().enumerate() {
+            assert!(
+                index.outputs[stage_idx].contains(&stream_idx),
+                "stream {stream_idx} claims stage {stage_idx} produces it, but that stage's \
+                 outputs are {:?}",
+                index.outputs[stage_idx]
+            );
+        }
     }
 }

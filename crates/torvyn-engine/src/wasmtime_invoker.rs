@@ -200,6 +200,17 @@ impl WasmtimeInvoker {
         }
     }
 
+    /// The WIT form of a backpressure signal, for handing one *to* a guest.
+    ///
+    /// # WARM PATH — one per backpressure transition.
+    #[inline]
+    fn to_wit_backpressure_signal(s: BackpressureSignal) -> wit_types::BackpressureSignal {
+        match s {
+            BackpressureSignal::Ready => wit_types::BackpressureSignal::Ready,
+            BackpressureSignal::Pause => wit_types::BackpressureSignal::Pause,
+        }
+    }
+
     /// Build a borrowed flow-context resource. Session 2.2 uses index 0 as
     /// a placeholder — the real flow context is plumbed through by the
     /// reactor in a later session.
@@ -476,6 +487,39 @@ impl ComponentInvoker for WasmtimeInvoker {
     /// # COLD PATH
     ///
     /// Per C02-10: failures are logged but do not prevent termination.
+    /// # WARM PATH — one per backpressure transition, not per element.
+    async fn invoke_notify_backpressure(
+        &self,
+        instance: &mut ComponentInstance,
+        component_id: ComponentId,
+        signal: BackpressureSignal,
+    ) -> Result<(), ProcessError> {
+        let state = Self::wasmtime_state(instance)?;
+
+        Self::refuel(state);
+
+        // Only a source exports this. Anything else is a stage the driver
+        // should not have selected, and silently doing nothing is right: the
+        // scheduler has already applied the backpressure that matters.
+        let outer = {
+            let Some(WitBindings::DataSource(bindings)) = &state.bindings else {
+                // Not a source, so it exports no hook. This is not a failure:
+                // the scheduler has already applied the backpressure that
+                // matters, and the driver only calls this for source stages.
+                return Ok(());
+            };
+            bindings
+                .torvyn_streaming_source()
+                .call_notify_backpressure(
+                    &mut state.store,
+                    Self::to_wit_backpressure_signal(signal),
+                )
+                .await
+        };
+
+        outer.map_err(|e| Self::convert_wasm_error(e, component_id, "notify-backpressure"))
+    }
+
     async fn invoke_teardown(&self, instance: &mut ComponentInstance, component_id: ComponentId) {
         let state = match Self::wasmtime_state(instance) {
             Ok(s) => s,

@@ -13,6 +13,7 @@
 
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use crate::types::ComponentLimits;
 use torvyn_security::WasiConfiguration;
@@ -152,6 +153,13 @@ impl WasmEngine for MockEngine {
 /// a test element, push returns Ready).
 pub struct MockInvoker {
     invocation_count: AtomicU64,
+    /// Backpressure signals delivered to sources, in order.
+    ///
+    /// Recorded rather than counted so a test can assert *which* signal
+    /// arrived and when — `Pause` on congestion and `Ready` on release are
+    /// different promises, and a mechanism that only ever sent one of them
+    /// would still be broken.
+    backpressure_signals: Mutex<Vec<(ComponentId, BackpressureSignal)>>,
 }
 
 impl MockInvoker {
@@ -159,12 +167,21 @@ impl MockInvoker {
     pub fn new() -> Self {
         Self {
             invocation_count: AtomicU64::new(0),
+            backpressure_signals: Mutex::new(Vec::new()),
         }
     }
 
     /// Returns the total number of invocations across all methods.
     pub fn invocation_count(&self) -> u64 {
         self.invocation_count.load(Ordering::Relaxed)
+    }
+
+    /// Backpressure signals this invoker has delivered, in order.
+    pub fn backpressure_signals(&self) -> Vec<(ComponentId, BackpressureSignal)> {
+        self.backpressure_signals
+            .lock()
+            .expect("backpressure log is never held across a panic")
+            .clone()
     }
 }
 
@@ -285,6 +302,20 @@ impl ComponentInvoker for MockInvoker {
                 "mock invoker with non-mock instance".into(),
             ))
         }
+    }
+
+    async fn invoke_notify_backpressure(
+        &self,
+        _instance: &mut ComponentInstance,
+        component_id: ComponentId,
+        signal: BackpressureSignal,
+    ) -> Result<(), ProcessError> {
+        self.invocation_count.fetch_add(1, Ordering::Relaxed);
+        self.backpressure_signals
+            .lock()
+            .expect("backpressure log is never held across a panic")
+            .push((component_id, signal));
+        Ok(())
     }
 
     async fn invoke_teardown(&self, instance: &mut ComponentInstance, _component_id: ComponentId) {

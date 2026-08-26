@@ -126,7 +126,9 @@ Exported by data-producing components.
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `pull` | `func() -> result<option<output-element>, process-error>` | Pull the next element. `ok(some(element))`: data available. `ok(none)`: source exhausted. `err(error)`: production error. Output buffer is owned by the runtime. |
-| `notify-backpressure` | `func(signal: backpressure-signal)` | Receive a backpressure signal from the downstream pipeline. Called by the runtime between `pull()` invocations. |
+| `notify-backpressure` | `func(signal: backpressure-signal)` | Receive a backpressure signal from the downstream pipeline. Called by the runtime between `pull()` invocations, on each transition: `pause` when the output stream reaches capacity, `ready` when it drains to the low watermark. Hysteresis keeps transitions rare, so this is not a per-element call. A trap here is logged and does not fail the flow. |
+
+**Why a source needs this.** The runtime already stops calling `pull` while a stream is congested, which is enough for a source that generates its data inside `pull`. It is not enough for one holding an external subscription — a socket, a broker consumer, a long poll — because declining to call `pull` does not stop data arriving. Such a source should stop its own intake on `pause` and resume on `ready`; this signal is the only mechanism the contract offers to do so.
 
 ### `interface sink`
 

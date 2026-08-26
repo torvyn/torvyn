@@ -78,6 +78,13 @@ pub struct StreamIndex {
     pub inputs: Vec<Vec<usize>>,
     /// For each stage index, the list of output stream indices in `streams`.
     pub outputs: Vec<Vec<usize>>,
+    /// For each stream index, the stage that produces into it.
+    ///
+    /// The inverse of `outputs`. A backpressure transition is a fact about a
+    /// stream, and the component that needs to hear about it is the one
+    /// feeding that stream — so the driver has to get from a stream back to
+    /// its producer, which `inputs` and `outputs` alone cannot do.
+    pub producers: Vec<usize>,
 }
 
 impl StreamIndex {
@@ -88,13 +95,19 @@ impl StreamIndex {
         let n = topology.stages.len();
         let mut inputs = vec![Vec::new(); n];
         let mut outputs = vec![Vec::new(); n];
+        let mut producers = vec![0usize; topology.connections.len()];
 
         for (stream_idx, conn) in topology.connections.iter().enumerate() {
             outputs[conn.from_stage].push(stream_idx);
             inputs[conn.to_stage].push(stream_idx);
+            producers[stream_idx] = conn.from_stage;
         }
 
-        Self { inputs, outputs }
+        Self {
+            inputs,
+            outputs,
+            producers,
+        }
     }
 }
 

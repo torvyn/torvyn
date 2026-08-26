@@ -22,7 +22,10 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use torvyn_engine::{WasmtimeEngine, WasmtimeEngineConfig};
+use torvyn_engine::{
+    ComponentInvoker, ComponentLimits, WasiConfiguration, WasmEngine, WasmtimeEngine,
+    WasmtimeEngineConfig, WasmtimeInvoker,
+};
 use torvyn_integration_tests::real_wasm::{
     await_flow_terminal, echo_sink_wasm, echo_source_wasm, file_uri, identity_processor_wasm,
     spawn_real_coordinator, wait_for_sink_count, wait_for_zero_live_buffers, RecordingInvoker,
@@ -31,7 +34,7 @@ use torvyn_integration_tests::real_wasm::{
 use torvyn_pipeline::{
     instantiate_pipeline, NodeConfig, PipelineTopology, PipelineTopologyBuilder,
 };
-use torvyn_types::{ComponentRole, FlowState};
+use torvyn_types::{BackpressureSignal, ComponentId, ComponentRole, FlowState};
 
 fn build_pipeline_topology(name: &'static str, source_init: Option<String>) -> PipelineTopology {
     let mut source_cfg = NodeConfig::default();
@@ -912,4 +915,115 @@ async fn test_component_processing_time_is_recorded_for_real_wasm() {
     }
 
     let _ = host.shutdown().await;
+}
+
+/// The backpressure signal must actually reach a real component.
+///
+/// `notify-backpressure` is declared in `torvyn:streaming/source`, generated
+/// on the host side by bindgen, and implemented by every scaffolded source and
+/// every documented example — and the runtime never called it. The reference
+/// says it is "called by the runtime between `pull()` invocations", and the
+/// shipped `backpressure-demo` gates its `pull` on a `paused` flag that only
+/// `notify_backpressure` sets, so that branch could never be taken.
+///
+/// The reactor's own tests prove the driver delivers the signal to the right
+/// stage in the right order. This proves the remaining link: that the host's
+/// guest call reaches a genuine Component Model source, with the export name
+/// and enum lowering the contract specifies. A wrong name or a bad lowering
+/// traps, and the driver deliberately logs rather than fails — so without this
+/// test a broken call would be silent.
+#[tokio::test]
+async fn a_real_source_receives_the_backpressure_signal() {
+    let engine = WasmtimeEngine::new(WasmtimeEngineConfig::default()).expect("engine");
+    let invoker = WasmtimeInvoker::new();
+
+    let bytes = std::fs::read(echo_source_wasm()).expect("read the echo-source fixture");
+    let compiled = engine.compile_component(&bytes).expect("compile");
+
+    let component_id = ComponentId::new(1);
+    let mut instance = engine
+        .instantiate(
+            &compiled,
+            engine.default_imports(),
+            component_id,
+            &WasiConfiguration::deny_all(),
+            &ComponentLimits::inherit(),
+        )
+        .await
+        .expect("instantiate the echo-source component");
+
+    // Both directions, in the order a congesting-then-draining stream
+    // produces them. A source told to pause and never released would stall
+    // for the life of the flow, so `Ready` matters as much as `Pause`.
+    //
+    // Returning `Ok` is not enough on its own — an implementation that
+    // skipped the guest entirely would also return `Ok`. Fuel is the witness:
+    // the invoker refuels to the full budget before the call, so any fuel
+    // consumed afterwards was consumed by guest code. A skipped call leaves
+    // the budget untouched.
+    let budget = engine
+        .fuel_remaining(&instance)
+        .expect("fuel metering is on by default");
+
+    for signal in [BackpressureSignal::Pause, BackpressureSignal::Ready] {
+        invoker
+            .invoke_notify_backpressure(&mut instance, component_id, signal)
+            .await
+            .unwrap_or_else(|e| {
+                panic!("notify-backpressure did not reach the guest for {signal:?}: {e}")
+            });
+
+        let remaining = engine
+            .fuel_remaining(&instance)
+            .expect("fuel metering is on by default");
+        assert!(
+            remaining < budget,
+            "no fuel was consumed for {signal:?}, so the guest never ran: \
+             {remaining} of {budget} remaining"
+        );
+    }
+
+    // And the component is still usable afterwards: the notification must not
+    // leave the store in a state that breaks the element path.
+    invoker
+        .invoke_init(&mut instance, component_id, r#"{"count": 1}"#)
+        .await
+        .expect("lifecycle.init after a notification");
+    assert!(
+        invoker
+            .invoke_pull(&mut instance, component_id)
+            .await
+            .expect("pull after a notification")
+            .is_some(),
+        "the source stopped producing after being notified"
+    );
+}
+
+/// A component that is not a source exports no such hook, and telling it
+/// about backpressure must be a no-op rather than an error. The driver only
+/// calls this for source stages, but the invoker must not depend on that.
+#[tokio::test]
+async fn notifying_a_non_source_is_harmless() {
+    let engine = WasmtimeEngine::new(WasmtimeEngineConfig::default()).expect("engine");
+    let invoker = WasmtimeInvoker::new();
+
+    let bytes = std::fs::read(echo_sink_wasm()).expect("read the echo-sink fixture");
+    let compiled = engine.compile_component(&bytes).expect("compile");
+
+    let component_id = ComponentId::new(2);
+    let mut instance = engine
+        .instantiate(
+            &compiled,
+            engine.default_imports(),
+            component_id,
+            &WasiConfiguration::deny_all(),
+            &ComponentLimits::inherit(),
+        )
+        .await
+        .expect("instantiate the echo-sink component");
+
+    invoker
+        .invoke_notify_backpressure(&mut instance, component_id, BackpressureSignal::Pause)
+        .await
+        .expect("notifying a sink must be a no-op, not an error");
 }

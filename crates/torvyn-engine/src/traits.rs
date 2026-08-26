@@ -222,6 +222,42 @@ pub trait ComponentInvoker: Send + Sync + 'static {
         config: &str,
     ) -> Result<(), ProcessError>;
 
+    /// Invoke a source component's `notify-backpressure` function.
+    ///
+    /// Tells a source that the stream it feeds has become congested
+    /// ([`BackpressureSignal::Pause`]) or has drained again
+    /// ([`BackpressureSignal::Ready`]).
+    ///
+    /// Declining to call `pull` already stops a source that generates its data
+    /// on demand. It does *not* stop a source holding an external
+    /// subscription — a socket, a broker consumer, a long poll — which keeps
+    /// receiving with nowhere to put what arrives. This signal is the only
+    /// mechanism the contract gives such a source to push back, which is why
+    /// the runtime has to deliver it rather than merely record it.
+    ///
+    /// A failure here is returned rather than swallowed, but it is not a
+    /// reason to fail the flow: a source that traps while being told to pause
+    /// has still been paused by the scheduler. The driver logs and continues.
+    /// Returning it keeps that policy at the call site — and makes a broken
+    /// guest call observable, which a silently-ignored error would not be.
+    ///
+    /// The default is a no-op, so a backend that does not model the signal —
+    /// or a component that is not a source — is unaffected.
+    ///
+    /// # WARM PATH — called on a backpressure transition, which hysteresis
+    /// makes rare, not per element.
+    ///
+    /// # Errors
+    /// Returns the error the guest call produced.
+    async fn invoke_notify_backpressure(
+        &self,
+        _instance: &mut ComponentInstance,
+        _component_id: ComponentId,
+        _signal: BackpressureSignal,
+    ) -> Result<(), ProcessError> {
+        Ok(())
+    }
+
     /// Invoke a component's `lifecycle.teardown` function.
     ///
     /// Called once per component during shutdown.
@@ -276,6 +312,17 @@ impl<I: ComponentInvoker> ComponentInvoker for std::sync::Arc<I> {
         config: &str,
     ) -> Result<(), ProcessError> {
         (**self).invoke_init(instance, component_id, config).await
+    }
+
+    async fn invoke_notify_backpressure(
+        &self,
+        instance: &mut ComponentInstance,
+        component_id: ComponentId,
+        signal: BackpressureSignal,
+    ) -> Result<(), ProcessError> {
+        (**self)
+            .invoke_notify_backpressure(instance, component_id, signal)
+            .await
     }
 
     async fn invoke_teardown(&self, instance: &mut ComponentInstance, component_id: ComponentId) {
