@@ -26,6 +26,7 @@ use std::collections::BTreeMap;
 /// assert_eq!(cfg.default_priority, 5);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SchedulingConfig {
     /// Scheduling policy.
     /// Valid values: `"round-robin"`, `"weighted-fair"`, `"priority"`.
@@ -76,6 +77,7 @@ impl Default for SchedulingConfig {
 /// assert_eq!(cfg.backpressure_policy, "block-producer");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BackpressureConfig {
     /// Maximum elements in inter-component stream queue.
     /// Default: `64` (per Doc 10, C02-2).
@@ -123,6 +125,7 @@ impl Default for BackpressureConfig {
 /// assert_eq!(cfg.default_fuel_per_invocation, 1_000_000);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     /// Number of Tokio worker threads.
     /// Default: number of physical CPU cores (represented as `0` = auto-detect).
@@ -196,6 +199,7 @@ impl Default for RuntimeConfig {
 /// assert_eq!(cfg.tracing_exporter, "stdout");
 /// ```
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ObservabilityConfig {
     /// Whether tracing is enabled.
     /// Default: `true`.
@@ -302,6 +306,7 @@ impl Eq for ObservabilityConfig {}
 /// assert!(cfg.grants.is_empty());
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SecurityConfig {
     /// Default capability policy.
     /// Valid values: `"deny-all"`, `"allow-all"` (dangerous, dev only).
@@ -340,6 +345,7 @@ fn default_capability_policy() -> String {
 /// assert_eq!(grant.capabilities.len(), 1);
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CapabilityGrant {
     /// List of capability strings granted to this component, in the canonical
     /// `"<domain>:<action>[:<scope>]"` form parsed by

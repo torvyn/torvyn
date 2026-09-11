@@ -50,7 +50,7 @@ pub mod validate;
 
 // Re-exports for convenience
 pub use env::{collect_env_overrides, interpolate_env};
-pub use error::{ConfigErrors, ConfigParseError};
+pub use error::{nearest_known_key, ConfigErrors, ConfigParseError, KNOWN_MANIFEST_TABLES};
 pub use loader::{load_config, load_manifest, load_pipeline, ResolvedConfig};
 pub use manifest::{
     BuildConfig, ComponentDecl, ComponentManifest, ProjectMetadata, RegistryConfig, TestConfig,

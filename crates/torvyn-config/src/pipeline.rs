@@ -36,6 +36,7 @@ use crate::runtime::{BackpressureConfig, ObservabilityConfig, RuntimeConfig, Sec
 /// assert_eq!(ep.node, "source-1");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EdgeEndpoint {
     /// Node name within the flow.
     pub node: String,
@@ -67,6 +68,7 @@ pub struct EdgeEndpoint {
 /// assert_eq!(edge.from.node, "a");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EdgeDef {
     /// Upstream endpoint (producer).
     pub from: EdgeEndpoint,
@@ -108,6 +110,7 @@ pub struct EdgeDef {
 /// assert_eq!(node.interface, "torvyn:streaming/source");
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NodeDef {
     /// Component reference. Can be:
     /// - `"file://./path/to/component.wasm"` — local file.
@@ -181,6 +184,7 @@ pub struct NodeDef {
 /// assert_eq!(flow.edges.len(), 1);
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FlowDef {
     /// Human-readable description of this flow.
     #[serde(default)]
@@ -241,6 +245,11 @@ pub struct FlowDef {
 /// let pipeline = PipelineDefinition::from_toml_str(toml_str, "pipeline.toml").unwrap();
 /// assert!(pipeline.flows.contains_key("main"));
 /// ```
+/// Deliberately *not* `deny_unknown_fields`: this is a partial view of
+/// `Torvyn.toml`, not a schema for it. Every real manifest carries `[torvyn]`,
+/// `[build]`, `[test]`, and `[registry]` tables that this type does not model,
+/// and rejecting them would make `torvyn run` refuse every valid project. The
+/// tables it *does* model are closed, so a typo inside one is still caught.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PipelineDefinition {
     /// Named flows in this pipeline definition.
@@ -279,8 +288,10 @@ impl PipelineDefinition {
     /// # Errors
     /// Returns `Err(Vec<ConfigParseError>)` if parsing or validation fails.
     pub fn from_toml_str(toml_str: &str, file_path: &str) -> Result<Self, Vec<ConfigParseError>> {
-        let pipeline: Self = toml::from_str(toml_str)
-            .map_err(|e| vec![ConfigParseError::toml_syntax(file_path, &e)])?;
+        let pipeline: Self = toml::from_str(toml_str).map_err(|e| {
+            vec![ConfigParseError::unknown_field(file_path, &e)
+                .unwrap_or_else(|| ConfigParseError::toml_syntax(file_path, &e))]
+        })?;
 
         let mut errors = ConfigErrors::new();
         pipeline.validate(file_path, &mut errors);

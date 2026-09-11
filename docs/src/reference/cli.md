@@ -85,6 +85,22 @@ Options:
 
 Runs a seven-step validation pipeline: manifest parse, manifest schema validation, WIT syntax validation, WIT resolution, world consistency, capability cross-check, and deprecation warnings.
 
+**Mistyped keys are errors.** Every table the manifest schema defines rejects keys it does not know, and the error names the nearest real key:
+
+```
+error: 1 error(s) found during validation
+
+  Unknown configuration key `fuel_budgett`
+      help: Did you mean `fuel_budget`? A key Torvyn does not recognise is not
+            applied, so whatever it configures keeps its default.
+```
+
+This matters most for the keys that change behaviour quietly. `fuel_budgett` leaves a component unbounded; `[secuirty.grants.sink]` leaves a sink unable to print, so the pipeline runs to completion and produces nothing.
+
+An unrecognised *top-level table* with no near match is a warning rather than an error — the manifest is designed to tolerate tables from a newer Torvyn — but it is reported, not ignored.
+
+The `[flow.*]` section is validated here too, using the same parse `torvyn run` performs, so the two commands agree on what a valid manifest is.
+
 **Exit codes:** 0 (all checks passed), 1 (errors found), 2 (warnings found, only with `--strict`)
 
 ### `torvyn build`

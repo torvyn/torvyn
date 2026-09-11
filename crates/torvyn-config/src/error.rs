@@ -84,6 +84,57 @@ impl ConfigParseError {
         }
     }
 
+    /// Create an error for a key the schema does not define.
+    ///
+    /// Serde reports this as a parse failure whose text carries both the
+    /// offending key and the keys that *are* valid; reporting it verbatim as
+    /// "invalid TOML syntax" is doubly misleading, because the syntax is fine
+    /// and the real problem — one mistyped word — is buried.
+    ///
+    /// A mistyped key used to be dropped in silence. That is worse than it
+    /// sounds: `fuel_budgett` left a component unbounded and
+    /// `[secuirty.grants.sink]` left a sink unable to print, both while
+    /// `torvyn check` reported success.
+    ///
+    /// Returns `None` when the error is not an unknown-field error, so the
+    /// caller can fall back to reporting it as the syntax error it is.
+    ///
+    /// # COLD PATH — called once, on a failed parse.
+    #[must_use]
+    pub fn unknown_field(file: &str, toml_err: &toml::de::Error) -> Option<Self> {
+        let rendered = toml_err.to_string();
+        let (found, valid) = parse_unknown_field(&rendered)?;
+
+        let suggestion = match nearest_key(&found, &valid) {
+            Some(near) => format!(
+                "Did you mean `{near}`? A key Torvyn does not recognise is not applied, so \
+                 whatever it configures keeps its default."
+            ),
+            None => format!(
+                "Remove it, or replace it with one of: {}.",
+                valid
+                    .iter()
+                    .map(|k| format!("`{k}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+
+        Some(Self {
+            code: "E0702",
+            file: file.to_owned(),
+            key_path: found.clone(),
+            message: format!("Unknown configuration key `{found}`"),
+            expected: if valid.is_empty() {
+                "a key this table defines".to_owned()
+            } else {
+                format!("one of: {}", valid.join(", "))
+            },
+            found,
+            suggestion,
+        })
+    }
+
     /// Create an error for a missing required field.
     ///
     /// # COLD PATH — called during config validation.
@@ -323,6 +374,111 @@ impl<'a> IntoIterator for &'a ConfigErrors {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// Pull the offending key and the valid key list out of serde's unknown-field
+/// message.
+///
+/// The message ends with a line of the form:
+///
+/// ```text
+/// unknown field `verzion`, expected `name` or `version`
+/// unknown field `verzion`, expected one of `name`, `version`, `description`
+/// ```
+///
+/// Matching on that text is what serde leaves available — the error carries no
+/// structured form of either part. A wording change upstream costs the
+/// improved message and nothing else: the caller falls back to reporting the
+/// parse error verbatim, which is what happened before this existed.
+fn parse_unknown_field(rendered: &str) -> Option<(String, Vec<String>)> {
+    let line = rendered
+        .lines()
+        .find(|line| line.trim_start().starts_with("unknown field `"))?;
+    let after_marker = line.split_once("unknown field `")?.1;
+    let (found, rest) = after_marker.split_once('`')?;
+
+    // `expected one of `a`, `b`` and `expected `a` or `b`` both reduce to the
+    // backticked names that follow.
+    let valid = rest
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_owned)
+        .collect();
+
+    Some((found.to_owned(), valid))
+}
+
+/// The valid key closest to `found`, when one is close enough to be a typo.
+///
+/// Public so callers holding their own key list — the CLI checking the
+/// manifest's unknown top-level tables — can give the same suggestion.
+///
+/// Bounded by a third of the key's length (at least one edit, at most three),
+/// so `verzion` suggests `version` while an unrelated word suggests nothing.
+/// A wrong suggestion is worse than none: it sends the reader to fix something
+/// they did not write.
+fn nearest_key(found: &str, valid: &[String]) -> Option<String> {
+    let owned: Vec<&str> = valid.iter().map(String::as_str).collect();
+    nearest_known_key(found, &owned)
+}
+
+/// The known key closest to `found`, when one is close enough to be a typo.
+///
+/// Bounded by a third of the key's length (at least one edit, at most three),
+/// so `verzion` suggests `version` while an unrelated word suggests nothing. A
+/// wrong suggestion is worse than none: it sends the reader to fix something
+/// they did not write.
+///
+/// # COLD PATH — called only when a key has already been rejected.
+#[must_use]
+pub fn nearest_known_key(found: &str, known: &[&str]) -> Option<String> {
+    let budget = (found.len() / 3).clamp(1, 3);
+    known
+        .iter()
+        .map(|candidate| (edit_distance(found, candidate), *candidate))
+        .filter(|(distance, _)| *distance <= budget)
+        .min_by_key(|(distance, _)| *distance)
+        .map(|(_, candidate)| candidate.to_owned())
+}
+
+/// The top-level tables a `Torvyn.toml` may declare.
+///
+/// `ComponentManifest` captures anything else for forward compatibility and
+/// reads none of it, so this is the list a caller compares against when
+/// deciding whether an unrecognised table is a typo or a field from a newer
+/// release.
+pub const KNOWN_MANIFEST_TABLES: &[&str] = &[
+    "torvyn",
+    "component",
+    "build",
+    "test",
+    "runtime",
+    "observability",
+    "security",
+    "registry",
+    "flow",
+];
+
+/// Levenshtein distance between two ASCII-ish keys.
+///
+/// Two rows rather than a full matrix: configuration keys are short, and this
+/// runs only when a parse has already failed.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b_chars: Vec<char> = b.chars().collect();
+    let mut previous: Vec<usize> = (0..=b_chars.len()).collect();
+    let mut current = vec![0usize; b_chars.len() + 1];
+
+    for (i, a_char) in a.chars().enumerate() {
+        current[0] = i + 1;
+        for (j, &b_char) in b_chars.iter().enumerate() {
+            let substitution = previous[j] + usize::from(a_char != b_char);
+            current[j + 1] = substitution.min(previous[j + 1] + 1).min(current[j] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+
+    previous[b_chars.len()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,5 +622,142 @@ mod tests {
         let parse_err = ConfigParseError::invalid_value("f.toml", "key", "bad", "good", "fix it");
         let config_err: ConfigError = parse_err.into();
         assert!(matches!(config_err, ConfigError::InvalidValue { .. }));
+    }
+
+    /// Serde's unknown-field message carries both the offending key and the
+    /// valid ones. Reporting it verbatim as "invalid TOML syntax" is doubly
+    /// misleading: the syntax is fine, and the one mistyped word is buried.
+    #[test]
+    fn an_unknown_field_is_diagnosed_not_reported_as_a_syntax_error() {
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[allow(dead_code)]
+        struct Table {
+            name: String,
+            version: String,
+        }
+
+        let err = toml::from_str::<Table>("name = \"a\"\nverzion = \"b\"\n")
+            .expect_err("an unknown key must be rejected");
+        let diagnosed = ConfigParseError::unknown_field("Torvyn.toml", &err)
+            .expect("this is an unknown-field error");
+
+        assert_eq!(diagnosed.code, "E0702");
+        assert_eq!(diagnosed.found, "verzion");
+        assert!(diagnosed.message.contains("verzion"), "{diagnosed:?}");
+        assert!(
+            diagnosed.suggestion.contains("`version`"),
+            "the nearest valid key must be suggested: {}",
+            diagnosed.suggestion
+        );
+    }
+
+    /// A genuine syntax error must not be mislabelled as an unknown key.
+    #[test]
+    fn a_syntax_error_is_not_mistaken_for_an_unknown_field() {
+        #[derive(Debug, serde::Deserialize)]
+        #[allow(dead_code)]
+        struct Table {
+            name: String,
+        }
+
+        let err = toml::from_str::<Table>("name = = broken").expect_err("bad syntax");
+        assert!(
+            ConfigParseError::unknown_field("Torvyn.toml", &err).is_none(),
+            "a syntax error must fall through to the syntax reporter"
+        );
+    }
+
+    /// The "expected one of" form, used when a table has more than two keys,
+    /// must parse as well as the two-key "expected `a` or `b`" form.
+    #[test]
+    fn both_shapes_of_serdes_expected_list_are_read() {
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[allow(dead_code)]
+        struct Wide {
+            alpha: String,
+            beta: String,
+            gamma: String,
+        }
+
+        let err = toml::from_str::<Wide>("gama = \"x\"\n").expect_err("unknown key");
+        let diagnosed = ConfigParseError::unknown_field("f", &err).expect("unknown-field error");
+        assert!(
+            diagnosed.suggestion.contains("`gamma`"),
+            "expected a suggestion of `gamma`: {}",
+            diagnosed.suggestion
+        );
+        assert!(diagnosed.expected.contains("alpha"), "{diagnosed:?}");
+    }
+
+    /// A suggestion is only worth making when it is likely right. Pointing a
+    /// reader at a key they did not write is worse than saying nothing.
+    #[test]
+    fn only_a_near_miss_earns_a_suggestion() {
+        let known = ["fuel_budget", "max_memory", "priority", "component"];
+
+        assert_eq!(
+            nearest_known_key("fuel_budgett", &known).as_deref(),
+            Some("fuel_budget")
+        );
+        assert_eq!(
+            nearest_known_key("max_memmory", &known).as_deref(),
+            Some("max_memory")
+        );
+        assert_eq!(
+            nearest_known_key("prioritty", &known).as_deref(),
+            Some("priority")
+        );
+
+        // Nothing close: a field from a newer release, not a typo.
+        assert_eq!(nearest_known_key("telemetry_endpoint", &known), None);
+        assert_eq!(nearest_known_key("z", &known), None);
+    }
+
+    /// The budget scales with the key's length, so a short key does not match
+    /// an unrelated short key.
+    #[test]
+    fn the_suggestion_budget_scales_with_key_length() {
+        // Three edits on a long key is still plausibly a typo.
+        assert_eq!(
+            nearest_known_key("max_memory_per_componnt", &["max_memory_per_component"]).as_deref(),
+            Some("max_memory_per_component")
+        );
+        // One edit on a three-letter key is not enough to be confident.
+        assert_eq!(nearest_known_key("abc", &["abd"]).as_deref(), Some("abd"));
+        assert_eq!(nearest_known_key("abc", &["xyz"]), None);
+    }
+
+    #[test]
+    fn edit_distance_is_symmetric_and_zero_for_equal_keys() {
+        assert_eq!(edit_distance("version", "version"), 0);
+        assert_eq!(edit_distance("verzion", "version"), 1);
+        assert_eq!(edit_distance("version", "verzion"), 1);
+        assert_eq!(edit_distance("", "abc"), 3);
+        assert_eq!(edit_distance("abc", ""), 3);
+    }
+
+    /// The known-table list is what decides whether an unrecognised table is a
+    /// typo or a newer field, so it has to match the manifest's own schema.
+    #[test]
+    fn the_known_table_list_covers_every_table_the_manifest_models() {
+        for table in [
+            "torvyn",
+            "component",
+            "build",
+            "test",
+            "runtime",
+            "observability",
+            "security",
+            "registry",
+            "flow",
+        ] {
+            assert!(
+                KNOWN_MANIFEST_TABLES.contains(&table),
+                "`[{table}]` is a real manifest table but is missing from the known list, so a \
+                 typo of it would be reported as an unrelated new field"
+            );
+        }
     }
 }

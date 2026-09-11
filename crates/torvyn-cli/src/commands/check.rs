@@ -156,6 +156,57 @@ pub async fn execute(
                 .iter()
                 .map(|decl| decl.path.clone())
                 .collect();
+
+            // A table Torvyn does not recognise is captured for forward
+            // compatibility and then read by nothing, so `[secuirty.grants.x]`
+            // silently discarded a capability grant and the project reported
+            // success while its sink printed into a deny-all sandbox.
+            for name in manifest.extensions.keys() {
+                let known = torvyn_config::KNOWN_MANIFEST_TABLES;
+                let (severity, help) = match torvyn_config::nearest_known_key(name, known) {
+                    Some(near) => (
+                        "error",
+                        format!(
+                            "Did you mean `[{near}]`? Torvyn ignores a table it does not \
+                             recognise, so whatever this one configures is not applied."
+                        ),
+                    ),
+                    // No near match: possibly a table from a newer Torvyn,
+                    // which the manifest is designed to tolerate. Say so
+                    // rather than failing.
+                    None => (
+                        "warning",
+                        format!(
+                            "Torvyn does not recognise `[{name}]` and ignores it. Known tables \
+                             are: {}.",
+                            known.join(", ")
+                        ),
+                    ),
+                };
+                diagnostics.push(CheckDiagnostic {
+                    severity: severity.into(),
+                    code: "E0702".into(),
+                    message: format!("Unknown configuration table `[{name}]`"),
+                    location: Some(manifest_path.display().to_string()),
+                    help: Some(help),
+                });
+            }
+
+            // The flow section is held as raw TOML on the manifest, so nothing
+            // above has looked inside it. `torvyn run` deserializes and
+            // validates it and will reject what this command passed — then
+            // tell the user to run this command. Check it here so the two
+            // agree.
+            //
+            // Only when there is a flow to check. A project that declares
+            // components and no pipeline is valid — the `empty` template
+            // produces one — and the pipeline validator requires a flow, so
+            // running it unconditionally would fail every such project.
+            if !manifest.flow.is_empty() {
+                for diagnostic in check_flow_section(&manifest_content, manifest_path) {
+                    diagnostics.push(diagnostic);
+                }
+            }
         }
         Err(errors) => {
             for err in &errors {
@@ -244,11 +295,17 @@ pub async fn execute(
     if !all_passed {
         return Err(CliError::Contract {
             detail: format!("{error_count} error(s) found during validation"),
+            // Carry each finding's help with it. A diagnostic whose whole
+            // value is "did you mean `fuel_budget`?" is worth nothing if only
+            // the headline survives.
             diagnostics: result
                 .diagnostics
                 .iter()
                 .filter(|d| d.severity == "error")
-                .map(|d| d.message.clone())
+                .map(|d| match &d.help {
+                    Some(help) => format!("{}\n      help: {help}", d.message),
+                    None => d.message.clone(),
+                })
                 .collect(),
         });
     }
@@ -267,6 +324,52 @@ pub async fn execute(
 /// The conventional layout nests them one level deep
 /// (`wit/torvyn-streaming/*.wit`), which is why this recurses rather than
 /// listing a single directory.
+/// Validate the manifest's `[flow.*]` section.
+///
+/// `ComponentManifest` keeps flow tables as raw TOML, so parsing the manifest
+/// says nothing about what is inside them. `torvyn run` deserializes them into
+/// `FlowDef` and runs the pipeline validator, which meant this command passed
+/// manifests that `run` rejected — and the rejection ended by telling the user
+/// to run this command.
+///
+/// Reading the file a second time through `PipelineDefinition` is what makes
+/// the two agree: it is the same parse `run` performs, so whatever `run` will
+/// refuse is refused here, where the user is looking for it.
+///
+/// COLD PATH — once per `torvyn check`.
+fn check_flow_section(manifest_content: &str, manifest_path: &Path) -> Vec<CheckDiagnostic> {
+    let file = manifest_path.to_str().unwrap_or("Torvyn.toml");
+
+    let pipeline = match torvyn_config::PipelineDefinition::from_toml_str(manifest_content, file) {
+        Ok(pipeline) => pipeline,
+        Err(errors) => return errors.iter().map(|e| flow_diagnostic(e, file)).collect(),
+    };
+
+    torvyn_config::validate_pipeline(&pipeline, file)
+        .iter()
+        .map(|e| flow_diagnostic(e, file))
+        .collect()
+}
+
+/// Render a configuration error as a check diagnostic.
+fn flow_diagnostic(error: &torvyn_config::ConfigParseError, file: &str) -> CheckDiagnostic {
+    CheckDiagnostic {
+        severity: "error".into(),
+        code: error.code.to_string(),
+        message: if error.key_path.is_empty() {
+            error.message.clone()
+        } else {
+            format!("{} ({})", error.message, error.key_path)
+        },
+        location: Some(file.to_owned()),
+        help: if error.suggestion.is_empty() {
+            None
+        } else {
+            Some(error.suggestion.clone())
+        },
+    }
+}
+
 fn count_wit_files(dir: &Path) -> usize {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;

@@ -41,6 +41,7 @@ use crate::runtime::{ObservabilityConfig, RuntimeConfig, SecurityConfig};
 /// assert_eq!(meta.name, "my-transform");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectMetadata {
     /// Project name. Must match `[a-zA-Z0-9_-]+`.
     #[serde(default)]
@@ -115,6 +116,7 @@ impl Default for ProjectMetadata {
 /// assert_eq!(decl.language, "rust");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ComponentDecl {
     /// Component name within this project.
     pub name: String,
@@ -171,6 +173,7 @@ impl Default for ComponentDecl {
 /// assert!(cfg.release);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BuildConfig {
     /// Whether to build in release mode by default.
     /// Default: `true`.
@@ -220,6 +223,7 @@ impl Default for BuildConfig {
 /// assert_eq!(cfg.timeout_seconds, 60);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TestConfig {
     /// Test timeout in seconds.
     /// Default: `60`.
@@ -265,6 +269,7 @@ impl Default for TestConfig {
 /// assert!(cfg.default_url.is_some());
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RegistryConfig {
     /// Default registry URL for `torvyn publish`.
     #[serde(default, rename = "default")]
@@ -376,8 +381,12 @@ impl ComponentManifest {
     /// assert_eq!(manifest.torvyn.name, "example");
     /// ```
     pub fn from_toml_str(toml_str: &str, file_path: &str) -> Result<Self, Vec<ConfigParseError>> {
-        let manifest: Self = toml::from_str(toml_str)
-            .map_err(|e| vec![ConfigParseError::toml_syntax(file_path, &e)])?;
+        let manifest: Self = toml::from_str(toml_str).map_err(|e| {
+            // An unknown key is not a syntax error, and reporting it as one
+            // buries the single mistyped word under serde's raw text.
+            vec![ConfigParseError::unknown_field(file_path, &e)
+                .unwrap_or_else(|| ConfigParseError::toml_syntax(file_path, &e))]
+        })?;
 
         let mut errors = ConfigErrors::new();
         manifest.validate_required_fields(file_path, &mut errors);
