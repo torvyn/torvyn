@@ -20,6 +20,26 @@ use crate::output::{CommandResult, OutputContext};
 use serde::Serialize;
 use std::path::Path;
 
+/// The error a command returns for a flag it parses but does not implement.
+///
+/// Accepting a flag and ignoring it leaves the user believing they got
+/// something they did not. That is bad enough when the flag only formats
+/// output; it is worse when the flag is load-bearing — `torvyn bench
+/// --compare baseline.json` was documented as a CI regression gate and exited
+/// zero however far performance had fallen, so a pipeline built on it could
+/// never fail.
+///
+/// `detail` says what is missing, `suggestion` what to do instead.
+///
+/// COLD PATH — once, on the way out.
+pub fn unsupported_flag(flag: &str, detail: &str, suggestion: impl Into<String>) -> CliError {
+    CliError::Config {
+        detail: format!("{flag} is not implemented: {detail}"),
+        file: None,
+        suggestion: suggestion.into(),
+    }
+}
+
 /// Render a command's report, then fail if the command failed.
 ///
 /// A command can produce a useful report *and* have failed — a pipeline run

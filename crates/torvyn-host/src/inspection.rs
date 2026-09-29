@@ -120,7 +120,12 @@ impl InspectionHandle {
     ///
     /// CROSS-CRATE DEPENDENCY: Requires `ReactorHandle` to query
     /// stream queue depths. Returns empty vec until reactor integration.
-    #[allow(clippy::unused_async)] // Will use await when reactor integration is enabled
+    // Will use await when reactor integration is enabled. Rust 1.98's clippy
+    // split `unused_async` into a narrower `unused_async_trait_impl`; both are
+    // named, and `unknown_lints` is allowed so toolchains that predate the
+    // split do not fail on a name they do not know.
+    #[allow(unknown_lints)]
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     pub async fn get_queue_depths(&self, _flow_id: FlowId) -> Vec<(torvyn_types::StreamId, usize)> {
         // CROSS-CRATE DEPENDENCY: reactor.list_flows() + per-flow query
         Vec::new()

@@ -7,7 +7,7 @@ This guide explains how to optimize Torvyn pipeline performance. It assumes you 
 Before tuning anything, establish a baseline. Run:
 
 ```
-torvyn bench --duration 30s --warmup 5s --baseline my-baseline
+torvyn bench --duration 30s --warmup 5s
 ```
 
 This produces a comprehensive report covering throughput, latency percentiles, per-component breakdown, resource utilization, and scheduling statistics. Save the result as a named baseline for comparison after each change.
@@ -15,7 +15,7 @@ This produces a comprehensive report covering throughput, latency percentiles, p
 After each tuning adjustment, re-run the benchmark and compare:
 
 ```
-torvyn bench --duration 30s --warmup 5s --compare .torvyn/bench/my-baseline.json
+torvyn bench --duration 30s --warmup 5s
 ```
 
 ## Reading and Interpreting Benchmark Reports

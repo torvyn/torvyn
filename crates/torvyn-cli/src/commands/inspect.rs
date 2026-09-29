@@ -8,6 +8,8 @@
 //! from the binary itself, so they describe what the component genuinely
 //! imports and exports rather than what a manifest says about it.
 
+use crate::cli::InspectSection;
+use crate::commands::unsupported_flag;
 use crate::errors::CliError;
 use crate::output::terminal;
 use crate::output::{CommandResult, HumanRenderable, OutputContext};
@@ -95,6 +97,10 @@ pub async fn execute(
     args: &crate::cli::InspectArgs,
     _ctx: &OutputContext,
 ) -> Result<CommandResult<InspectResult>, CliError> {
+    if let Some(err) = unsupported_option(args) {
+        return Err(err);
+    }
+
     let target = &args.target;
     let target_path = Path::new(target);
 
@@ -203,4 +209,24 @@ fn describe_wasm(bytes: &[u8]) -> torvyn_engine::ComponentInterfaces {
         .ok()
         .and_then(|engine| engine.describe_bytes(bytes).ok())
         .unwrap_or_default()
+}
+
+/// Report the first option this command parses but does not implement.
+///
+/// `--show` is accepted with seven values and prints the full report for all
+/// of them, so asking for one section silently gave every section. The
+/// default, `all`, is what the command does, so it passes.
+///
+/// COLD PATH.
+fn unsupported_option(args: &crate::cli::InspectArgs) -> Option<CliError> {
+    if args.show != InspectSection::All {
+        return Some(unsupported_flag(
+            "--show",
+            "the report is not divided into sections; every section was printed whichever \
+             one was asked for",
+            "Run without --show to get the same report, or use `--format json` and select \
+             the fields you want.",
+        ));
+    }
+    None
 }

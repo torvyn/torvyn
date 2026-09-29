@@ -15,6 +15,7 @@
 //! drift; this file no longer keeps a second.
 
 use crate::cli::LinkArgs;
+use crate::commands::unsupported_flag;
 use crate::errors::CliError;
 use crate::output::terminal;
 use crate::output::{CommandResult, HumanRenderable, OutputContext};
@@ -75,6 +76,10 @@ pub async fn execute(
     args: &LinkArgs,
     ctx: &OutputContext,
 ) -> Result<CommandResult<LinkResult>, CliError> {
+    if let Some(err) = unsupported_option(args) {
+        return Err(err);
+    }
+
     let manifest_path = &args.manifest;
 
     if !manifest_path.exists() {
@@ -295,6 +300,29 @@ fn grants_for(
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Report the first option this command parses but does not implement.
+///
+/// COLD PATH.
+fn unsupported_option(args: &LinkArgs) -> Option<CliError> {
+    if args.components.is_some() {
+        return Some(unsupported_flag(
+            "--components",
+            "linking reads component locations from the manifest, not from a directory",
+            "Point each [[component]] entry's `path` at its source directory. `link` is a \
+             static check over the manifest and needs no compiled artifacts.",
+        ));
+    }
+    if args.detail {
+        return Some(unsupported_flag(
+            "--detail",
+            "per-edge interface compatibility detail is not reported",
+            "The summary already names every component and edge the flow links, and reports \
+             each incompatibility it finds.",
+        ));
+    }
+    None
 }
 
 #[cfg(test)]

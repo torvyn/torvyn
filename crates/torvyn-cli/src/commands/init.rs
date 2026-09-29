@@ -10,7 +10,8 @@
 //! nothing to execute and failed with "No flow defined in manifest", telling
 //! the user to hand-write a section into a file generated seconds earlier.
 
-use crate::cli::{InitArgs, TemplateKind};
+use crate::cli::{InitArgs, Language, TemplateKind};
+use crate::commands::unsupported_flag;
 use crate::errors::CliError;
 use crate::output::terminal;
 use crate::output::{CommandResult, HumanRenderable, OutputContext};
@@ -81,6 +82,10 @@ pub async fn execute(
     args: &InitArgs,
     ctx: &OutputContext,
 ) -> Result<CommandResult<InitResult>, CliError> {
+    if let Some(err) = unsupported_option(args) {
+        return Err(err);
+    }
+
     // Determine project name and directory
     let project_name = match &args.project_name {
         Some(name) => name.clone(),
@@ -248,6 +253,39 @@ fn init_git_repo(dir: &Path) -> Result<bool, std::io::Error> {
         Ok(s) => Ok(s.success()),
         Err(_) => Ok(false),
     }
+}
+
+/// Report the first option this command parses but does not implement.
+///
+/// `--language` is the sharp one: it is accepted with four values and
+/// scaffolds Rust for every one of them, so `torvyn init x --language go`
+/// produced a Rust project with no Go file in it. A flag that quietly
+/// substitutes a different language is worse than one that is missing.
+///
+/// A flag asking for what the command already does is honest and passes:
+/// `--language rust` is exactly what is scaffolded.
+///
+/// COLD PATH.
+fn unsupported_option(args: &InitArgs) -> Option<CliError> {
+    if args.language != Language::Rust {
+        return Some(unsupported_flag(
+            "--language",
+            "only Rust components can be scaffolded; the other values were accepted and \
+             scaffolded Rust anyway",
+            "Scaffold with --language rust, or write the component by hand against the WIT \
+             contracts in wit/torvyn-streaming. `torvyn build` runs any toolchain a \
+             [[component]] entry names through its `build_command`.",
+        ));
+    }
+    if args.no_example {
+        return Some(unsupported_flag(
+            "--no-example",
+            "templates always include a working implementation",
+            "Scaffold without --no-example and replace the body of src/lib.rs. The contract \
+             stubs it would leave behind are the same files either way.",
+        ));
+    }
+    None
 }
 
 #[cfg(test)]

@@ -13,8 +13,9 @@
 //! reaches a terminal state, and report what the run actually did over the
 //! time it actually ran.
 
-use crate::cli::BenchArgs;
+use crate::cli::{BenchArgs, ReportFormat};
 use crate::commands::run::parse_duration;
+use crate::commands::unsupported_flag;
 use crate::errors::CliError;
 use crate::output::terminal;
 use crate::output::{CommandResult, HumanRenderable, OutputContext};
@@ -217,6 +218,10 @@ pub async fn execute(
     args: &BenchArgs,
     ctx: &OutputContext,
 ) -> Result<CommandResult<BenchReport>, CliError> {
+    if let Some(err) = unsupported_option(args) {
+        return Err(err);
+    }
+
     let manifest_path = &args.manifest;
 
     if !manifest_path.exists() {
@@ -568,6 +573,74 @@ fn empty_bench_report(flow_name: String, warmup_secs: f64, measurement_secs: f64
         completion_note: None,
         saved_to: None,
     }
+}
+
+/// Report the first option this command parses but does not implement.
+///
+/// `--compare` is the one that mattered. The observability guide presented it
+/// as a CI regression gate — "compare against a baseline and fail the
+/// pipeline if latency regressions exceed a threshold" — and the CLI
+/// reference gave exit code 3 for a detected regression. Nothing compared
+/// anything: a baseline claiming a billion elements per second against a real
+/// twenty-eight thousand still exited zero. A gate that cannot fail is worse
+/// than no gate, because someone stopped watching once they built it.
+///
+/// `--baseline` compounded it. The two-step workflow in the performance guide
+/// saves a named baseline and then compares against
+/// `.torvyn/bench/<name>.json`; the save ignored the name and wrote a
+/// timestamped file, so step two pointed at a file step one never created.
+///
+/// `--report-format pretty` is what the command already produces, so it
+/// passes; any other value is refused.
+///
+/// COLD PATH.
+fn unsupported_option(args: &BenchArgs) -> Option<CliError> {
+    if args.compare.is_some() {
+        return Some(unsupported_flag(
+            "--compare",
+            "benchmark results are not compared against a baseline, so no regression can be \
+             detected and the documented exit code 3 never occurs",
+            "Do not gate a pipeline on this. Compare the JSON reports under .torvyn/bench/ \
+             yourself, or use the repository's own gate: `cargo run -p torvyn-benchmarks \
+             --bin check-thresholds`, which fails on a regression against benches/thresholds.json.",
+        ));
+    }
+    if args.baseline.is_some() {
+        return Some(unsupported_flag(
+            "--baseline",
+            "the report is always written to .torvyn/bench/<timestamp>.json, and the name is \
+             not used",
+            "Copy or rename that file yourself: its path is printed in the report and \
+             returned as `saved_to` under --format json.",
+        ));
+    }
+    if args.report.is_some() {
+        return Some(unsupported_flag(
+            "--report",
+            "the report is always written to .torvyn/bench/<timestamp>.json, and the path is \
+             not used",
+            "Read `saved_to` from the report and copy the file, or capture the command's \
+             JSON with --format json.",
+        ));
+    }
+    if args.report_format != ReportFormat::Pretty {
+        return Some(unsupported_flag(
+            "--report-format",
+            "only the terminal report is rendered; json, csv and markdown were accepted and \
+             produced the same output",
+            "Use the global `--format json`, which emits the whole report as one JSON \
+             document on stdout. Note that piping the command's stdout also captures the \
+             pipeline's own output, so read the file named by `saved_to` instead.",
+        ));
+    }
+    if args.input.is_some() {
+        return Some(unsupported_flag(
+            "--input",
+            "overriding a source's input is not wired up",
+            "Set the source node's `config` in Torvyn.toml and re-run without --input.",
+        ));
+    }
+    None
 }
 
 #[cfg(test)]

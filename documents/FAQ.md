@@ -808,10 +808,11 @@ Element #42 [total: 1.2ms]
 
 ```bash
 # Save a baseline
-torvyn bench --duration 30s --baseline my-baseline
+torvyn bench --duration 30s
 
 # Later, compare against it
-torvyn bench --duration 30s --compare my-baseline
+# Compare the JSON reports under .torvyn/bench/ yourself;
+# --compare is not implemented and the command refuses it.
 ```
 
 The benchmark report includes:
@@ -826,9 +827,13 @@ The benchmark report includes:
 
 Reports can be exported in multiple formats:
 ```bash
-torvyn bench --report-format json > report.json
-torvyn bench --report-format markdown > report.md
-torvyn bench --report-format csv > report.csv
+# The whole report as one JSON document. Note that a pipeline writes its own
+# output to stdout too, so prefer the file the run saves:
+torvyn bench --format json
+# ... and read the path it reports as `saved_to`, under .torvyn/bench/.
+#
+# --report-format json, csv and markdown are not implemented; the command
+# refuses them rather than producing the terminal report under another name.
 ```
 
 Default benchmark parameters:
@@ -1379,7 +1384,7 @@ torvyn inspect my-component.torvyn --show metadata
 
 4. **Profile with `torvyn bench`:**
    ```bash
-   torvyn bench --duration 30s --report-format json
+   torvyn bench --duration 30s --format json
    ```
    Look at `per_component` latency to identify which component is slow.
 
@@ -1498,12 +1503,14 @@ default_queue_depth = 16              # Fewer buffered elements
 
 **Always benchmark your changes:**
 ```bash
-# Baseline
-torvyn bench --duration 30s --baseline before-tuning
+# Before. Each run writes .torvyn/bench/<timestamp>.json; keep this one.
+torvyn bench --duration 30s
 
-# After changes
-torvyn bench --duration 30s --compare before-tuning
+# After changes, then compare the two JSON reports yourself.
+torvyn bench --duration 30s
 ```
+`--baseline` and `--compare` are not implemented; the command refuses them
+rather than reporting a comparison it did not make.
 
 ---
 

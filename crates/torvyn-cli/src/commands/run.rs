@@ -450,8 +450,23 @@ fn unsupported_option(args: &RunArgs) -> Option<CliError> {
             "Set the node's `config` value in Torvyn.toml and re-run without --config.",
         );
     }
+    // The default passes: asking for the level the command already runs at is
+    // honest. Asking for any other is not — the CLI installs no subscriber, so
+    // no level changes what is printed.
+    if args.log_level != DEFAULT_LOG_LEVEL {
+        return unsupported(
+            "--log-level",
+            "the CLI installs no log subscriber, so no level changes what is printed",
+            "Run with the default level. The summary, and `torvyn trace` for per-element \
+             detail, are what the command reports.",
+        );
+    }
     None
 }
+
+/// The log level the CLI runs at, which is also clap's default for
+/// `--log-level`. Asking for this one is honest; asking for another is not.
+const DEFAULT_LOG_LEVEL: &str = "info";
 
 #[cfg(test)]
 mod tests {

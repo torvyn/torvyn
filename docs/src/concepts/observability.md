@@ -174,7 +174,7 @@ A benchmark report includes:
 - Scheduling statistics (wakeup counts per component, idle time).
 - Memory usage (peak and mean across all components).
 
-Benchmark results can be saved as named baselines and compared across runs using `--compare`, enabling regression detection in CI/CD pipelines.
+Benchmark reports are written to `.torvyn/bench/<timestamp>.json`. Comparing two runs is left to you: `--compare` and `--baseline` are **not implemented** and the command refuses them rather than reporting a comparison it did not make.
 
 ## Integration with External Tools
 
@@ -182,7 +182,9 @@ Benchmark results can be saved as named baselines and compared across runs using
 
 **Jaeger / Tempo:** Point Torvyn's OTLP trace export to a Jaeger or Grafana Tempo endpoint. View per-element traces showing the path through each component, timing at each stage, and resource events. Error-promoted and tail-latency-promoted traces provide insight into the worst-performing flows.
 
-**CI/CD integration:** Use `torvyn bench --report-format json` to produce machine-readable benchmark results. Compare against a baseline (`--compare baseline.json`) and fail the pipeline if latency regressions exceed a threshold.
+**CI/CD integration:** `torvyn bench --format json` emits the whole report as one JSON document, and every run also writes `.torvyn/bench/<timestamp>.json`. Comparing against a baseline is not implemented — do not gate a pipeline on `--compare`, which is refused.
+
+This repository gates its own benchmarks with `cargo run -p torvyn-benchmarks --bin check-thresholds`, which compares criterion's medians against the ceilings in `benches/thresholds.json` and fails on a regression. That is a working example of the shape a gate needs.
 
 ## Interpreting Benchmark Reports
 

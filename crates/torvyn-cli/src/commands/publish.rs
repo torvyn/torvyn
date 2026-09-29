@@ -13,6 +13,7 @@
 //! printing — a published reference can be verified against one.
 
 use crate::cli::PublishArgs;
+use crate::commands::unsupported_flag;
 use crate::errors::CliError;
 use crate::output::terminal;
 use crate::output::{CommandResult, HumanRenderable, OutputContext};
@@ -56,6 +57,10 @@ pub async fn execute(
     args: &PublishArgs,
     ctx: &OutputContext,
 ) -> Result<CommandResult<PublishResult>, CliError> {
+    if let Some(err) = unsupported_option(args) {
+        return Err(err);
+    }
+
     let artifact_path = resolve_artifact(args)?;
 
     let registry = args
@@ -210,6 +215,29 @@ fn find_latest_artifact(dir: &Path) -> Option<PathBuf> {
         .filter(|e| is_artifact(&e.path()))
         .max_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()))
         .map(|e| e.path())
+}
+
+/// Report the first option this command parses but does not implement.
+///
+/// COLD PATH.
+fn unsupported_option(args: &PublishArgs) -> Option<CliError> {
+    if args.tag.is_some() {
+        return Some(unsupported_flag(
+            "--tag",
+            "an artifact is published under the name it was packed with",
+            "Pack with the tag you want: `torvyn pack --tag <TAG>` writes \
+             <name>-<TAG>.torvyn, and publishing that artifact carries the name through.",
+        ));
+    }
+    if args.force {
+        return Some(unsupported_flag(
+            "--force",
+            "a local directory registry always overwrites, so there is nothing to force",
+            "Publish without --force. The command verifies the copy it wrote matches the \
+             artifact's digest, so an overwrite cannot go unnoticed.",
+        ));
+    }
+    None
 }
 
 #[cfg(test)]

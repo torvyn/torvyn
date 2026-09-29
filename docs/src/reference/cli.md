@@ -37,13 +37,10 @@ Options:
   --template <TEMPLATE>  Project template
                          Values: source, sink, transform, full-pipeline, empty
                          Default: transform
-  --language <LANG>      Implementation language
-                         Values: rust, go, python, zig
-                         Default: rust
+  --language <LANG>      rust (default) only; go, python, zig refused
   --no-git               Skip git repository initialization
-  --no-example           Generate contract stubs only, skip example implementation
+  --no-example           NOT IMPLEMENTED — refused
   --contract-version <V> Torvyn contract version to target (default: 0.1.0)
-  --interactive          Launch interactive wizard for guided setup
   --force                Overwrite existing directory contents
 ```
 
@@ -144,8 +141,8 @@ torvyn link [OPTIONS]
 Options:
   --manifest <PATH>       Path to Torvyn.toml with flow definition
   --flow <NAME>           Specific flow to check (default: all flows)
-  --components <DIR>      Directory containing compiled .wasm components
-  --verbose               Show full interface compatibility details
+  --components <DIR>      NOT IMPLEMENTED — refused
+  --detail                NOT IMPLEMENTED — refused
 ```
 
 Validates interface compatibility for every edge in the flow graph, DAG structure, role consistency, capability satisfaction, and contract version range intersection.
@@ -182,12 +179,12 @@ torvyn run [OPTIONS]
 Options:
   --manifest <PATH>       Path to Torvyn.toml
   --flow <NAME>           Flow to execute (default: first defined flow)
-  --input <SOURCE>        Override source input (file path, stdin, or generator)
-  --output <SINK>         Override sink output (file path, stdout)
-  --limit <N>             Process at most N elements then exit
+  --input <SOURCE>        NOT IMPLEMENTED — refused
+  --output <SINK>         NOT IMPLEMENTED — refused
+  --limit <N>             NOT IMPLEMENTED — refused
   --timeout <DURATION>    Maximum execution time (e.g., 30s, 5m)
-  --config <KEY=VALUE>    Override component configuration values
-  --log-level <LEVEL>     Log verbosity: error, warn, info, debug, trace
+  --config <KEY=VALUE>    NOT IMPLEMENTED — refused
+  --log-level <LEVEL>     info (default) only; any other level refused
 ```
 
 Runs `torvyn check` and `torvyn link` implicitly before execution. Displays real-time throughput and error counters. Prints summary statistics on completion or Ctrl+C.
@@ -280,10 +277,10 @@ Options:
   --duration <DURATION>   Benchmark duration (default: 10s)
   --warmup <DURATION>     Warmup period excluded from results (default: 2s)
   --input <SOURCE>        Override source input for reproducible benchmarks
-  --report <PATH>         Write report to file (default: stdout)
-  --report-format <FMT>   Report format: pretty (default), json, csv, markdown
-  --compare <PATH>        Compare against a previous benchmark result
-  --baseline <NAME>       Save result as a named baseline
+  --report <PATH>         NOT IMPLEMENTED — refused
+  --report-format <FMT>   pretty (default) only; json, csv, markdown refused
+  --compare <PATH>        NOT IMPLEMENTED — refused
+  --baseline <NAME>       NOT IMPLEMENTED — refused
 ```
 
 Reports throughput, latency percentiles, per-component breakdown, queue statistics, buffer reuse rate, copy accounting, and scheduling metrics.
@@ -332,9 +329,9 @@ torvyn publish [OPTIONS]
 Options:
   --artifact <PATH>       Path to packed artifact
   --registry <URL>        Target registry URL
-  --tag <TAG>             Override tag
+  --tag <TAG>             NOT IMPLEMENTED — refused; pack with the tag instead
   --dry-run               Validate without pushing
-  --force                 Overwrite existing tag
+  --force                 NOT IMPLEMENTED — refused
 ```
 
 With no `--artifact`, publishes the most recently modified artifact in `.torvyn/artifacts/`.
@@ -356,8 +353,7 @@ Arguments:
   <TARGET>                Path to .wasm file, OCI artifact, or registry reference
 
 Options:
-  --show <SECTION>        What to show: all (default), interfaces, capabilities,
-                          metadata, size, contracts, benchmarks
+  --show <SECTION>        all (default) only; every other section refused
 ```
 
 Imports and exports are read from the binary's Component Model type section, so they are what the component declares rather than what a manifest claims about it. Interfaces appear under their fully-qualified WIT name, for example `torvyn:streaming/source@0.1.0`. A bare `.wasm` has no manifest, so its version reads `unknown` and only what the binary itself carries is reported.

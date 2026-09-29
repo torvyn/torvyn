@@ -313,7 +313,13 @@ impl HostBuilder {
     /// Returns `HostError::Startup` if any subsystem fails to initialize.
     // `async` is required even though no `.await` is used: `tokio::spawn`
     // requires an active Tokio runtime context, which an async fn provides.
-    #[allow(clippy::unused_async)]
+    //
+    // Two lint names for one rule: Rust 1.98's clippy split `unused_async`
+    // into a narrower `unused_async_trait_impl`, which older toolchains do not
+    // know. `unknown_lints` is allowed alongside so the MSRV build does not
+    // fail on the name it has never heard of.
+    #[allow(unknown_lints)]
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     pub async fn build(mut self) -> Result<TorvynHost, HostError> {
         // Step 1: Parse config file if specified
         if let Some(ref path) = self.config_path {
